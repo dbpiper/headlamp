@@ -1,0 +1,187 @@
+use std::collections::BTreeMap;
+use std::path::{Path, PathBuf};
+
+use ignore::WalkBuilder;
+use serde::Deserialize;
+
+use crate::coverage::model::{CoverageReport, FileCoverage};
+use crate::error::HeadlampError;
+
+#[derive(Debug, Clone, Deserialize)]
+struct IstanbulLoc {
+    #[serde(default)]
+    line: Option<u64>,
+}
+
+#[derive(Debug, Clone, Deserialize)]
+struct IstanbulStatementLoc {
+    #[serde(default)]
+    start: Option<IstanbulLoc>,
+}
+
+#[derive(Debug, Clone, Deserialize)]
+struct IstanbulFileRecord {
+    #[serde(default)]
+    path: Option<String>,
+
+    #[serde(default)]
+    l: Option<BTreeMap<String, u64>>,
+
+    #[serde(default)]
+    s: Option<BTreeMap<String, u64>>,
+
+    #[serde(default)]
+    #[serde(rename = "statementMap")]
+    statement_map: Option<BTreeMap<String, IstanbulStatementLoc>>,
+}
+
+pub fn read_istanbul_coverage_file(path: &Path) -> Result<CoverageReport, HeadlampError> {
+    let raw = std::fs::read_to_string(path).map_err(|source| HeadlampError::Io {
+        path: path.to_path_buf(),
+        source,
+    })?;
+    parse_istanbul_coverage_text(&raw).map_err(|message| HeadlampError::ConfigParse {
+        path: path.to_path_buf(),
+        message,
+    })
+}
+
+pub fn read_istanbul_coverage_tree(root: &Path) -> Vec<(PathBuf, CoverageReport)> {
+    WalkBuilder::new(root)
+        .hidden(false)
+        .git_ignore(false)
+        .git_global(false)
+        .git_exclude(false)
+        .build()
+        .filter_map(Result::ok)
+        .filter(|dent| dent.file_type().map_or(false, |t| t.is_file()))
+        .filter(|dent| {
+            dent.path().file_name().and_then(|x| x.to_str()) == Some("coverage-final.json")
+        })
+        .filter_map(|dent| {
+            let p = dent.into_path();
+            read_istanbul_coverage_file(&p).ok().map(|rep| (p, rep))
+        })
+        .collect()
+}
+
+pub fn merge_istanbul_reports(reports: &[CoverageReport], root: &Path) -> CoverageReport {
+    let mut by_file: BTreeMap<String, BTreeMap<u32, u32>> = BTreeMap::new();
+    for report in reports {
+        for file in &report.files {
+            let abs = super::lcov::normalize_lcov_path(&file.path, root);
+            let entry = by_file.entry(abs).or_default();
+            for (ln, hit) in &file.line_hits {
+                let prev = entry.get(ln).copied().unwrap_or(0);
+                entry.insert(*ln, prev.saturating_add(*hit));
+            }
+        }
+    }
+
+    let files = by_file
+        .into_iter()
+        .map(|(path, hits)| {
+            let (covered, total, uncovered) =
+                hits.iter()
+                    .fold((0u32, 0u32, Vec::<u32>::new()), |acc, (ln, h)| {
+                        let (covered, total, mut uncovered) = acc;
+                        let total2 = total.saturating_add(1);
+                        let covered2 = if *h > 0 {
+                            covered.saturating_add(1)
+                        } else {
+                            covered
+                        };
+                        if *h == 0 {
+                            uncovered.push(*ln);
+                        }
+                        (covered2, total2, uncovered)
+                    });
+            FileCoverage {
+                path,
+                lines_total: total,
+                lines_covered: covered,
+                uncovered_lines: uncovered,
+                line_hits: hits,
+            }
+        })
+        .collect::<Vec<_>>();
+
+    CoverageReport { files }
+}
+
+pub fn parse_istanbul_coverage_text(text: &str) -> Result<CoverageReport, String> {
+    let obj = serde_json::from_str::<BTreeMap<String, IstanbulFileRecord>>(text)
+        .map_err(|e| e.to_string())?;
+
+    let mut files: Vec<FileCoverage> = vec![];
+
+    for (file_key, file_record) in obj {
+        let file_path = file_record
+            .path
+            .as_deref()
+            .unwrap_or(file_key.as_str())
+            .to_string();
+        let line_hits = extract_line_hits(&file_record)?;
+        let (covered, total, uncovered) =
+            line_hits
+                .iter()
+                .fold((0u32, 0u32, Vec::<u32>::new()), |acc, (ln, h)| {
+                    let (covered, total, mut uncovered) = acc;
+                    let total2 = total.saturating_add(1);
+                    let covered2 = if *h > 0 {
+                        covered.saturating_add(1)
+                    } else {
+                        covered
+                    };
+                    if *h == 0 {
+                        uncovered.push(*ln);
+                    }
+                    (covered2, total2, uncovered)
+                });
+        files.push(FileCoverage {
+            path: file_path,
+            lines_total: total,
+            lines_covered: covered,
+            uncovered_lines: uncovered,
+            line_hits,
+        });
+    }
+
+    files.sort_by(|a, b| a.path.cmp(&b.path));
+    Ok(CoverageReport { files })
+}
+
+fn extract_line_hits(file_record: &IstanbulFileRecord) -> Result<BTreeMap<u32, u32>, String> {
+    if let Some(lines_obj) = file_record.l.as_ref() {
+        let hits = lines_obj
+            .iter()
+            .filter_map(|(k, hit)| Some((k.parse::<u32>().ok()?, (*hit as u32))))
+            .collect::<BTreeMap<_, _>>();
+        return Ok(hits);
+    }
+
+    let s = file_record
+        .s
+        .as_ref()
+        .ok_or_else(|| "missing statement hit map (s)".to_string())?;
+    let statement_map = file_record
+        .statement_map
+        .as_ref()
+        .ok_or_else(|| "missing statementMap".to_string())?;
+
+    let mut hits: BTreeMap<u32, u32> = BTreeMap::new();
+    for (id, count_val) in s {
+        let count = *count_val as u32;
+        let line = statement_map
+            .get(id)
+            .and_then(|loc| loc.start.as_ref())
+            .and_then(|start| start.line)
+            .unwrap_or(0) as u32;
+        if line == 0 {
+            continue;
+        }
+        let prev = hits.get(&line).copied().unwrap_or(0);
+        hits.insert(line, prev.saturating_add(count));
+    }
+    Ok(hits)
+}

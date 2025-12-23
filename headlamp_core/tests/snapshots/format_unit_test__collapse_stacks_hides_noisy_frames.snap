@@ -1,0 +1,7 @@
+---
+source: headlamp_core/tests/format_unit_test.rs
+expression: joined
+---
+Error: boom
+[90m      … 2 stack frames hidden[39m
+    at myFn (/repo/src/main.js:10:2)
