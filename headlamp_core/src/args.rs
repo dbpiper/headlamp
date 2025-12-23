@@ -368,7 +368,6 @@ pub fn derive_args(cfg_tokens: &[String], argv: &[String], is_tty: bool) -> Pars
                 "--coverageReporters=lcov",
                 "--coverageReporters=json",
                 "--coverageReporters=text-summary",
-                "--coverageDirectory=coverage/jest",
             ]
             .iter()
             .map(|s| s.to_string()),

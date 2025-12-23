@@ -20,6 +20,20 @@ pub fn normalize(text: String, root: &Path) -> String {
     normalize_render_block(&final_block)
 }
 
+pub fn normalize_tty_ui(text: String, root: &Path) -> String {
+    let normalized_paths = normalize_paths(text, root);
+    let no_osc8 = strip_osc8_sequences(&normalized_paths);
+    // Prevent CR progress frames from concatenating with subsequent real lines.
+    let normalized_cr = no_osc8.replace("\u{1b}[2K\r", "\n").replace('\r', "\n");
+    let filtered = normalized_cr
+        .lines()
+        .filter(|raw_line| should_keep_line_tty(raw_line))
+        .map(|line| line.to_string())
+        .collect::<Vec<_>>()
+        .join("\n");
+    pick_final_render_block_tty(&filtered)
+}
+
 fn normalize_paths(mut text: String, root: &Path) -> String {
     let root_s = root.to_slash_lossy().to_string();
     text = text.replace('\\', "/");
@@ -27,6 +41,39 @@ fn normalize_paths(mut text: String, root: &Path) -> String {
     text = regex_replace(&text, r"jest-bridge-[0-9]+\.json", "jest-bridge-<PID>.json");
     text = regex_replace(&text, r"\+[0-9]+s\]", "+<N>s]");
     regex_replace(&text, r"\b[0-9]{1,5}ms\b", "<N>ms")
+}
+
+fn should_keep_line_tty(raw_line: &str) -> bool {
+    // Decide based on a stripped version, but keep the original ANSI line.
+    let stripped = headlamp_core::format::stacks::strip_ansi_simple(raw_line);
+    should_keep_line(&stripped)
+}
+
+fn pick_final_render_block_tty(text: &str) -> String {
+    let lines = text.lines().collect::<Vec<_>>();
+    let last_test_files = lines
+        .iter()
+        .rposition(|line| {
+            headlamp_core::format::stacks::strip_ansi_simple(line).starts_with("Test Files ")
+        })
+        .unwrap_or_else(|| lines.len().saturating_sub(1));
+
+    let last_failed_tests = (0..=last_test_files).rev().find(|&i| {
+        headlamp_core::format::stacks::strip_ansi_simple(lines[i]).contains("Failed Tests")
+    });
+
+    let start = last_failed_tests
+        .and_then(|failed_i| find_render_block_start_tty(&lines, failed_i))
+        .unwrap_or(0);
+    lines[start..].join("\n")
+}
+
+fn find_render_block_start_tty(lines: &[&str], failed_i: usize) -> Option<usize> {
+    (0..=failed_i).rev().find(|&i| {
+        let stripped = headlamp_core::format::stacks::strip_ansi_simple(lines[i]);
+        let ln = stripped.trim_start();
+        ln.starts_with("RUN  ") || ln.starts_with("FAIL ") || ln.starts_with("PASS ")
+    })
 }
 
 fn drop_nondeterministic_lines(text: &str) -> String {
@@ -38,7 +85,11 @@ fn drop_nondeterministic_lines(text: &str) -> String {
 }
 
 fn should_keep_line(line: &str) -> bool {
-    if line.contains("\u{1b}[2K\rRUN ") {
+    // Drop live progress frames; keep the final rendered "RUN" line.
+    if line.contains("\u{1b}[2K") && line.contains("RUN [") {
+        return false;
+    }
+    if line.contains("waiting for Jest") || line.contains("+<N>s]") {
         return false;
     }
 
@@ -82,9 +133,13 @@ fn should_keep_line(line: &str) -> bool {
 }
 
 fn strip_terminal_sequences(text: &str) -> String {
-    let no_osc8 = regex_replace(text, "\u{1b}\\]8;;[^\\u{7}]*\\u{7}", "");
-    let no_osc8 = regex_replace(&no_osc8, "\u{1b}\\]8;;\\u{7}", "");
+    let no_osc8 = strip_osc8_sequences(text);
     regex_replace(&no_osc8, "\u{1b}\\[[0-9;]*m", "")
+}
+
+fn strip_osc8_sequences(text: &str) -> String {
+    let no_osc8 = regex_replace(text, "\u{1b}\\]8;;[^\\u{7}]*\\u{7}", "");
+    regex_replace(&no_osc8, "\u{1b}\\]8;;\\u{7}", "")
 }
 
 fn pick_final_render_block(text: &str) -> String {

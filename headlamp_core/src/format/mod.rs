@@ -10,4 +10,6 @@ pub mod details;
 pub mod fns;
 pub mod paths;
 pub mod stacks;
+pub mod raw_jest;
+pub mod terminal;
 pub mod vitest;

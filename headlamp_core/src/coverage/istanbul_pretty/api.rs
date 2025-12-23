@@ -26,9 +26,10 @@ fn render_pretty_output(
     print_opts: &PrintOpts,
     selection_paths_abs: &[String],
 ) -> String {
-    let total_width = 100usize;
+    let total_width = detect_columns();
+    let sep_len = std::cmp::max(20, detect_columns_raw().unwrap_or(100));
 
-    let rows_avail: u32 = if print_opts.page_fit { 39 } else { 40 };
+    let rows_avail: u32 = detect_rows().unwrap_or(if print_opts.page_fit { 39 } else { 40 });
     let per_file_rows = if print_opts.page_fit {
         (rows_avail.saturating_sub(1)).max(14)
     } else {
@@ -65,13 +66,30 @@ fn render_pretty_output(
                 print_opts.max_hotspots,
             )
             .into_iter()
-            .chain([String::from("─").repeat(total_width)])
+            .chain([crate::format::ansi::gray(&"─".repeat(sep_len))])
         })
         .collect::<Vec<_>>();
 
-    out.push(render_istanbul_text_report(&files_for_text));
+    // Keep Istanbul text table width aligned with the detected terminal width (TS parity).
+    out.push(render_istanbul_text_report(&files_for_text, total_width));
     out.push(String::new());
     out.push(render_istanbul_text_summary(&files_for_text));
 
     out.join("\n").trim_end().to_string()
+}
+
+fn detect_columns() -> usize {
+    let cols = detect_columns_raw().unwrap_or(0);
+    if cols > 20 { cols.max(60) } else { 100 }
+}
+
+fn detect_columns_raw() -> Option<usize> {
+    std::env::var("COLUMNS")
+        .ok()
+        .and_then(|s| s.parse::<usize>().ok())
+        .or_else(|| crate::format::terminal::detect_terminal_size_cols_rows().map(|(w, _)| w))
+}
+
+fn detect_rows() -> Option<u32> {
+    crate::format::terminal::detect_terminal_size_cols_rows().map(|(_w, h)| h as u32)
 }

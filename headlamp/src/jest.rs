@@ -1,5 +1,4 @@
 use std::collections::BTreeMap;
-use std::io::IsTerminal;
 use std::path::{Path, PathBuf};
 
 use duct::cmd as duct_cmd;
@@ -195,6 +194,9 @@ pub fn run_jest(repo_root: &Path, args: &ParsedArgs) -> Result<i32, RunError> {
     let setup_path = write_asset(&tmp.join("setup.cjs"), JEST_SETUP_BYTES)?;
     let out_json_base = tmp.join(format!("jest-bridge-{}", std::process::id()));
 
+    let name_pattern_only_for_discovery =
+        should_skip_run_tests_by_path_for_name_pattern_only(args, &selection_paths_abs);
+
     let base_cmd_args: Vec<String> = vec![
         "--testLocationInResults".to_string(),
         "--setupFilesAfterEnv".to_string(),
@@ -206,10 +208,19 @@ pub fn run_jest(repo_root: &Path, args: &ParsedArgs) -> Result<i32, RunError> {
         reporter_path.to_string_lossy().to_string(),
         "--reporters".to_string(),
         "default".to_string(),
-        "--runTestsByPath".to_string(),
     ];
+    let base_cmd_args = (!name_pattern_only_for_discovery)
+        .then(|| {
+            base_cmd_args
+                .iter()
+                .cloned()
+                .chain(std::iter::once("--runTestsByPath".to_string()))
+                .collect::<Vec<_>>()
+        })
+        .unwrap_or(base_cmd_args);
 
-    let live_progress_enabled = should_enable_live_progress(std::io::stdout().is_terminal());
+    let live_progress_enabled =
+        should_enable_live_progress(headlamp_core::format::terminal::is_output_terminal());
 
     #[derive(Debug)]
     struct ProjectRunOutput {
@@ -217,6 +228,8 @@ pub fn run_jest(repo_root: &Path, args: &ParsedArgs) -> Result<i32, RunError> {
         bridge: Option<BridgeJson>,
         captured_stdout: Vec<String>,
         captured_stderr: Vec<String>,
+        coverage_failure_lines: Vec<String>,
+        raw_output: String,
     }
 
     let stride = if args.sequential { 1 } else { 3 };
@@ -226,14 +239,18 @@ pub fn run_jest(repo_root: &Path, args: &ParsedArgs) -> Result<i32, RunError> {
         live_progress.set_current_label(cfg_token.clone());
 
         let tests_for_project = if selection_paths_abs.is_empty() {
-            let mut list_args = discovery_args.clone();
-            list_args.extend(["--config".to_string(), cfg_token.clone()]);
-            discover_jest_list_tests_cached_with_timeout(
-                cfg_path.parent().unwrap_or(repo_root),
-                &jest_bin,
-                &list_args,
-                JEST_LIST_TESTS_TIMEOUT,
-            )?
+            if name_pattern_only_for_discovery {
+                vec![]
+            } else {
+                let mut list_args = discovery_args.clone();
+                list_args.extend(["--config".to_string(), cfg_token.clone()]);
+                discover_jest_list_tests_cached_with_timeout(
+                    cfg_path.parent().unwrap_or(repo_root),
+                    &jest_bin,
+                    &list_args,
+                    JEST_LIST_TESTS_TIMEOUT,
+                )?
+            }
         } else {
             filter_candidates_for_project(
                 repo_root,
@@ -244,13 +261,18 @@ pub fn run_jest(repo_root: &Path, args: &ParsedArgs) -> Result<i32, RunError> {
             )?
         };
 
-        if selection_paths_abs.is_empty() && tests_for_project.is_empty() {
+        if selection_paths_abs.is_empty()
+            && tests_for_project.is_empty()
+            && !name_pattern_only_for_discovery
+        {
             live_progress.increment_done(1);
             return Ok(ProjectRunOutput {
                 exit_code: 0,
                 bridge: None,
                 captured_stdout: vec![],
                 captured_stderr: vec![],
+                coverage_failure_lines: vec![],
+                raw_output: String::new(),
             });
         }
 
@@ -261,6 +283,8 @@ pub fn run_jest(repo_root: &Path, args: &ParsedArgs) -> Result<i32, RunError> {
                 bridge: None,
                 captured_stdout: vec![],
                 captured_stderr: vec![],
+                coverage_failure_lines: vec![],
+                raw_output: String::new(),
             });
         }
 
@@ -269,12 +293,23 @@ pub fn run_jest(repo_root: &Path, args: &ParsedArgs) -> Result<i32, RunError> {
         let mut cmd_args = base_cmd_args.clone();
         cmd_args.extend(["--config".to_string(), cfg_token.clone()]);
         cmd_args.extend(args.runner_args.iter().cloned());
+        if args.collect_coverage {
+            cmd_args.push(format!(
+                "--coverageDirectory={}",
+                coverage_dir_for_config(cfg_path)
+            ));
+            cmd_args.extend(collect_coverage_from_args(
+                repo_root,
+                &selection_paths_abs,
+                &args.selection_paths,
+            ));
+        }
         if args.show_logs {
             cmd_args.push("--no-silent".to_string());
         }
         if !tests_for_project.is_empty() {
             cmd_args.extend(tests_for_project);
-        } else {
+        } else if !name_pattern_only_for_discovery {
             cmd_args.extend(args.selection_paths.iter().cloned());
         }
 
@@ -300,6 +335,12 @@ pub fn run_jest(repo_root: &Path, args: &ParsedArgs) -> Result<i32, RunError> {
             collect_bridge_entries_from_bridge_events(&out.stdout, &out.stderr);
         let captured_stdout = split_non_event_lines(&out.stdout);
         let captured_stderr = split_non_event_lines(&out.stderr);
+        let coverage_failure_lines = extract_coverage_failure_lines(&out.stdout, &out.stderr);
+        let raw_output = format!(
+            "{}\n{}",
+            String::from_utf8_lossy(&out.stdout),
+            String::from_utf8_lossy(&out.stderr)
+        );
 
         let bridge = std::fs::read_to_string(&out_json)
             .ok()
@@ -309,6 +350,9 @@ pub fn run_jest(repo_root: &Path, args: &ParsedArgs) -> Result<i32, RunError> {
                     &mut bridge,
                     &extra_bridge_entries_by_test_path,
                 );
+                if name_pattern_only_for_discovery {
+                    bridge = filter_bridge_for_name_pattern_only(bridge);
+                }
                 bridge
             });
 
@@ -317,6 +361,8 @@ pub fn run_jest(repo_root: &Path, args: &ParsedArgs) -> Result<i32, RunError> {
             bridge,
             captured_stdout,
             captured_stderr,
+            coverage_failure_lines,
+            raw_output,
         })
     })?;
     live_progress.finish();
@@ -325,10 +371,16 @@ pub fn run_jest(repo_root: &Path, args: &ParsedArgs) -> Result<i32, RunError> {
     let mut bridges: Vec<BridgeJson> = vec![];
     let mut captured_stdout_all: Vec<String> = vec![];
     let mut captured_stderr_all: Vec<String> = vec![];
+    let mut coverage_failure_lines: IndexSet<String> = IndexSet::new();
+    let mut raw_output_all: Vec<String> = vec![];
     for result in per_project_results {
         exit_codes.push(result.exit_code);
         captured_stdout_all.extend(result.captured_stdout);
         captured_stderr_all.extend(result.captured_stderr);
+        result.coverage_failure_lines.into_iter().for_each(|ln| {
+            coverage_failure_lines.insert(ln);
+        });
+        raw_output_all.push(result.raw_output);
         if let Some(bridge) = result.bridge {
             bridges.push(bridge);
         }
@@ -345,15 +397,42 @@ pub fn run_jest(repo_root: &Path, args: &ParsedArgs) -> Result<i32, RunError> {
             args.editor_cmd.clone(),
         );
         let pretty = render_vitest_from_jest_json(&merged, &ctx, args.only_failures);
-        if !pretty.trim().is_empty() {
-            println!("{pretty}");
+        let combined = raw_output_all.join("\n");
+        let maybe_merged = looks_sparse(&pretty).then(|| {
+            let raw_also = headlamp_core::format::raw_jest::format_jest_output_vitest(
+                &combined,
+                &ctx,
+                args.only_failures,
+            );
+            merge_sparse_bridge_and_raw(&pretty, &raw_also)
+        });
+        let final_text = maybe_merged.as_deref().unwrap_or(&pretty);
+        if !final_text.trim().is_empty() {
+            println!("{final_text}");
         }
     } else {
-        for line in captured_stdout_all {
-            println!("{line}");
-        }
-        for line in captured_stderr_all {
-            eprintln!("{line}");
+        let combined = raw_output_all.join("\n");
+        let ctx = make_ctx(
+            repo_root,
+            None,
+            combined.contains("FAIL"),
+            args.show_logs,
+            args.editor_cmd.clone(),
+        );
+        let formatted = headlamp_core::format::raw_jest::format_jest_output_vitest(
+            &combined,
+            &ctx,
+            args.only_failures,
+        );
+        if !formatted.trim().is_empty() {
+            println!("{formatted}");
+        } else {
+            for line in captured_stdout_all {
+                println!("{line}");
+            }
+            for line in captured_stderr_all {
+                eprintln!("{line}");
+            }
         }
     }
 
@@ -389,7 +468,7 @@ pub fn run_jest(repo_root: &Path, args: &ParsedArgs) -> Result<i32, RunError> {
             max_files: args.coverage_max_files,
             max_hotspots: args.coverage_max_hotspots,
             page_fit: args.coverage_page_fit,
-            tty: std::io::stdout().is_terminal(),
+            tty: headlamp_core::format::terminal::is_output_terminal(),
             editor_cmd: args.editor_cmd.clone(),
         };
 
@@ -414,6 +493,9 @@ pub fn run_jest(repo_root: &Path, args: &ParsedArgs) -> Result<i32, RunError> {
                     }
                 }
             }
+        }
+        if exit_code != 0 {
+            print_coverage_threshold_failure_summary(&coverage_failure_lines);
         }
     }
 
@@ -700,6 +782,127 @@ fn looks_like_test_path(candidate_path: &str) -> bool {
         || p.contains(".spec.")
 }
 
+fn filter_bridge_for_name_pattern_only(mut bridge: BridgeJson) -> BridgeJson {
+    let mut kept: Vec<headlamp_core::format::bridge::BridgeFileResult> = vec![];
+    for mut file in bridge.test_results.into_iter() {
+        let suite_has_failure =
+            !file.failure_message.trim().is_empty() || file.test_exec_error.is_some();
+        file.test_results
+            .retain(|a| a.status == "passed" || a.status == "failed");
+        if !file.test_results.is_empty() || suite_has_failure {
+            kept.push(file);
+        }
+    }
+
+    let num_failed_tests = kept
+        .iter()
+        .flat_map(|f| f.test_results.iter())
+        .filter(|a| a.status == "failed")
+        .count() as u64;
+    let num_passed_tests = kept
+        .iter()
+        .flat_map(|f| f.test_results.iter())
+        .filter(|a| a.status == "passed")
+        .count() as u64;
+    let num_total_tests = num_failed_tests + num_passed_tests;
+
+    let num_failed_suites = kept
+        .iter()
+        .filter(|f| {
+            !f.failure_message.trim().is_empty()
+                || f.test_exec_error.is_some()
+                || f.test_results.iter().any(|a| a.status == "failed")
+        })
+        .count() as u64;
+    let num_passed_suites = (kept.len() as u64).saturating_sub(num_failed_suites);
+    let success = num_failed_tests == 0 && num_failed_suites == 0;
+
+    bridge.test_results = kept;
+    bridge.aggregated.num_total_test_suites = bridge.test_results.len() as u64;
+    bridge.aggregated.num_passed_test_suites = num_passed_suites;
+    bridge.aggregated.num_failed_test_suites = num_failed_suites;
+    bridge.aggregated.num_total_tests = num_total_tests;
+    bridge.aggregated.num_passed_tests = num_passed_tests;
+    bridge.aggregated.num_failed_tests = num_failed_tests;
+    bridge.aggregated.num_pending_tests = 0;
+    bridge.aggregated.num_todo_tests = 0;
+    bridge.aggregated.success = success;
+    bridge
+}
+
+fn should_skip_run_tests_by_path_for_name_pattern_only(
+    args: &ParsedArgs,
+    selection_paths_abs: &[String],
+) -> bool {
+    if !args.selection_specified {
+        return false;
+    }
+    if args.changed.is_some() {
+        return false;
+    }
+    if !selection_paths_abs.is_empty() || !args.selection_paths.is_empty() {
+        return false;
+    }
+    args.runner_args.iter().any(|tok| {
+        tok == "-t" || tok == "--testNamePattern" || tok.starts_with("--testNamePattern=")
+    })
+}
+
+fn coverage_dir_for_config(cfg_path: &Path) -> String {
+    let base = cfg_path
+        .file_name()
+        .and_then(|n| n.to_str())
+        .unwrap_or("default");
+    let safe = base
+        .chars()
+        .map(|c| {
+            if c.is_ascii_alphanumeric() || matches!(c, '.' | '_' | '-') {
+                c
+            } else {
+                '_'
+            }
+        })
+        .collect::<String>();
+    format!("coverage/jest/{safe}")
+}
+
+fn collect_coverage_from_args(
+    repo_root: &Path,
+    selection_paths_abs: &[String],
+    selection_paths_tokens: &[String],
+) -> Vec<String> {
+    let explicit_prod_abs = selection_paths_abs
+        .iter()
+        .filter(|abs| abs.contains('/') && !looks_like_test_path(abs))
+        .filter_map(|abs| {
+            Path::new(abs)
+                .strip_prefix(repo_root)
+                .ok()
+                .and_then(|p| p.to_str())
+                .map(|rel| rel.replace('\\', "/"))
+        })
+        .filter(|rel| !rel.is_empty() && !rel.starts_with("../") && !rel.starts_with("./../"))
+        .map(|rel| {
+            if rel.starts_with("./") {
+                rel
+            } else {
+                format!("./{rel}")
+            }
+        })
+        .collect::<Vec<_>>();
+
+    let mut out: Vec<String> = vec![];
+    for rel in explicit_prod_abs {
+        out.push("--collectCoverageFrom".to_string());
+        out.push(rel);
+    }
+    if out.is_empty() {
+        // Keep behavior stable: no extra args when there are no explicit production selections.
+        let _ = selection_paths_tokens;
+    }
+    out
+}
+
 fn write_asset(path: &Path, bytes: &[u8]) -> Result<PathBuf, RunError> {
     if let Some(parent) = path.parent() {
         std::fs::create_dir_all(parent).map_err(RunError::Io)?;
@@ -721,6 +924,74 @@ fn split_non_event_lines(bytes: &[u8]) -> Vec<String> {
         .filter(|line| !line.starts_with("[JEST-BRIDGE-EVENT] "))
         .map(str::to_string)
         .collect()
+}
+
+fn extract_coverage_failure_lines(stdout_bytes: &[u8], stderr_bytes: &[u8]) -> Vec<String> {
+    let text = format!(
+        "{}\n{}",
+        String::from_utf8_lossy(stdout_bytes),
+        String::from_utf8_lossy(stderr_bytes)
+    );
+    let mut out: IndexSet<String> = IndexSet::new();
+    for line in text.lines() {
+        let trimmed = line.trim();
+        if trimmed.is_empty() {
+            continue;
+        }
+        if trimmed.to_ascii_lowercase().contains("does not meet")
+            && trimmed.to_ascii_lowercase().contains("coverage for ")
+        {
+            out.insert(trimmed.to_string());
+        }
+    }
+    out.into_iter().collect()
+}
+
+fn print_coverage_threshold_failure_summary(lines: &IndexSet<String>) {
+    if lines.is_empty() {
+        println!(" - Coverage failed. See tables above and jest coverageThreshold.");
+        return;
+    }
+    lines.iter().for_each(|line| {
+        println!(" - {line}");
+    });
+}
+
+fn looks_sparse(pretty: &str) -> bool {
+    let simple = headlamp_core::format::stacks::strip_ansi_simple(pretty);
+    let lines = simple.lines().collect::<Vec<_>>();
+    let has_error_blank = lines
+        .windows(2)
+        .any(|w| w[0].trim() == "Error:" && w[1].trim().is_empty());
+    if !has_error_blank {
+        return false;
+    }
+    !["Message:", "Thrown:", "Events:", "Console errors:"]
+        .into_iter()
+        .any(|needle| simple.contains(needle))
+}
+
+fn merge_sparse_bridge_and_raw(bridge_pretty: &str, raw_pretty: &str) -> String {
+    let (bridge_body, bridge_footer) = split_footer(bridge_pretty);
+    let (raw_body, _raw_footer) = split_footer(raw_pretty);
+    [
+        bridge_body.trim_end(),
+        raw_body.trim_end(),
+        bridge_footer.trim_end(),
+    ]
+    .into_iter()
+    .filter(|s| !s.is_empty())
+    .collect::<Vec<_>>()
+    .join("\n")
+}
+
+fn split_footer(text: &str) -> (String, String) {
+    let lines = text.lines().collect::<Vec<_>>();
+    let Some(i) = lines.iter().rposition(|ln| ln.starts_with("Test Files ")) else {
+        return (text.to_string(), String::new());
+    };
+    let (body, footer) = lines.split_at(i);
+    (body.join("\n"), footer.join("\n"))
 }
 
 #[derive(Debug, serde::Deserialize)]

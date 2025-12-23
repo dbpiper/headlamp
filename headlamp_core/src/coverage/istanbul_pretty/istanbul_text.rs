@@ -4,9 +4,10 @@ use std::path::Path;
 use path_slash::PathExt;
 
 use super::analysis::file_summary;
+use super::bars::tint_pct;
 use super::model::{Counts, FileSummary, FullFileCoverage};
 
-pub(super) fn render_istanbul_text_report(files: &[FullFileCoverage]) -> String {
+pub(super) fn render_istanbul_text_report(files: &[FullFileCoverage], max_cols: usize) -> String {
     let mut rows: Vec<(String, FileSummary, String)> = files
         .iter()
         .map(|file| {
@@ -26,10 +27,11 @@ pub(super) fn render_istanbul_text_report(files: &[FullFileCoverage]) -> String 
 
     let max_name_len = rows
         .iter()
-        .map(|(name, _s, _u)| name.len())
+        .map(|(name, _s, _u)| name.chars().count().saturating_add(1))
         .max()
         .unwrap_or(0);
-    let name_width = (max_name_len + 1).max(9);
+    let (file_width, missing_width) = compute_table_widths(max_name_len, max_cols);
+    let header_file_width = file_width.saturating_sub(1);
 
     let totals = rows.iter().fold(
         FileSummary {
@@ -65,11 +67,13 @@ pub(super) fn render_istanbul_text_report(files: &[FullFileCoverage]) -> String 
 
     // Match Istanbul text reporter formatting (as used by headlamp-original).
     let dash = format!(
-        "{}|---------|----------|---------|---------|-------------------",
-        "-".repeat(name_width + 1)
+        "{}|---------|----------|---------|---------|{}",
+        "-".repeat(file_width),
+        "-".repeat(missing_width)
     );
+    let uncovered_header_cell = istanbul_fill("Uncovered Line #s", missing_width, false, 1);
     let header = format!(
-        "{:<name_width$} | % Stmts | % Branch | % Funcs | % Lines | Uncovered Line #s ",
+        "{:<header_file_width$} | % Stmts | % Branch | % Funcs | % Lines |{uncovered_header_cell}",
         "File"
     );
     let mut out: Vec<String> = vec![dash.to_string(), header.to_string(), dash.to_string()];
@@ -82,7 +86,8 @@ pub(super) fn render_istanbul_text_report(files: &[FullFileCoverage]) -> String 
         totals.lines,
         "",
         false,
-        name_width,
+        file_width,
+        missing_width,
     ));
 
     for (name, summary, uncovered) in rows {
@@ -94,7 +99,8 @@ pub(super) fn render_istanbul_text_report(files: &[FullFileCoverage]) -> String 
             summary.lines,
             &uncovered,
             true,
-            name_width,
+            file_width,
+            missing_width,
         ));
     }
 
@@ -151,9 +157,16 @@ pub(super) fn render_istanbul_text_summary(files: &[FullFileCoverage]) -> String
 
 fn format_summary_line(label: &str, counts: Counts) -> String {
     let pct = fmt_pct(counts.pct());
+    let label_pad = 13usize.saturating_sub(label.chars().count());
+    let label_colored = tint_pct(counts.pct(), label);
+    let pct_colored = tint_pct(counts.pct(), &format!("{pct}%"));
+    let counts_colored = tint_pct(
+        counts.pct(),
+        &format!("( {}/{} )", counts.covered, counts.total),
+    );
     format!(
-        "{label:<13}: {pct}% ( {}/{} )",
-        counts.covered, counts.total
+        "{label_colored}{}: {pct_colored} {counts_colored}",
+        " ".repeat(label_pad)
     )
 }
 
@@ -193,27 +206,84 @@ fn render_istanbul_text_row(
     lines: Counts,
     uncovered: &str,
     indent_file: bool,
-    name_width: usize,
+    file_width: usize,
+    missing_width: usize,
 ) -> String {
-    let file_cell = if indent_file {
-        let inner = name_width.saturating_sub(1);
-        format!(" {file_label:<inner$}")
-    } else {
-        format!("{file_label:<name_width$}")
+    let file_cell = {
+        let leader_spaces = indent_file.then_some(1).unwrap_or(0);
+        istanbul_fill(file_label, file_width, false, leader_spaces)
     };
 
     let stmts_pct = fmt_pct(stmts.pct());
     let branches_pct = fmt_pct(branches.pct());
     let funcs_pct = fmt_pct(funcs.pct());
     let lines_pct = fmt_pct(lines.pct());
+    let row_min = stmts
+        .pct()
+        .min(branches.pct())
+        .min(funcs.pct())
+        .min(lines.pct());
+
+    let file_cell_colored = tint_pct(row_min, &file_cell);
+    let stmts_cell = tint_pct(stmts.pct(), &format!(" {stmts_pct:>7} "));
+    let branches_cell = tint_pct(branches.pct(), &format!(" {branches_pct:>8} "));
+    let funcs_cell = tint_pct(funcs.pct(), &format!(" {funcs_pct:>7} "));
+    let lines_cell = tint_pct(lines.pct(), &format!(" {lines_pct:>7} "));
+    let uncovered_cell = tint_pct(row_min, &istanbul_fill(uncovered, missing_width, false, 1));
+
     format!(
-        "{file_cell} | {stmts_pct:>7} | {branches_pct:>8} | {funcs_pct:>7} | {lines_pct:>7} | {uncovered:<17} "
+        "{file_cell_colored}|{stmts_cell}|{branches_cell}|{funcs_cell}|{lines_cell}|{uncovered_cell}"
     )
+}
+
+fn compute_table_widths(max_name_len: usize, max_cols: usize) -> (usize, usize) {
+    let file_width = max_name_len.saturating_add(1).max(9 + 1);
+    let fixed = 9usize + 10usize + 9usize + 9usize + 5usize;
+    let min_missing = 19usize;
+
+    if max_cols > fixed + min_missing {
+        let desired_missing = max_cols.saturating_sub(fixed + file_width);
+        let missing_width = desired_missing.max(min_missing);
+        (file_width, missing_width)
+    } else {
+        (file_width, min_missing)
+    }
+}
+
+fn istanbul_fill(text: &str, width: usize, align_right: bool, leading_spaces: usize) -> String {
+    let leader = " ".repeat(leading_spaces.min(width));
+    let remaining = width.saturating_sub(leader.chars().count());
+    if remaining == 0 {
+        return leader;
+    }
+
+    let text_len = text.chars().count();
+    if text_len <= remaining {
+        let pad = " ".repeat(remaining - text_len);
+        return if align_right {
+            format!("{leader}{pad}{text}")
+        } else {
+            format!("{leader}{text}{pad}")
+        };
+    }
+
+    let ellipsis = "...";
+    let tail_len = remaining.saturating_sub(ellipsis.chars().count());
+    let tail = text
+        .chars()
+        .rev()
+        .take(tail_len)
+        .collect::<Vec<_>>()
+        .into_iter()
+        .rev()
+        .collect::<String>();
+    format!("{leader}{ellipsis}{tail}")
 }
 
 fn fmt_pct(pct: f64) -> String {
     let v = if pct.is_finite() { pct } else { 0.0 };
-    let fixed = format!("{v:.2}");
+    let floored = (v * 100.0).floor() / 100.0;
+    let fixed = format!("{floored:.2}");
     fixed
         .trim_end_matches('0')
         .trim_end_matches('.')

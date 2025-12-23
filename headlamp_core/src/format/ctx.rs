@@ -2,7 +2,6 @@ use std::path::Path;
 
 use path_slash::PathExt;
 use regex::Regex;
-use terminal_size::terminal_size;
 
 #[derive(Debug, Clone)]
 pub struct Ctx {
@@ -45,6 +44,6 @@ fn detect_width(width: Option<usize>) -> usize {
                 .ok()
                 .and_then(|s| s.parse::<usize>().ok())
         })
-        .or_else(|| terminal_size().map(|(w, _h)| w.0 as usize))
+        .or_else(|| crate::format::terminal::detect_terminal_size_cols_rows().map(|(w, _h)| w))
         .unwrap_or(80)
 }

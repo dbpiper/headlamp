@@ -61,6 +61,13 @@ pub fn render_vitest_from_jest_json(data: &BridgeJson, ctx: &Ctx, only_failures:
             }
         }
 
+        if !only_failures {
+            let failed_assertions = file.test_results.iter().filter(|a| a.status == "failed");
+            if let Some(first_failed) = failed_assertions.clone().next() {
+                lines.extend(render_inline_failed_assertion_block(file, first_failed, ctx));
+            }
+        }
+
         if has_suite_failure {
             lines.extend(render_file_level_failure(file, ctx, &console_list));
         }
@@ -80,6 +87,105 @@ pub fn render_vitest_from_jest_json(data: &BridgeJson, ctx: &Ctx, only_failures:
 
     lines.extend(render_footer(data, ctx));
     lines.join("\n")
+}
+
+fn render_inline_failed_assertion_block(
+    file: &crate::format::bridge::BridgeFileResult,
+    assertion: &crate::format::bridge::BridgeAssertion,
+    ctx: &Ctx,
+) -> Vec<String> {
+    let primary_block = if !assertion.failure_messages.is_empty() {
+        assertion.failure_messages.join("\n")
+    } else {
+        file.failure_message.clone()
+    };
+    let (stacks, detail_msgs) = lines_from_details(
+        assertion
+            .failure_details
+            .as_ref()
+            .or(file.failure_details.as_ref()),
+    );
+    let messages_array = merge_msg_lines(&primary_block, &detail_msgs);
+    render_ts_style_assertion_failure(&messages_array, &stacks, ctx)
+}
+
+fn render_ts_style_assertion_failure(
+    messages_array: &[String],
+    stacks: &[String],
+    ctx: &Ctx,
+) -> Vec<String> {
+    let mut out: Vec<String> = vec![];
+    out.extend(build_code_frame_section(
+        &messages_array.iter().map(|s| s.to_string()).collect::<Vec<_>>(),
+        false,
+        None,
+    ));
+    out.extend(render_expected_received_sections(messages_array));
+    out.extend(render_assertion_block(messages_array));
+    if ctx.show_stacks && !stacks.is_empty() {
+        out.push(ansi::dim("    Stack:"));
+        stacks
+            .iter()
+            .take(6)
+            .for_each(|ln| out.push(format!("            {ln}")));
+        out.push(String::new());
+    }
+    out
+}
+
+fn render_expected_received_sections(messages_array: &[String]) -> Vec<String> {
+    let stripped = messages_array
+        .iter()
+        .map(|ln| crate::format::stacks::strip_ansi_simple(ln))
+        .collect::<Vec<_>>();
+    let expected = stripped
+        .iter()
+        .find_map(|ln| ln.strip_prefix("Expected: ").map(|v| v.trim().to_string()));
+    let received = stripped
+        .iter()
+        .find_map(|ln| ln.strip_prefix("Received: ").map(|v| v.trim().to_string()));
+    if expected.is_none() && received.is_none() {
+        return vec![];
+    }
+    let mut out: Vec<String> = vec![String::new(), String::new()];
+    out.push(ansi::bold("    Expected"));
+    out.push(String::new());
+    if let Some(v) = expected {
+        out.push(format!("      {}", colors::success(&v)));
+        out.push(String::new());
+    }
+    out.push(ansi::bold("    Received"));
+    out.push(String::new());
+    if let Some(v) = received {
+        out.push(format!("      {}", colors::failure(&v)));
+        out.push(String::new());
+    }
+    out
+}
+
+fn render_assertion_block(messages_array: &[String]) -> Vec<String> {
+    let stripped = messages_array
+        .iter()
+        .map(|ln| crate::format::stacks::strip_ansi_simple(ln))
+        .collect::<Vec<_>>();
+    let start = stripped
+        .iter()
+        .position(|ln| ln.trim_start().starts_with("expect("))
+        .unwrap_or(usize::MAX);
+    if start == usize::MAX {
+        return vec![];
+    }
+    let mut out: Vec<String> = vec![String::new(), String::new(), ansi::bold("    Assertion:")];
+    out.push(String::new());
+    stripped
+        .iter()
+        .skip(start)
+        .take_while(|ln| !ln.trim_start().starts_with("at "))
+        .filter(|ln| !ln.trim().is_empty())
+        .for_each(|ln| out.push(ansi::yellow(&format!("    {ln}"))));
+    out.push(String::new());
+    out.push(String::new());
+    out
 }
 
 fn render_file_level_failure(

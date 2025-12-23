@@ -1,4 +1,3 @@
-use std::io::IsTerminal;
 use std::path::Path;
 
 use duct::cmd as duct_cmd;
@@ -93,7 +92,7 @@ fn print_lcov(repo_root: &Path, args: &ParsedArgs) {
         max_files: args.coverage_max_files,
         max_hotspots: args.coverage_max_hotspots,
         page_fit: args.coverage_page_fit,
-        tty: std::io::stdout().is_terminal(),
+        tty: headlamp_core::format::terminal::is_output_terminal(),
         editor_cmd: args.editor_cmd.clone(),
     };
     println!("{}", format_compact(&filtered, &print_opts, repo_root));

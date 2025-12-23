@@ -102,3 +102,80 @@ fn parity_jest_coverage_selection_order_fixture() {
     let n_rs = normalize(out_rs, &repo);
     assert_eq!(n_ts, n_rs);
 }
+
+#[test]
+fn parity_jest_coverage_multi_project_isolated_directories_fixture() {
+    let Some(binaries) = parity_binaries() else {
+        return;
+    };
+
+    let repo = mk_repo("jest-coverage-multi-project", &binaries.node_modules);
+    write_file(&repo.join("src/a.js"), "exports.a = () => 1;\n");
+    write_file(&repo.join("src/b.js"), "exports.b = () => 2;\n");
+    write_file(
+        &repo.join("tests/a.test.js"),
+        "const { a } = require('../src/a');\n\ntest('a', () => { expect(a()).toBe(1); });\n",
+    );
+    write_file(
+        &repo.join("tests/b.test.js"),
+        "const { b } = require('../src/b');\n\ntest('b', () => { expect(b()).toBe(2); });\n",
+    );
+    write_file(
+        &repo.join("jest.config.js"),
+        "module.exports = { testMatch: ['**/tests/a.test.js'], collectCoverage: true, collectCoverageFrom: ['src/**/*.js'] };\n",
+    );
+    write_file(
+        &repo.join("jest.ts.config.js"),
+        "module.exports = { testMatch: ['**/tests/b.test.js'], collectCoverage: true, collectCoverageFrom: ['src/**/*.js'] };\n",
+    );
+
+    let (code_ts, out_ts, code_rs, out_rs) = run_parity_fixture_with_args(
+        &repo,
+        &binaries.ts_cli,
+        &binaries.rust_bin,
+        &["--coverage"],
+        &["--coverage"],
+    );
+    assert_eq!(code_ts, code_rs);
+
+    let n_ts = normalize(out_ts, &repo);
+    let n_rs = normalize(out_rs, &repo);
+    assert_eq!(n_ts, n_rs);
+}
+
+#[test]
+fn parity_jest_coverage_threshold_failure_lines_fixture() {
+    let Some(binaries) = parity_binaries() else {
+        return;
+    };
+
+    let repo = mk_repo("jest-coverage-threshold-failure", &binaries.node_modules);
+    write_file(&repo.join("src/sum.js"), "exports.sum = (a,b) => a + b;\n");
+    write_file(
+        &repo.join("tests/sum.test.js"),
+        "const { sum } = require('../src/sum');\n\ntest('sum', () => { expect(sum(1,2)).toBe(3); });\n",
+    );
+    // Intentionally impossible threshold to force a coverage threshold failure output line.
+    write_file(
+        &repo.join("jest.config.js"),
+        "module.exports = {\n\
+  testMatch: ['**/tests/**/*.test.js'],\n\
+  collectCoverage: true,\n\
+  collectCoverageFrom: ['src/**/*.js'],\n\
+  coverageThreshold: { global: { lines: 100 } },\n\
+};\n",
+    );
+
+    let (code_ts, out_ts, code_rs, out_rs) = run_parity_fixture_with_args(
+        &repo,
+        &binaries.ts_cli,
+        &binaries.rust_bin,
+        &["--coverage"],
+        &["--coverage"],
+    );
+    assert_eq!(code_ts, code_rs);
+
+    let n_ts = normalize(out_ts, &repo);
+    let n_rs = normalize(out_rs, &repo);
+    assert_eq!(n_ts, n_rs);
+}

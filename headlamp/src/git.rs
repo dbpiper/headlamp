@@ -37,7 +37,10 @@ pub fn changed_files(repo_root: &Path, mode: ChangedMode) -> Result<Vec<PathBuf>
     let mut kept: IndexMap<String, PathBuf> = IndexMap::new();
     out.into_iter().for_each(|abs| {
         let key = abs.to_slash_lossy().to_string();
-        let is_noise = key.contains("/node_modules/") || key.contains("/coverage/");
+        let is_noise = key.contains("/node_modules/")
+            || key.contains("/coverage/")
+            || key.contains("/.yalc/")
+            || key.ends_with("/yalc.lock");
         if !is_noise {
             kept.entry(key).or_insert(abs);
         }

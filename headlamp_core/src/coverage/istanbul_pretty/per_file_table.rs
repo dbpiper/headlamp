@@ -1,10 +1,8 @@
-use comfy_table::{Cell, CellAlignment, ColumnConstraint, ContentArrangement, Row, Table, Width};
-
 use super::analysis::{
     composite_bar_pct, compute_uncovered_blocks, file_summary, missed_branches, missed_functions,
 };
-use super::column_widths::compute_column_widths;
 use super::model::FullFileCoverage;
+use super::table::{ColumnSpec, Decor, cell, cell_with};
 
 pub(super) fn render_per_file_composite_table(
     file: &FullFileCoverage,
@@ -22,55 +20,92 @@ pub(super) fn render_per_file_composite_table(
     let bar_max = 6usize.max(((total as f64) * 0.06).floor() as usize);
 
     let columns = vec![
-        ("File", 28usize, file_max, CellAlignment::Left),
-        ("Section", 8usize, 10usize, CellAlignment::Left),
-        ("Where", 10usize, 14usize, CellAlignment::Left),
-        ("Lines%", 6usize, 7usize, CellAlignment::Right),
-        ("Bar", 6usize, bar_max, CellAlignment::Left),
-        ("Funcs%", 6usize, 7usize, CellAlignment::Right),
-        ("Branch%", 7usize, 8usize, CellAlignment::Right),
-        ("Detail", 18usize, detail_max, CellAlignment::Left),
+        ColumnSpec {
+            label: "File",
+            min: 28,
+            max: file_max,
+            align_right: false,
+        },
+        ColumnSpec {
+            label: "Section",
+            min: 8,
+            max: 10,
+            align_right: false,
+        },
+        ColumnSpec {
+            label: "Where",
+            min: 10,
+            max: 14,
+            align_right: false,
+        },
+        ColumnSpec {
+            label: "Lines%",
+            min: 6,
+            max: 7,
+            align_right: true,
+        },
+        ColumnSpec {
+            label: "Bar",
+            min: 6,
+            max: bar_max,
+            align_right: false,
+        },
+        ColumnSpec {
+            label: "Funcs%",
+            min: 6,
+            max: 7,
+            align_right: true,
+        },
+        ColumnSpec {
+            label: "Branch%",
+            min: 7,
+            max: 8,
+            align_right: true,
+        },
+        ColumnSpec {
+            label: "Detail",
+            min: 18,
+            max: detail_max,
+            align_right: false,
+        },
     ];
-
-    let mins = columns
-        .iter()
-        .map(|(_, min, _, _)| *min)
-        .collect::<Vec<_>>();
-    let maxs = columns
-        .iter()
-        .map(|(_, _, max, _)| *max)
-        .collect::<Vec<_>>();
-    let widths = compute_column_widths(total_width, &mins, &maxs, columns.len());
-    let bar_col_width = widths.get(4).copied().unwrap_or(10) as usize;
 
     let summary = file_summary(file);
     let blocks = compute_uncovered_blocks(file);
     let miss_fns = missed_functions(file);
     let misses = missed_branches(file);
 
-    let mut rows: Vec<Vec<String>> = vec![];
+    let mut rows: Vec<Vec<super::table::Cell>> = vec![];
 
     let rel = file.rel_path.clone();
     let dash = "—".to_string();
+    let l_pct = summary.lines.pct();
+    let f_pct = summary.functions.pct();
+    let b_pct = summary.branches.pct();
     rows.push(vec![
-        rel.clone(),
-        "Summary".to_string(),
-        dash.clone(),
-        format!("{:.1}%", summary.lines.pct()),
-        bar_text(composite_bar_pct(&summary, &blocks), bar_col_width),
-        format!("{:.1}%", summary.functions.pct()),
-        format!("{:.1}%", summary.branches.pct()),
-        String::new(),
+        cell_with(rel.clone(), Decor::ShortenPath { rel: rel.clone() }),
+        cell_with("Summary", Decor::Bold),
+        cell(dash.clone()),
+        cell_with(format!("{l_pct:.1}%"), Decor::TintPct { pct: l_pct }),
+        cell_with(
+            String::new(),
+            Decor::Bar {
+                pct: composite_bar_pct(&summary, &blocks),
+            },
+        ),
+        cell_with(format!("{f_pct:.1}%"), Decor::TintPct { pct: f_pct }),
+        cell_with(format!("{b_pct:.1}%"), Decor::TintPct { pct: b_pct }),
+        cell(""),
     ]);
     rows.push(vec![
-        rel.clone(),
-        "Totals".to_string(),
-        dash,
-        format!("{:.1}%", summary.lines.pct()),
-        String::new(),
-        format!("{:.1}%", summary.functions.pct()),
-        format!("{:.1}%", summary.branches.pct()),
-        String::new(),
+        cell_with(rel.clone(), Decor::DimShortenPath { rel: rel.clone() }),
+        cell_with("Totals", Decor::Dim),
+        cell_with("—", Decor::Dim),
+        cell_with(format!("{l_pct:.1}%"), Decor::Dim),
+        cell_with(String::new(), Decor::Dim),
+        cell_with(format!("{f_pct:.1}%"), Decor::Dim),
+        cell_with(format!("{b_pct:.1}%"), Decor::Dim),
+        cell(""),
     ]);
 
     if !blocks.is_empty() || !miss_fns.is_empty() || !misses.is_empty() {
@@ -80,25 +115,25 @@ pub(super) fn render_per_file_composite_table(
             .min(blocks.len());
         if want_hs > 0 {
             rows.push(vec![
-                rel.clone(),
-                "Hotspots".to_string(),
-                String::new(),
-                String::new(),
-                String::new(),
-                String::new(),
-                String::new(),
-                "(largest uncovered ranges)".to_string(),
+                cell_with(rel.clone(), Decor::DimShortenPath { rel: rel.clone() }),
+                cell_with("Hotspots", Decor::Dim),
+                cell_with("", Decor::Dim),
+                cell_with("", Decor::Dim),
+                cell_with("", Decor::Dim),
+                cell_with("", Decor::Dim),
+                cell_with("", Decor::Dim),
+                cell_with("(largest uncovered ranges)", Decor::Dim),
             ]);
             for hotspot in blocks.iter().take(want_hs) {
                 rows.push(vec![
-                    rel.clone(),
-                    "Hotspot".to_string(),
-                    format!("L{}–L{}", hotspot.start, hotspot.end),
-                    String::new(),
-                    String::new(),
-                    String::new(),
-                    String::new(),
-                    format!("{} lines", hotspot.end - hotspot.start + 1),
+                    cell_with(rel.clone(), Decor::ShortenPath { rel: rel.clone() }),
+                    cell("Hotspot"),
+                    cell(format!("L{}–L{}", hotspot.start, hotspot.end)),
+                    cell(""),
+                    cell(""),
+                    cell(""),
+                    cell(""),
+                    cell(format!("{} lines", hotspot.end - hotspot.start + 1)),
                 ]);
             }
         }
@@ -107,25 +142,25 @@ pub(super) fn render_per_file_composite_table(
         let want_fn = want_fn.min(miss_fns.len());
         if want_fn > 0 {
             rows.push(vec![
-                rel.clone(),
-                "Function".to_string(),
-                String::new(),
-                String::new(),
-                String::new(),
-                String::new(),
-                String::new(),
-                "(never executed)".to_string(),
+                cell_with(rel.clone(), Decor::DimShortenPath { rel: rel.clone() }),
+                cell_with("Functions", Decor::Dim),
+                cell_with("", Decor::Dim),
+                cell_with("", Decor::Dim),
+                cell_with("", Decor::Dim),
+                cell_with("", Decor::Dim),
+                cell_with("", Decor::Dim),
+                cell_with("(never executed)", Decor::Dim),
             ]);
             for missed in miss_fns.iter().take(want_fn) {
                 rows.push(vec![
-                    rel.clone(),
-                    "Func".to_string(),
-                    format!("L{}", missed.line),
-                    String::new(),
-                    String::new(),
-                    String::new(),
-                    String::new(),
-                    missed.name.clone(),
+                    cell_with(rel.clone(), Decor::ShortenPath { rel: rel.clone() }),
+                    cell("Func"),
+                    cell(format!("L{}", missed.line)),
+                    cell(""),
+                    cell(""),
+                    cell(""),
+                    cell(""),
+                    cell(missed.name.clone()),
                 ]);
             }
         }
@@ -134,25 +169,25 @@ pub(super) fn render_per_file_composite_table(
         let want_br = want_br.min(misses.len());
         if want_br > 0 {
             rows.push(vec![
-                rel.clone(),
-                "Branches".to_string(),
-                String::new(),
-                String::new(),
-                String::new(),
-                String::new(),
-                String::new(),
-                "(paths with 0 hits)".to_string(),
+                cell_with(rel.clone(), Decor::DimShortenPath { rel: rel.clone() }),
+                cell_with("Branches", Decor::Dim),
+                cell_with("", Decor::Dim),
+                cell_with("", Decor::Dim),
+                cell_with("", Decor::Dim),
+                cell_with("", Decor::Dim),
+                cell_with("", Decor::Dim),
+                cell_with("(paths with 0 hits)", Decor::Dim),
             ]);
             for missed in misses.iter().take(want_br) {
                 rows.push(vec![
-                    rel.clone(),
-                    "Branch".to_string(),
-                    format!("L{}", missed.line),
-                    String::new(),
-                    String::new(),
-                    String::new(),
-                    String::new(),
-                    format!(
+                    cell_with(rel.clone(), Decor::ShortenPath { rel: rel.clone() }),
+                    cell("Branch"),
+                    cell(format!("L{}", missed.line)),
+                    cell(""),
+                    cell(""),
+                    cell(""),
+                    cell(""),
+                    cell(format!(
                         "#{} missed [{}]",
                         missed.id,
                         missed
@@ -161,7 +196,7 @@ pub(super) fn render_per_file_composite_table(
                             .map(|p| p.to_string())
                             .collect::<Vec<_>>()
                             .join(", ")
-                    ),
+                    )),
                 ]);
             }
         }
@@ -177,82 +212,25 @@ pub(super) fn render_per_file_composite_table(
             while rows.len() < target {
                 match iter.next() {
                     Some(ln) => rows.push(vec![
-                        rel.clone(),
-                        "Line".to_string(),
-                        format!("L{ln}"),
-                        String::new(),
-                        String::new(),
-                        String::new(),
-                        String::new(),
-                        "uncovered".to_string(),
+                        cell_with(rel.clone(), Decor::ShortenPath { rel: rel.clone() }),
+                        cell("Line"),
+                        cell(format!("L{ln}")),
+                        cell(""),
+                        cell(""),
+                        cell(""),
+                        cell(""),
+                        cell("uncovered"),
                     ]),
                     None => {
-                        rows.push((0..8).map(|_| String::new()).collect());
+                        rows.push((0..8).map(|_| cell("")).collect());
                     }
                 }
             }
         }
     }
 
-    let mut table = Table::new();
-    table.load_preset(BOX_TABLE_PRESET);
-    table.set_content_arrangement(ContentArrangement::Disabled);
-    table.set_truncation_indicator("");
-    table.set_width(total_width as u16);
-
-    let header_cells = columns
-        .iter()
-        .map(|(label, _min, _max, _align)| Cell::new(*label))
-        .collect::<Vec<_>>();
-    table.set_header(Row::from(header_cells));
-
-    for (index, (_label, _min, _max, alignment)) in columns.iter().enumerate() {
-        if let Some(column) = table.column_mut(index) {
-            column.set_padding((0, 0));
-            column.set_cell_alignment(*alignment);
-            let width = widths
-                .get(index)
-                .copied()
-                .unwrap_or(1)
-                .min(u16::MAX as usize) as u16;
-            column.set_constraint(ColumnConstraint::Absolute(Width::Fixed(width)));
-        }
-    }
-
-    for raw_row in rows {
-        let adjusted_cells = raw_row
-            .into_iter()
-            .enumerate()
-            .map(|(index, raw_value)| {
-                let width = widths.get(index).copied().unwrap_or(1);
-                truncate_to_width(&raw_value, width)
-            })
-            .map(Cell::new)
-            .collect::<Vec<_>>();
-        let mut row = Row::from(adjusted_cells);
-        row.max_height(1);
-        table.add_row(row);
-    }
-
-    table
-        .to_string()
+    super::table::render_table(total_width, &columns, &rows)
         .lines()
         .map(|line| line.to_string())
         .collect::<Vec<_>>()
 }
-
-fn bar_text(pct: f64, width: usize) -> String {
-    let filled = ((pct / 100.0) * (width as f64)).round() as usize;
-    let filled = filled.min(width);
-    format!("{}{}", "#".repeat(filled), "-".repeat(width - filled))
-}
-
-fn truncate_to_width(text: &str, width: usize) -> String {
-    let actual_width = width.max(1);
-    if text.chars().count() <= actual_width {
-        return text.to_string();
-    }
-    text.chars().take(actual_width).collect::<String>()
-}
-
-const BOX_TABLE_PRESET: &str = "││──┼─┼┼│    ┬┴┌┐└┘";
