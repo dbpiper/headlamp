@@ -37,7 +37,7 @@ test('presentEvent a small', () => {
     );
     write_jest_config(&repo, "**/tests/**/*.test.js");
 
-    let (code_ts, out_ts, code_rs, out_rs) = run_parity_fixture_with_args_tty(
+    let (_spec, code_ts, out_ts, code_rs, out_rs) = run_parity_fixture_with_args_tty(
         &repo,
         &binaries.ts_cli,
         &binaries.rust_bin,

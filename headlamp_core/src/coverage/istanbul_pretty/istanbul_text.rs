@@ -105,7 +105,10 @@ pub(super) fn render_istanbul_text_report(files: &[FullFileCoverage], max_cols: 
     }
 
     out.push(dash.to_string());
-    out.join("\n")
+    out.into_iter()
+        .filter(|line| !line.is_empty())
+        .collect::<Vec<_>>()
+        .join("\n")
 }
 
 pub(super) fn render_istanbul_text_summary(files: &[FullFileCoverage]) -> String {
@@ -158,10 +161,16 @@ pub(super) fn render_istanbul_text_summary(files: &[FullFileCoverage]) -> String
 fn format_summary_line(label: &str, counts: Counts) -> String {
     let pct = fmt_pct(counts.pct());
     let label_pad = 13usize.saturating_sub(label.chars().count());
-    let label_colored = tint_pct(counts.pct(), label);
-    let pct_colored = tint_pct(counts.pct(), &format!("{pct}%"));
+    let pct_for_label = if counts.total == 0 {
+        100.0
+    } else {
+        counts.pct()
+    };
+    let pct_for_counts = if counts.total == 0 { 0.0 } else { counts.pct() };
+    let label_colored = tint_pct(pct_for_label, label);
+    let pct_colored = tint_pct(pct_for_label, &format!("{pct}%"));
     let counts_colored = tint_pct(
-        counts.pct(),
+        pct_for_counts,
         &format!("( {}/{} )", counts.covered, counts.total),
     );
     format!(
@@ -171,22 +180,32 @@ fn format_summary_line(label: &str, counts: Counts) -> String {
 }
 
 fn render_uncovered_line_numbers(line_hits: &BTreeMap<u32, u32>) -> String {
-    let mut lines = line_hits
+    let mut uncovered_lines = line_hits
         .iter()
         .filter_map(|(ln, hit)| (*hit == 0).then_some(*ln))
         .collect::<Vec<_>>();
-    lines.sort();
-    if lines.is_empty() {
+    uncovered_lines.sort();
+    if uncovered_lines.is_empty() {
         return String::new();
+    }
+
+    let is_all_uncovered = line_hits.values().all(|hit| *hit == 0);
+    if is_all_uncovered {
+        let start = uncovered_lines.first().copied().unwrap_or(0);
+        let end = uncovered_lines.last().copied().unwrap_or(start);
+        if start == end {
+            return start.to_string();
+        }
+        return format!("{start}-{end}");
     }
     let mut parts: Vec<String> = vec![];
     let mut i = 0usize;
-    while i < lines.len() {
-        let start = lines[i];
+    while i < uncovered_lines.len() {
+        let start = uncovered_lines[i];
         let mut end = start;
-        while i + 1 < lines.len() && lines[i + 1] == end + 1 {
+        while i + 1 < uncovered_lines.len() && uncovered_lines[i + 1] == end + 1 {
             i += 1;
-            end = lines[i];
+            end = uncovered_lines[i];
         }
         if start == end {
             parts.push(format!("{start}"));

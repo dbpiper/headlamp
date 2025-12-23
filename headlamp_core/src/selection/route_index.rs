@@ -245,6 +245,12 @@ fn build_index_from_files(repo_root: &Path, files: &[PathBuf]) -> RouteIndex {
         .values()
         .filter(|info| !info.app_containers.is_empty())
         .map(|info| (info.abs_path_posix.clone(), "/".to_string(), true))
+        .chain(
+            infos_by_source
+                .values()
+                .filter(|info| info.exports_router)
+                .map(|info| (info.abs_path_posix.clone(), "/".to_string(), false)),
+        )
         .collect();
 
     while let Some((file_path, base_path, is_app)) = queue.pop() {

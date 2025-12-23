@@ -293,6 +293,10 @@ pub fn run_jest(repo_root: &Path, args: &ParsedArgs) -> Result<i32, RunError> {
         let mut cmd_args = base_cmd_args.clone();
         cmd_args.extend(["--config".to_string(), cfg_token.clone()]);
         cmd_args.extend(args.runner_args.iter().cloned());
+        ensure_watchman_disabled_by_default(&mut cmd_args);
+        if args.sequential {
+            cmd_args.push("--runInBand".to_string());
+        }
         if args.collect_coverage {
             cmd_args.push(format!(
                 "--coverageDirectory={}",
@@ -398,7 +402,7 @@ pub fn run_jest(repo_root: &Path, args: &ParsedArgs) -> Result<i32, RunError> {
         );
         let pretty = render_vitest_from_jest_json(&merged, &ctx, args.only_failures);
         let combined = raw_output_all.join("\n");
-        let maybe_merged = looks_sparse(&pretty).then(|| {
+        let maybe_merged = (!args.only_failures && looks_sparse(&pretty)).then(|| {
             let raw_also = headlamp_core::format::raw_jest::format_jest_output_vitest(
                 &combined,
                 &ctx,
@@ -436,10 +440,6 @@ pub fn run_jest(repo_root: &Path, args: &ParsedArgs) -> Result<i32, RunError> {
         }
     }
 
-    if args.coverage_abort_on_failure && exit_code != 0 {
-        return Ok(exit_code);
-    }
-
     if args.collect_coverage {
         let jest_cov_dir = repo_root.join("coverage").join("jest");
         let json_tree = read_istanbul_coverage_tree(&jest_cov_dir);
@@ -472,27 +472,37 @@ pub fn run_jest(repo_root: &Path, args: &ParsedArgs) -> Result<i32, RunError> {
             editor_cmd: args.editor_cmd.clone(),
         };
 
-        if let Some(pretty) =
-            format_istanbul_pretty(repo_root, &jest_cov_dir, &print_opts, &selection_paths_abs)
-        {
-            println!("{pretty}");
-        } else if let Some(resolved) = resolved {
-            let filtered = filter_report(
-                resolved,
+        if args.coverage_ui != headlamp_core::config::CoverageUi::Jest {
+            if let Some(pretty) = format_istanbul_pretty(
                 repo_root,
+                &jest_cov_dir,
+                &print_opts,
+                &selection_paths_abs,
                 &args.include_globs,
                 &args.exclude_globs,
-            );
-            println!("{}", format_summary(&filtered));
-            println!("{}", format_compact(&filtered, &print_opts, repo_root));
-            if let Some(detail) = args.coverage_detail {
-                if detail != headlamp_core::args::CoverageDetail::Auto {
-                    let hs = format_hotspots(&filtered, &print_opts, repo_root);
-                    if !hs.trim().is_empty() {
-                        println!("{hs}");
+                args.coverage_detail,
+            ) {
+                println!("{pretty}");
+            } else if let Some(resolved) = resolved {
+                let filtered = filter_report(
+                    resolved,
+                    repo_root,
+                    &args.include_globs,
+                    &args.exclude_globs,
+                );
+                println!("{}", format_summary(&filtered));
+                println!("{}", format_compact(&filtered, &print_opts, repo_root));
+                if let Some(detail) = args.coverage_detail {
+                    if detail != headlamp_core::args::CoverageDetail::Auto {
+                        let hs = format_hotspots(&filtered, &print_opts, repo_root);
+                        if !hs.trim().is_empty() {
+                            println!("{hs}");
+                        }
                     }
                 }
             }
+        } else {
+            // With --coverage-ui=jest, match TS behavior by not rendering Headlamp's coverage report.
         }
         if exit_code != 0 {
             print_coverage_threshold_failure_summary(&coverage_failure_lines);
@@ -519,10 +529,10 @@ fn augment_with_http_tests(
     route_tests.sort();
 
     let mut combined: IndexSet<String> = IndexSet::new();
-    related_tests_abs.into_iter().for_each(|t| {
+    route_tests.into_iter().for_each(|t| {
         combined.insert(t);
     });
-    route_tests.into_iter().for_each(|t| {
+    related_tests_abs.into_iter().for_each(|t| {
         combined.insert(t);
     });
     combined.into_iter().collect::<Vec<_>>()
@@ -664,6 +674,7 @@ fn reorder_test_results_original_style(
             .copied()
             .unwrap_or(i64::MAX)
     };
+
     let file_failed = |file: &headlamp_core::format::bridge::BridgeFileResult| -> bool {
         file.status == "failed"
             || file
@@ -672,20 +683,14 @@ fn reorder_test_results_original_style(
                 .any(|assertion| assertion.status == "failed")
     };
 
-    let has_any_failure = test_results.iter().any(file_failed);
-    if !has_any_failure && rank_by_abs_path.is_empty() {
+    if rank_by_abs_path.is_empty() && test_results.iter().all(|file| !file_failed(file)) {
         test_results.reverse();
         return;
     }
 
     test_results.sort_by(|left, right| {
-        let left_failed = file_failed(left);
-        let right_failed = file_failed(right);
-        right_failed
-            .cmp(&left_failed)
-            .then_with(|| {
-                rank_or_inf(&left.test_file_path).cmp(&rank_or_inf(&right.test_file_path))
-            })
+        rank_or_inf(&left.test_file_path)
+            .cmp(&rank_or_inf(&right.test_file_path))
             .then_with(|| {
                 normalize_abs_posix(&left.test_file_path)
                     .cmp(&normalize_abs_posix(&right.test_file_path))
@@ -903,6 +908,15 @@ fn collect_coverage_from_args(
     out
 }
 
+fn ensure_watchman_disabled_by_default(jest_args: &mut Vec<String>) {
+    let has_watchman_flag = jest_args
+        .iter()
+        .any(|tok| tok == "--no-watchman" || tok == "--watchman" || tok.starts_with("--watchman="));
+    if !has_watchman_flag {
+        jest_args.push("--no-watchman".to_string());
+    }
+}
+
 fn write_asset(path: &Path, bytes: &[u8]) -> Result<PathBuf, RunError> {
     if let Some(parent) = path.parent() {
         std::fs::create_dir_all(parent).map_err(RunError::Io)?;
@@ -934,8 +948,13 @@ fn extract_coverage_failure_lines(stdout_bytes: &[u8], stderr_bytes: &[u8]) -> V
     );
     let mut out: IndexSet<String> = IndexSet::new();
     for line in text.lines() {
-        let trimmed = line.trim();
+        let line_without_ansi = headlamp_core::format::stacks::strip_ansi_simple(line);
+        let trimmed = line_without_ansi.trim();
         if trimmed.is_empty() {
+            continue;
+        }
+        if let Some(formatted) = parse_global_coverage_threshold_failure_line(trimmed) {
+            out.insert(formatted);
             continue;
         }
         if trimmed.to_ascii_lowercase().contains("does not meet")
@@ -947,19 +966,46 @@ fn extract_coverage_failure_lines(stdout_bytes: &[u8], stderr_bytes: &[u8]) -> V
     out.into_iter().collect()
 }
 
+fn parse_global_coverage_threshold_failure_line(line: &str) -> Option<String> {
+    let prefix = r#"Jest: "global" coverage threshold for "#;
+    let rest = line.strip_prefix(prefix)?;
+    let (metric_raw, rest) = rest.split_once(" (")?;
+    let (expected_raw, rest) = rest.split_once("%)")?;
+    let actual_raw = rest.split_once("not met:")?.1.trim();
+    let actual_raw = actual_raw.strip_suffix('%')?.trim();
+    let expected: f64 = expected_raw.trim().parse().ok()?;
+    let actual: f64 = actual_raw.parse().ok()?;
+    let short = (expected - actual).max(0.0);
+    let metric = titlecase_first(metric_raw.trim());
+    Some(format!(
+        "{metric}: {actual:.2}% < {expected:.0}% (short {short:.2}%)"
+    ))
+}
+
+fn titlecase_first(text: &str) -> String {
+    let mut chars = text.chars();
+    let first = chars.next().unwrap_or_default();
+    format!("{}{}", first.to_ascii_uppercase(), chars.as_str())
+}
+
 fn print_coverage_threshold_failure_summary(lines: &IndexSet<String>) {
+    println!();
+    println!("Coverage thresholds not met");
     if lines.is_empty() {
-        println!(" - Coverage failed. See tables above and jest coverageThreshold.");
+        println!(" See tables above and jest coverageThreshold.");
         return;
     }
-    lines.iter().for_each(|line| {
-        println!(" - {line}");
-    });
+    lines.iter().for_each(|line| println!(" {line}"));
 }
 
 fn looks_sparse(pretty: &str) -> bool {
     let simple = headlamp_core::format::stacks::strip_ansi_simple(pretty);
     let lines = simple.lines().collect::<Vec<_>>();
+
+    if missing_fail_header_code_frame(&lines) && looks_like_assertion_failure(&simple) {
+        return true;
+    }
+
     let has_error_blank = lines
         .windows(2)
         .any(|w| w[0].trim() == "Error:" && w[1].trim().is_empty());
@@ -969,6 +1015,28 @@ fn looks_sparse(pretty: &str) -> bool {
     !["Message:", "Thrown:", "Events:", "Console errors:"]
         .into_iter()
         .any(|needle| simple.contains(needle))
+}
+
+fn looks_like_assertion_failure(text: &str) -> bool {
+    ["Expected", "Received", "Assertion:"]
+        .into_iter()
+        .any(|needle| text.contains(needle))
+}
+
+fn missing_fail_header_code_frame(lines: &[&str]) -> bool {
+    let fail_i = lines.iter().position(|line| {
+        let t = line.trim_start();
+        t.starts_with("FAIL  ") || t.starts_with(" FAIL  ")
+    });
+    let Some(fail_i) = fail_i else {
+        return false;
+    };
+    let mut window = lines.iter().skip(fail_i.saturating_add(1)).take(8);
+    let has_code_frame = window.any(|line| {
+        let t = line.trim_start();
+        t.contains('|') && t.chars().any(|c| c.is_ascii_digit())
+    });
+    !has_code_frame
 }
 
 fn merge_sparse_bridge_and_raw(bridge_pretty: &str, raw_pretty: &str) -> String {

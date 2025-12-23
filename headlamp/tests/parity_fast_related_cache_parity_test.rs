@@ -56,7 +56,7 @@ fn parity_fast_related_cache_hit_fixture() {
     let cache_root = mk_temp_dir("fast-related-cache-dir");
     let _guard = EnvVarGuard::set("HEADLAMP_CACHE_DIR", &cache_root.to_string_lossy());
 
-    let (code_ts_1, out_ts_1, code_rs_1, out_rs_1) = run_parity_fixture_with_args(
+    let (_spec_1, code_ts_1, out_ts_1, code_rs_1, out_rs_1) = run_parity_fixture_with_args(
         &repo,
         &binaries.ts_cli,
         &binaries.rust_bin,
@@ -68,7 +68,7 @@ fn parity_fast_related_cache_hit_fixture() {
     let n_rs_1 = normalize(out_rs_1, &repo);
     assert_eq!(n_ts_1, n_rs_1);
 
-    let (code_ts_2, out_ts_2, code_rs_2, out_rs_2) = run_parity_fixture_with_args(
+    let (_spec_2, code_ts_2, out_ts_2, code_rs_2, out_rs_2) = run_parity_fixture_with_args(
         &repo,
         &binaries.ts_cli,
         &binaries.rust_bin,

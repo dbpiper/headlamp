@@ -105,18 +105,22 @@ pub fn color_stack_line(line: &str, project_hint: &Regex) -> String {
     STACK_LOC_RE.replace(&plain, repl).to_string()
 }
 
-fn stack_location(line: &str) -> Option<(String, i64)> {
+pub fn parse_stack_location(line: &str) -> Option<(String, i64, i64)> {
     let simple = stacks::strip_ansi_simple(line);
-    static RE: Lazy<Regex> = Lazy::new(|| Regex::new(r"\(?([^\s()]+):(\d+):\d+\)?$").unwrap());
+    static RE: Lazy<Regex> = Lazy::new(|| Regex::new(r"\(?([^\s()]+):(\d+):(\d+)\)?$").unwrap());
     let caps = RE.captures(&simple)?;
     let file = std::path::Path::new(caps.get(1)?.as_str())
         .to_slash_lossy()
         .to_string();
     let ln = caps.get(2)?.as_str().parse::<i64>().ok()?;
-    Some((file, ln))
+    let col = caps.get(3)?.as_str().parse::<i64>().ok()?;
+    Some((file, ln, col))
 }
 
-pub fn deepest_project_loc(stack_lines: &[String], project_hint: &Regex) -> Option<(String, i64)> {
+pub fn deepest_project_loc(
+    stack_lines: &[String],
+    project_hint: &Regex,
+) -> Option<(String, i64, i64)> {
     let noisy = Regex::new(r"node_modules|vitest|jest").unwrap();
     for i in (0..stack_lines.len()).rev() {
         let simple = stacks::strip_ansi_simple(&stack_lines[i]);
@@ -124,7 +128,7 @@ pub fn deepest_project_loc(stack_lines: &[String], project_hint: &Regex) -> Opti
             && project_hint.is_match(&simple)
             && !noisy.is_match(&simple)
         {
-            return stack_location(&stack_lines[i]);
+            return parse_stack_location(&stack_lines[i]);
         }
     }
     None

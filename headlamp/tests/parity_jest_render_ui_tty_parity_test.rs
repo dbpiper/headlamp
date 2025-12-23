@@ -1,7 +1,7 @@
 mod parity_support;
 
 use parity_support::{
-    assert_parity_normalized_outputs, mk_repo, normalize_tty_ui, parity_binaries,
+    assert_parity_tty_ui_with_diagnostics, mk_repo, parity_binaries,
     run_parity_fixture_with_args_tty, write_file, write_jest_config,
 };
 
@@ -21,7 +21,7 @@ fn parity_jest_render_ui_tty_pass_120_cols_fixture() {
     );
     write_jest_config(&repo, "**/tests/**/*.test.js");
 
-    let (code_ts, out_ts, code_rs, out_rs) = run_parity_fixture_with_args_tty(
+    let (spec, code_ts, out_ts, code_rs, out_rs) = run_parity_fixture_with_args_tty(
         &repo,
         &binaries.ts_cli,
         &binaries.rust_bin,
@@ -29,10 +29,7 @@ fn parity_jest_render_ui_tty_pass_120_cols_fixture() {
         &[],
         &[],
     );
-
-    let n_ts = normalize_tty_ui(out_ts, &repo);
-    let n_rs = normalize_tty_ui(out_rs, &repo);
-    assert_parity_normalized_outputs(&repo, "pass_120", code_ts, &n_ts, code_rs, &n_rs);
+    assert_parity_tty_ui_with_diagnostics(&repo, "pass_120", code_ts, out_ts, code_rs, out_rs, Some(&spec));
 }
 
 #[test]
@@ -51,7 +48,7 @@ fn parity_jest_render_ui_tty_fail_120_cols_fixture() {
     );
     write_jest_config(&repo, "**/tests/**/*.test.js");
 
-    let (code_ts, out_ts, code_rs, out_rs) = run_parity_fixture_with_args_tty(
+    let (spec, code_ts, out_ts, code_rs, out_rs) = run_parity_fixture_with_args_tty(
         &repo,
         &binaries.ts_cli,
         &binaries.rust_bin,
@@ -59,10 +56,7 @@ fn parity_jest_render_ui_tty_fail_120_cols_fixture() {
         &[],
         &[],
     );
-
-    let n_ts = normalize_tty_ui(out_ts, &repo);
-    let n_rs = normalize_tty_ui(out_rs, &repo);
-    assert_parity_normalized_outputs(&repo, "fail_120", code_ts, &n_ts, code_rs, &n_rs);
+    assert_parity_tty_ui_with_diagnostics(&repo, "fail_120", code_ts, out_ts, code_rs, out_rs, Some(&spec));
 }
 
 #[test]
@@ -77,7 +71,7 @@ fn parity_jest_render_ui_tty_pass_60_cols_fixture() {
     );
     write_jest_config(&repo, "**/tests/**/*.test.js");
 
-    let (code_ts, out_ts, code_rs, out_rs) = run_parity_fixture_with_args_tty(
+    let (spec, code_ts, out_ts, code_rs, out_rs) = run_parity_fixture_with_args_tty(
         &repo,
         &binaries.ts_cli,
         &binaries.rust_bin,
@@ -85,10 +79,7 @@ fn parity_jest_render_ui_tty_pass_60_cols_fixture() {
         &[],
         &[],
     );
-
-    let n_ts = normalize_tty_ui(out_ts, &repo);
-    let n_rs = normalize_tty_ui(out_rs, &repo);
-    assert_parity_normalized_outputs(&repo, "pass_60", code_ts, &n_ts, code_rs, &n_rs);
+    assert_parity_tty_ui_with_diagnostics(&repo, "pass_60", code_ts, out_ts, code_rs, out_rs, Some(&spec));
 }
 
 

@@ -18,7 +18,7 @@ fn parity_cache_dir_env_is_honored_fixture() {
         "module.exports = { testMatch: ['**/tests/**/*.test.js'] };\n",
     );
 
-    let (code_ts, _out_ts, code_rs, _out_rs) =
+    let (_spec, code_ts, _out_ts, code_rs, _out_rs) =
         run_parity_fixture_with_args(&repo, &binaries.ts_cli, &binaries.rust_bin, &[], &[]);
     assert_eq!(code_ts, code_rs);
 

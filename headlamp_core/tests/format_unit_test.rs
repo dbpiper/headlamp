@@ -45,6 +45,7 @@ fn build_code_frame_from_source_location() {
     let loc = Loc {
         file: file.to_string_lossy().to_string(),
         line: 3,
+        column: None,
     };
     let out = build_code_frame_section(&[], true, Some(&loc));
     let joined = out.join("\n");

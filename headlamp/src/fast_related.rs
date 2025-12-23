@@ -156,7 +156,10 @@ pub fn cached_related(
         read_json_map(&file).unwrap_or_default();
     if let Some(hit) = bag.get(&key) {
         if hit.iter().all(|p| Path::new(p).exists()) {
-            return Ok(hit.clone());
+            let mut cached = hit.clone();
+            sort_paths_for_ts_parity(&mut cached);
+            cached.dedup();
+            return Ok(cached);
         }
     }
 
@@ -168,7 +171,7 @@ pub fn cached_related(
         }
         uniq.into_iter().collect::<Vec<_>>()
     };
-    computed_dedup.sort();
+    sort_paths_for_ts_parity(&mut computed_dedup);
     computed_dedup.dedup();
     bag.insert(key, computed_dedup.clone());
     if std::fs::create_dir_all(&dir).is_ok() {
@@ -181,6 +184,12 @@ pub fn cached_related(
         }
     }
     Ok(computed_dedup)
+}
+
+fn sort_paths_for_ts_parity(paths: &mut Vec<String>) {
+    // headlamp-original preserves a stable, reverse-lexicographic ordering for related test paths,
+    // which directly affects Jest execution order and therefore stdout ordering.
+    paths.sort_by(|left, right| right.cmp(left));
 }
 
 pub fn default_cache_root() -> PathBuf {

@@ -173,10 +173,12 @@ class BridgeReporter {
       .filter((a) => a && a.timedOut);
     const totalSuites =
       typeof agg.numTotalTestSuites === "number" ? agg.numTotalTestSuites : 0;
-    const failedSuites = this.buf.testResults.filter(
-      (r) => r.status === "failed" || r.testExecError || r.failureMessage
-    ).length;
-    const passedSuites = Math.max(0, totalSuites - failedSuites);
+    const failedSuites =
+      typeof agg.numFailedTestSuites === "number" ? agg.numFailedTestSuites : 0;
+    const passedSuites =
+      typeof agg.numPassedTestSuites === "number"
+        ? agg.numPassedTestSuites
+        : Math.max(0, totalSuites - failedSuites);
     const failedAssertions =
       typeof agg.numFailedTests === "number" ? agg.numFailedTests : 0;
     const suiteOnlyFailures = Math.max(0, failedSuites - failedAssertions);
@@ -211,5 +213,3 @@ class BridgeReporter {
 }
 
 module.exports = BridgeReporter;
-
-

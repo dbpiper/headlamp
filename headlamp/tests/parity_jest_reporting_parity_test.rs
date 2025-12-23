@@ -18,7 +18,7 @@ fn parity_jest_only_failures_and_show_logs_fixture() {
     );
     write_jest_config(&repo, "**/tests/**/*.test.js");
 
-    let (code_ts, out_ts, code_rs, out_rs) = run_parity_fixture_with_args(
+    let (_spec, code_ts, out_ts, code_rs, out_rs) = run_parity_fixture_with_args(
         &repo,
         &binaries.ts_cli,
         &binaries.rust_bin,
@@ -91,7 +91,7 @@ test('GET /hello', async () => {\n\
     );
     write_jest_config(&repo, "**/tests/**/*.test.js");
 
-    let (code_ts, out_ts, code_rs, out_rs) =
+    let (_spec, code_ts, out_ts, code_rs, out_rs) =
         run_parity_fixture_with_args(&repo, &binaries.ts_cli, &binaries.rust_bin, &[], &[]);
     assert_eq!(code_ts, code_rs);
 
@@ -139,7 +139,7 @@ test('GET /abort', async () => {\n\
     );
     write_jest_config(&repo, "**/tests/**/*.test.js");
 
-    let (code_ts, out_ts, code_rs, out_rs) =
+    let (_spec, code_ts, out_ts, code_rs, out_rs) =
         run_parity_fixture_with_args(&repo, &binaries.ts_cli, &binaries.rust_bin, &[], &[]);
     assert_eq!(code_ts, code_rs);
 
@@ -169,7 +169,7 @@ fn parity_jest_unhandled_rejection_live_fixture() {
     );
     write_jest_config(&repo, "**/tests/**/*.test.js");
 
-    let (code_ts, out_ts, code_rs, out_rs) =
+    let (_spec, code_ts, out_ts, code_rs, out_rs) =
         run_parity_fixture_with_args(&repo, &binaries.ts_cli, &binaries.rust_bin, &[], &[]);
     assert_eq!(code_ts, code_rs);
 
@@ -194,7 +194,7 @@ fn parity_jest_no_live_progress_frames_when_not_tty_fixture() {
     );
     write_jest_config(&repo, "**/tests/**/*.test.js");
 
-    let (code_ts, out_ts, code_rs, out_rs) =
+    let (_spec, code_ts, out_ts, code_rs, out_rs) =
         run_parity_fixture_with_args(&repo, &binaries.ts_cli, &binaries.rust_bin, &[], &[]);
     assert_eq!(code_ts, code_rs);
     assert!(

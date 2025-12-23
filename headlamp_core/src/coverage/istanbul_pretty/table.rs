@@ -23,12 +23,14 @@ pub enum Decor {
 pub struct Cell {
     pub raw: String,
     pub decor: Decor,
+    pub href: Option<String>,
 }
 
 pub fn cell(raw: impl Into<String>) -> Cell {
     Cell {
         raw: raw.into(),
         decor: Decor::None,
+        href: None,
     }
 }
 
@@ -36,6 +38,7 @@ pub fn cell_with(raw: impl Into<String>, decor: Decor) -> Cell {
     Cell {
         raw: raw.into(),
         decor,
+        href: None,
     }
 }
 
@@ -77,7 +80,8 @@ pub fn render_table(total_columns: usize, columns: &[ColumnSpec], rows: &[Vec<Ce
                     let width = widths.get(i).copied().unwrap_or(1);
                     let col = columns.get(i).unwrap();
                     let padded = pad_visible(&cell.raw, width, col.align_right);
-                    apply_decor(&cell.decor, &padded)
+                    let decorated = apply_decor(&cell.decor, &padded);
+                    apply_href(cell.href.as_deref(), &decorated)
                 })
                 .collect::<Vec<_>>();
             format!("│{}│", cells.join("│"))
@@ -124,4 +128,8 @@ fn apply_decor(decor: &Decor, padded: &str) -> String {
             pad_visible(&display, padded.len(), false)
         }
     }
+}
+
+fn apply_href(href: Option<&str>, decorated: &str) -> String {
+    href.map_or_else(|| decorated.to_string(), |url| ansi::osc8(decorated, url))
 }

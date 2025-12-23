@@ -755,6 +755,11 @@ fn infer_glob_from_selection_path(path_text: &str) -> String {
     let p = Path::new(path_text);
     let is_dir = p.extension().is_none();
     if !is_dir {
+        // Keep behavior stable for ad-hoc file selections, but infer "src/**/*" when the user
+        // selects a production source file under src/ (common Windows-style input case).
+        if path_text == "src" || path_text.starts_with("src/") {
+            return "src/**/*".to_string();
+        }
         return path_text.to_string();
     }
     let base = path_text.trim_end_matches('/').to_string();

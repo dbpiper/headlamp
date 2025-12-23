@@ -22,7 +22,7 @@ fn parity_jest_coverage_basic_fixture() {
         "module.exports = { testMatch: ['**/tests/**/*.test.js'], collectCoverage: true, collectCoverageFrom: ['src/**/*.js'] };\n",
     );
 
-    let (code_ts, out_ts, code_rs, out_rs) = run_parity_fixture_with_args(
+    let (_spec, code_ts, out_ts, code_rs, out_rs) = run_parity_fixture_with_args(
         &repo,
         &binaries.ts_cli,
         &binaries.rust_bin,
@@ -56,7 +56,7 @@ fn parity_jest_coverage_max_hotspots_fixture() {
         "module.exports = { testMatch: ['**/tests/**/*.test.js'], collectCoverage: true, collectCoverageFrom: ['src/**/*.js'] };\n",
     );
 
-    let (code_ts, out_ts, code_rs, out_rs) = run_parity_fixture_with_args(
+    let (_spec, code_ts, out_ts, code_rs, out_rs) = run_parity_fixture_with_args(
         &repo,
         &binaries.ts_cli,
         &binaries.rust_bin,
@@ -89,7 +89,7 @@ fn parity_jest_coverage_selection_order_fixture() {
         "module.exports = { testMatch: ['**/tests/**/*.test.js'], collectCoverage: true, collectCoverageFrom: ['src/**/*.js'] };\n",
     );
 
-    let (code_ts, out_ts, code_rs, out_rs) = run_parity_fixture_with_args(
+    let (_spec, code_ts, out_ts, code_rs, out_rs) = run_parity_fixture_with_args(
         &repo,
         &binaries.ts_cli,
         &binaries.rust_bin,
@@ -129,7 +129,7 @@ fn parity_jest_coverage_multi_project_isolated_directories_fixture() {
         "module.exports = { testMatch: ['**/tests/b.test.js'], collectCoverage: true, collectCoverageFrom: ['src/**/*.js'] };\n",
     );
 
-    let (code_ts, out_ts, code_rs, out_rs) = run_parity_fixture_with_args(
+    let (_spec, code_ts, out_ts, code_rs, out_rs) = run_parity_fixture_with_args(
         &repo,
         &binaries.ts_cli,
         &binaries.rust_bin,
@@ -166,7 +166,7 @@ fn parity_jest_coverage_threshold_failure_lines_fixture() {
 };\n",
     );
 
-    let (code_ts, out_ts, code_rs, out_rs) = run_parity_fixture_with_args(
+    let (_spec, code_ts, out_ts, code_rs, out_rs) = run_parity_fixture_with_args(
         &repo,
         &binaries.ts_cli,
         &binaries.rust_bin,

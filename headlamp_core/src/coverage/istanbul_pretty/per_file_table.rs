@@ -9,6 +9,7 @@ pub(super) fn render_per_file_composite_table(
     max_rows: usize,
     total_width: usize,
     max_hotspots: Option<u32>,
+    tty: bool,
 ) -> Vec<String> {
     let rows_avail = 40usize;
     let table_budget = 14usize.max(max_rows.min(rows_avail + 8));
@@ -201,7 +202,11 @@ pub(super) fn render_per_file_composite_table(
             }
         }
 
-        let target = row_budget;
+        let target = if tty {
+            row_budget.saturating_add(1)
+        } else {
+            row_budget
+        };
         if rows.len() < target {
             let line_queue = blocks
                 .iter()

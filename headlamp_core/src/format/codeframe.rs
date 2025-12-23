@@ -7,6 +7,7 @@ use once_cell::sync::Lazy;
 use path_slash::PathExt;
 use regex::Regex;
 
+use crate::format::colors;
 use crate::format::{ansi, stacks};
 
 static SOURCE_CACHE: Lazy<DashMap<String, Arc<Vec<String>>>> = Lazy::new(DashMap::new);
@@ -24,7 +25,11 @@ fn read_source(file: &str) -> Arc<Vec<String>> {
         return Arc::clone(hit.value());
     }
     let read = fs::read_to_string(&normalized)
-        .map(|txt| txt.lines().map(|l| l.to_string()).collect::<Vec<_>>())
+        .map(|txt| {
+            txt.split('\n')
+                .map(|line| line.trim_end_matches('\r').to_string())
+                .collect::<Vec<_>>()
+        })
         .unwrap_or_default();
     let read = Arc::new(read);
     SOURCE_CACHE.insert(normalized, Arc::clone(&read));
@@ -51,7 +56,7 @@ fn render_inline_code_frame(lines: &[String], start: usize) -> Vec<String> {
             let code = ansi::yellow(caps.get(2).map(|m| m.as_str()).unwrap_or(""));
             out.push(format!(
                 "    {} {} {} {}",
-                ansi::red(">"),
+                colors::failure(">"),
                 num,
                 ansi::dim("|"),
                 code
@@ -67,7 +72,12 @@ fn render_inline_code_frame(lines: &[String], start: usize) -> Vec<String> {
     out
 }
 
-fn render_source_code_frame(file: &str, line: i64, context: i64) -> Vec<String> {
+fn render_source_code_frame(
+    file: &str,
+    line: i64,
+    _column: Option<i64>,
+    context: i64,
+) -> Vec<String> {
     let lines = read_source(file);
     if lines.is_empty() || line <= 0 {
         return vec![];
@@ -90,7 +100,7 @@ fn render_source_code_frame(file: &str, line: i64, context: i64) -> Vec<String> 
         if current == idx {
             out.push(format!(
                 "    {} {} {} {}",
-                ansi::red(">"),
+                colors::failure(">"),
                 num,
                 ansi::dim("|"),
                 code
@@ -99,7 +109,7 @@ fn render_source_code_frame(file: &str, line: i64, context: i64) -> Vec<String> 
             out.push(format!("      {} {} {}", num, ansi::dim("|"), code));
         }
     }
-    out.push(format!("    {}", ansi::red("^")));
+    out.push(format!("    {}", colors::failure("^")));
     out
 }
 
@@ -107,6 +117,7 @@ fn render_source_code_frame(file: &str, line: i64, context: i64) -> Vec<String> 
 pub struct Loc {
     pub file: String,
     pub line: i64,
+    pub column: Option<i64>,
 }
 
 pub fn build_code_frame_section(
@@ -123,7 +134,7 @@ pub fn build_code_frame_section(
     if show_stacks {
         if let Some(loc) = synth_loc {
             if Path::new(&loc.file).exists() {
-                out.extend(render_source_code_frame(&loc.file, loc.line, 3));
+                out.extend(render_source_code_frame(&loc.file, loc.line, loc.column, 3));
                 out.push(String::new());
             }
         }

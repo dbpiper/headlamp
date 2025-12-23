@@ -2,6 +2,8 @@ use std::path::Path;
 
 use path_slash::PathExt;
 
+use super::parity_meta::{NormalizationMeta, NormalizationStageStats, NormalizerKind};
+
 struct RenderNormalizerState {
     out: Vec<String>,
     skip_until_sep: bool,
@@ -13,25 +15,84 @@ struct RenderNormalizerState {
 }
 
 pub fn normalize(text: String, root: &Path) -> String {
+    normalize_with_meta(text, root).0
+}
+
+pub fn normalize_tty_ui(text: String, root: &Path) -> String {
+    normalize_tty_ui_with_meta(text, root).0
+}
+
+pub fn normalize_with_meta(text: String, root: &Path) -> (String, NormalizationMeta) {
     let normalized_paths = normalize_paths(text, root);
     let filtered = drop_nondeterministic_lines(&normalized_paths);
     let stripped = strip_terminal_sequences(&filtered);
     let final_block = pick_final_render_block(&stripped);
-    normalize_render_block(&final_block)
+    let normalized = normalize_render_block(&final_block);
+
+    let (last_failed_tests_line, last_test_files_line, last_box_table_top_line) =
+        compute_render_indices(&stripped);
+    let stages = vec![
+        stage_stats("normalized_paths", &normalized_paths),
+        stage_stats("filtered", &filtered),
+        stage_stats("stripped", &stripped),
+        stage_stats("final_block", &final_block),
+        stage_stats("normalized", &normalized),
+    ];
+    let meta = NormalizationMeta {
+        normalizer: NormalizerKind::NonTty,
+        used_fallback: false,
+        last_failed_tests_line,
+        last_test_files_line,
+        last_box_table_top_line,
+        stages,
+    };
+    (normalized, meta)
 }
 
-pub fn normalize_tty_ui(text: String, root: &Path) -> String {
+pub fn normalize_tty_ui_with_meta(text: String, root: &Path) -> (String, NormalizationMeta) {
     let normalized_paths = normalize_paths(text, root);
     let no_osc8 = strip_osc8_sequences(&normalized_paths);
-    // Prevent CR progress frames from concatenating with subsequent real lines.
-    let normalized_cr = no_osc8.replace("\u{1b}[2K\r", "\n").replace('\r', "\n");
+    // Normalize CRLF and CR progress frames without introducing extra blank lines.
+    // - Convert CRLF to LF (avoid turning '\r\n' into '\n\n')
+    // - Convert "erase+CR" progress frames to a newline boundary
+    // - Convert any remaining CR to LF
+    let normalized_cr = no_osc8
+        .replace("\u{1b}[2K\r", "\n")
+        .replace("\r\n", "\n")
+        .replace('\r', "\n");
     let filtered = normalized_cr
         .lines()
         .filter(|raw_line| should_keep_line_tty(raw_line))
         .map(|line| line.to_string())
         .collect::<Vec<_>>()
         .join("\n");
-    pick_final_render_block_tty(&filtered)
+    let filtered = drop_box_table_interior_blank_lines(&filtered);
+
+    let final_block = pick_final_render_block_tty(&filtered);
+    let (normalized, used_fallback) = if final_block.trim().is_empty() {
+        (pick_final_render_block_tty(&normalized_cr), true)
+    } else {
+        (final_block, false)
+    };
+
+    let (last_failed_tests_line, last_test_files_line, last_box_table_top_line) =
+        compute_render_indices(&normalized);
+    let stages = vec![
+        stage_stats("normalized_paths", &normalized_paths),
+        stage_stats("no_osc8", &no_osc8),
+        stage_stats("normalized_cr", &normalized_cr),
+        stage_stats("filtered", &filtered),
+        stage_stats("normalized", &normalized),
+    ];
+    let meta = NormalizationMeta {
+        normalizer: NormalizerKind::TtyUi,
+        used_fallback,
+        last_failed_tests_line,
+        last_test_files_line,
+        last_box_table_top_line,
+        stages,
+    };
+    (normalized, meta)
 }
 
 fn normalize_paths(mut text: String, root: &Path) -> String {
@@ -51,6 +112,10 @@ fn should_keep_line_tty(raw_line: &str) -> bool {
 
 fn pick_final_render_block_tty(text: &str) -> String {
     let lines = text.lines().collect::<Vec<_>>();
+    if lines.is_empty() {
+        return String::new();
+    }
+    let last_box_table_top = find_last_box_table_top(&lines);
     let last_test_files = lines
         .iter()
         .rposition(|line| {
@@ -64,6 +129,10 @@ fn pick_final_render_block_tty(text: &str) -> String {
 
     let start = last_failed_tests
         .and_then(|failed_i| find_render_block_start_tty(&lines, failed_i))
+        .or_else(|| {
+            last_box_table_top.and_then(|box_top| find_render_block_start_tty(&lines, box_top))
+        })
+        .or(last_box_table_top)
         .unwrap_or(0);
     lines[start..].join("\n")
 }
@@ -74,6 +143,140 @@ fn find_render_block_start_tty(lines: &[&str], failed_i: usize) -> Option<usize>
         let ln = stripped.trim_start();
         ln.starts_with("RUN  ") || ln.starts_with("FAIL ") || ln.starts_with("PASS ")
     })
+}
+
+fn find_last_box_table_top(lines: &[&str]) -> Option<usize> {
+    (0..lines.len()).rev().find(|&i| {
+        let stripped = headlamp_core::format::stacks::strip_ansi_simple(lines[i]);
+        if !stripped.trim_start().starts_with('┌') {
+            return false;
+        }
+        let maybe_header_idx = lines
+            .iter()
+            .enumerate()
+            .skip(i.saturating_add(1))
+            .take(8)
+            .find_map(|(j, l)| {
+                let s = headlamp_core::format::stacks::strip_ansi_simple(l);
+                if s.trim().is_empty() {
+                    return None;
+                }
+                Some((j, s))
+            });
+        let Some((_header_j, header_line)) = maybe_header_idx else {
+            return false;
+        };
+        header_line.contains("│File") || header_line.contains("File ")
+    })
+}
+
+fn stage_stats(stage: &'static str, text: &str) -> NormalizationStageStats {
+    let stripped = headlamp_core::format::stacks::strip_ansi_simple(text);
+    let mut markers = std::collections::BTreeMap::new();
+    markers.insert(
+        "RUN",
+        stripped
+            .lines()
+            .filter(|l| l.trim_start().starts_with("RUN  "))
+            .count(),
+    );
+    markers.insert(
+        "PASS",
+        stripped
+            .lines()
+            .filter(|l| l.trim_start().starts_with("PASS "))
+            .count(),
+    );
+    markers.insert(
+        "FAIL",
+        stripped
+            .lines()
+            .filter(|l| l.trim_start().starts_with("FAIL "))
+            .count(),
+    );
+    markers.insert(
+        "TestFiles",
+        stripped
+            .lines()
+            .filter(|l| l.trim_start().starts_with("Test Files "))
+            .count(),
+    );
+    markers.insert(
+        "FailedTests",
+        stripped
+            .lines()
+            .filter(|l| l.contains("Failed Tests"))
+            .count(),
+    );
+    markers.insert(
+        "BoxTableTop",
+        stripped
+            .lines()
+            .filter(|l| l.trim_start().starts_with('┌'))
+            .count(),
+    );
+    NormalizationStageStats {
+        stage,
+        bytes: text.as_bytes().len(),
+        lines: text.lines().count(),
+        markers,
+    }
+}
+
+fn compute_render_indices(text: &str) -> (Option<usize>, Option<usize>, Option<usize>) {
+    let stripped = headlamp_core::format::stacks::strip_ansi_simple(text);
+    let stripped_lines = stripped.lines().collect::<Vec<_>>();
+    let last_failed_tests_line = stripped_lines
+        .iter()
+        .rposition(|l| l.contains("Failed Tests"))
+        .map(|i| i + 1);
+    let last_test_files_line = stripped_lines
+        .iter()
+        .rposition(|l| l.trim_start().starts_with("Test Files "))
+        .map(|i| i + 1);
+    let last_box_table_top_line = stripped_lines
+        .iter()
+        .rposition(|l| l.trim_start().starts_with('┌'))
+        .map(|i| i + 1);
+    (
+        last_failed_tests_line,
+        last_test_files_line,
+        last_box_table_top_line,
+    )
+}
+
+fn drop_box_table_interior_blank_lines(text: &str) -> String {
+    let lines = text.lines().collect::<Vec<_>>();
+    let is_table_line = |s: &str| {
+        let stripped = headlamp_core::format::stacks::strip_ansi_simple(s);
+        let trimmed = stripped.trim_start();
+        trimmed.starts_with('│')
+            || trimmed.starts_with('┌')
+            || trimmed.starts_with('└')
+            || trimmed.starts_with('┼')
+            || trimmed.chars().all(|c| c == '─')
+    };
+    let mut kept: Vec<&str> = vec![];
+    for (index, line) in lines.iter().enumerate() {
+        let stripped = headlamp_core::format::stacks::strip_ansi_simple(line);
+        if !stripped.trim().is_empty() {
+            kept.push(line);
+            continue;
+        }
+        let prev_is_table = (0..index).rev().find_map(|i| {
+            let s = headlamp_core::format::stacks::strip_ansi_simple(lines[i]);
+            (!s.trim().is_empty()).then_some(is_table_line(lines[i]))
+        });
+        let next_is_table = (index + 1..lines.len()).find_map(|i| {
+            let s = headlamp_core::format::stacks::strip_ansi_simple(lines[i]);
+            (!s.trim().is_empty()).then_some(is_table_line(lines[i]))
+        });
+        if prev_is_table == Some(true) && next_is_table == Some(true) {
+            continue;
+        }
+        kept.push(line);
+    }
+    kept.join("\n")
 }
 
 fn drop_nondeterministic_lines(text: &str) -> String {

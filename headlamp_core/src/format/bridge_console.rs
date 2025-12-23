@@ -88,6 +88,8 @@ struct AssertionFailureBridgeEvent {
 struct ConsoleBridgeEvent {
     level: Option<String>,
     message: Option<String>,
+    test_path: Option<String>,
+    current_test_name: Option<String>,
 }
 
 #[derive(Debug, Clone, Deserialize)]
@@ -240,8 +242,8 @@ pub fn parse_bridge_console(
                     type_name: evt.level,
                     message: evt.message,
                     origin: None,
-                    test_path: None,
-                    current_test_name: None,
+                    test_path: evt.test_path,
+                    current_test_name: evt.current_test_name,
                 });
             }
             "consoleBatch" => {

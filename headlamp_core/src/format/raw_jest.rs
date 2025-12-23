@@ -178,7 +178,11 @@ fn render_chunks(chunks: &[Chunk], ctx: &Ctx, only_failures: bool) -> (String, b
 
                 let collapsed = stacks::collapse_stacks(lines);
                 let deepest = fns::deepest_project_loc(&collapsed, &ctx.project_hint)
-                    .map(|(file, line)| codeframe::Loc { file, line });
+                    .map(|(file, line, _)| codeframe::Loc {
+                        file,
+                        line,
+                        column: None,
+                    });
 
                 out.push(String::new());
                 out.extend(codeframe::build_code_frame_section(
