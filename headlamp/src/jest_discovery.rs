@@ -32,7 +32,7 @@ pub fn args_for_discovery(jest_args: &[String]) -> Vec<String> {
             i += 1;
             continue;
         }
-        if WATCH_FLAGS.iter().any(|w| *w == tok) {
+        if WATCH_FLAGS.contains(&tok) {
             i += 1;
             continue;
         }
@@ -41,7 +41,7 @@ pub fn args_for_discovery(jest_args: &[String]) -> Vec<String> {
             .iter()
             .any(|p| tok == *p || tok.starts_with(&format!("{p}=")));
         if is_coverage {
-            let consumes_next = coverage_prefixes.iter().any(|p| tok == *p)
+            let consumes_next = coverage_prefixes.contains(&tok)
                 && i + 1 < jest_args.len()
                 && !String::from(jest_args[i + 1].as_str()).starts_with('-');
             i += if consumes_next { 2 } else { 1 };
@@ -137,11 +137,11 @@ pub fn discover_jest_list_tests_cached_with_timeout(
 
     let mut bag: std::collections::BTreeMap<String, Vec<String>> =
         read_json_map(&file).unwrap_or_default();
-    if let Some(hit) = bag.get(&key) {
-        if !hit.is_empty() {
-            return Ok(hit.clone());
-        }
-    }
+    if let Some(hit) = bag.get(&key)
+        && !hit.is_empty()
+    {
+        return Ok(hit.clone());
+    };
 
     let listed = match discover_jest_list_tests_with_timeout(cwd, jest_bin, jest_args, timeout) {
         Ok(v) => v,
@@ -346,21 +346,23 @@ fn git_test_status_hash(cwd: &Path) -> String {
         return String::new();
     };
 
-    let is_test_like = |p: &str| {
-        let lower = p.to_ascii_lowercase().replace('\\', "/");
-        lower.contains("/tests/")
-            || lower.contains("/test/")
-            || lower.contains("/__tests__/")
-            || lower.contains("/__test__/")
-            || lower.contains(".test.")
-            || lower.contains(".spec.")
-    };
+    let mut classifier = headlamp_core::project::classify::ProjectClassifier::for_path(
+        headlamp_core::selection::dependency_language::DependencyLanguageId::TsJs,
+        cwd,
+    );
 
     let mut test_paths: Vec<String> = statuses
         .iter()
         .filter(|entry| entry.status() != git2::Status::CURRENT)
         .filter_map(|entry| entry.path().map(|p| p.to_string()))
-        .filter(|p| is_test_like(p))
+        .filter(|rel| {
+            let abs = cwd.join(rel);
+            matches!(
+                classifier.classify_abs_path(&abs),
+                headlamp_core::project::classify::FileKind::Test
+                    | headlamp_core::project::classify::FileKind::Mixed
+            )
+        })
         .collect();
     test_paths.sort();
     test_paths.dedup();

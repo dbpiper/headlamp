@@ -1,11 +1,15 @@
 mod parity_support;
 use parity_support::parity_binaries;
 
-mod parity_repo_e2e_support;
-use parity_repo_e2e_support::{
-    assert_parity, create_test_file, discover_repo, git_add, git_reset,
-    run_npm_test_dev_parity_normalized, setup_repo,
+#[path = "parity_repo_e2e_support/common.rs"]
+mod parity_repo_e2e_support_common;
+use parity_repo_e2e_support_common::{
+    assert_parity, create_test_file, discover_repo, run_npm_test_dev_parity_normalized, setup_repo,
 };
+
+#[path = "parity_repo_e2e_support/git.rs"]
+mod parity_repo_e2e_support_git;
+use parity_repo_e2e_support_git::{git_add, git_reset};
 
 #[test]
 fn parity_repo_test_dev_works_for_untracked_changed_mode() {
@@ -45,7 +49,7 @@ fn parity_repo_test_dev_works_for_staged_changed_mode() {
     ) else {
         return;
     };
-    let rel = t.path().strip_prefix(&e2e.repo).ok();
+    let rel = t.path.strip_prefix(&e2e.repo).ok();
     let Some(rel) = rel else { return };
     let _ = git_add(&e2e.repo, rel);
 

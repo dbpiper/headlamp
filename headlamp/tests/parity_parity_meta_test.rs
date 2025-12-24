@@ -14,8 +14,8 @@ fn parity_meta_flags_normalized_empty_but_raw_nonempty() {
     let repo = mk_repo("parity-meta-empty-normalized", &binaries.node_modules);
     let raw = "Starting Jest\nDiscovering → x\n".to_string();
     let (normalized, meta) = normalize_tty_ui_with_meta(raw.clone(), Path::new(&repo));
-    assert!(raw.as_bytes().len() > 0);
-    assert!(normalized.as_bytes().len() > 0);
+    assert!(!raw.is_empty());
+    assert!(!normalized.is_empty());
     assert!(meta.used_fallback);
     assert!(normalized.contains("Starting Jest"));
 }

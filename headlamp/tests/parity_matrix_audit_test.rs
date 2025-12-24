@@ -112,5 +112,4 @@ fn parity_matrix_audit() {
     }
 
     // This is an audit-only test: it must not fail builds, but it must surface gaps.
-    assert!(true);
 }

@@ -13,11 +13,12 @@ pub fn build_parity_report_with_meta(compare: &ParityCompareInput) -> String {
     let pivot_index = cluster::pick_pivot_index(compare);
     let pivot_label = compare.sides[pivot_index].label.display_label();
 
-    let mut sections: Vec<String> = vec![];
-    sections.push(build_artifact_summary(compare));
-    sections.push(build_cluster_summary(compare, pivot_index, &clusters));
-    sections.push(build_token_ast_summary(compare, pivot_index, &clusters));
-    sections.push(build_block_order_summary(compare, pivot_index, &clusters));
+    let mut sections: Vec<String> = vec![
+        build_artifact_summary(compare),
+        build_cluster_summary(compare, pivot_index, &clusters),
+        build_token_ast_summary(compare, pivot_index, &clusters),
+        build_block_order_summary(compare, pivot_index, &clusters),
+    ];
 
     let pivot_norm = &compare.sides[pivot_index].normalized;
 
@@ -318,9 +319,9 @@ pub fn build_parity_report(out_ts: &str, out_rs: &str) -> String {
                 raw: out_ts.to_string(),
                 normalized: out_ts.to_string(),
                 meta: super::parity_meta::ParitySideMeta {
-                    raw_bytes: out_ts.as_bytes().len(),
+                    raw_bytes: out_ts.len(),
                     raw_lines: out_ts.lines().count(),
-                    normalized_bytes: out_ts.as_bytes().len(),
+                    normalized_bytes: out_ts.len(),
                     normalized_lines: out_ts.lines().count(),
                     normalization: super::parity_meta::NormalizationMeta {
                         normalizer: super::parity_meta::NormalizerKind::NonTty,
@@ -341,9 +342,9 @@ pub fn build_parity_report(out_ts: &str, out_rs: &str) -> String {
                 raw: out_rs.to_string(),
                 normalized: out_rs.to_string(),
                 meta: super::parity_meta::ParitySideMeta {
-                    raw_bytes: out_rs.as_bytes().len(),
+                    raw_bytes: out_rs.len(),
                     raw_lines: out_rs.lines().count(),
-                    normalized_bytes: out_rs.as_bytes().len(),
+                    normalized_bytes: out_rs.len(),
                     normalized_lines: out_rs.lines().count(),
                     normalization: super::parity_meta::NormalizationMeta {
                         normalizer: super::parity_meta::NormalizerKind::NonTty,
@@ -786,7 +787,7 @@ fn split_box_cells(line: &str) -> Vec<&str> {
 
 fn find_first_line_mismatch(ts: &[String], rs: &[String]) -> Option<usize> {
     let shared = min(ts.len(), rs.len());
-    (0..shared).find(|&i| ts.get(i) != rs.get(i)).or_else(|| {
+    (0..shared).find(|&i| ts.get(i) != rs.get(i)).or({
         if ts.len() != rs.len() {
             Some(shared)
         } else {

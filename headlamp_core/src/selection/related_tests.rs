@@ -1,11 +1,14 @@
 use std::collections::{BTreeMap, BTreeSet, VecDeque};
-use std::path::{Path, PathBuf};
+use std::path::Path;
 
 use globset::GlobSet;
 use path_slash::PathExt;
 
-use crate::selection::import_extract::extract_import_specs;
-use crate::selection::import_resolve::resolve_import_with_root;
+use crate::project::classify::{FileKind, ProjectClassifier};
+use crate::selection::dependency_language::{
+    DependencyLanguageId, DependencyResolveCache, extract_import_specs, looks_like_source_file,
+    resolve_import_with_root_cached,
+};
 use crate::selection::relevance::augment_rank_with_priority_paths;
 use crate::selection::route_index::{discover_tests_for_http_paths, get_route_index};
 
@@ -17,6 +20,7 @@ pub struct RelatedTestSelection {
 
 pub fn select_related_tests(
     repo_root: &Path,
+    language: DependencyLanguageId,
     production_selection_paths_abs: &[String],
     exclude_globs: &[String],
 ) -> RelatedTestSelection {
@@ -32,9 +36,10 @@ pub fn select_related_tests(
         };
     }
 
-    let graph = build_reverse_import_graph(repo_root, exclude_globs);
+    let graph = build_reverse_import_graph(repo_root, language, exclude_globs);
+    let mut classifier = ProjectClassifier::for_path(language, repo_root);
     let (selected_tests, rank_by_abs_path) =
-        bfs_related_tests(&graph, repo_root, &normalized_seeds);
+        bfs_related_tests(&graph, &normalized_seeds, &mut classifier);
 
     let route_augmented_tests =
         discover_route_augmented_tests(repo_root, &normalized_seeds, exclude_globs);
@@ -43,7 +48,7 @@ pub fn select_related_tests(
 
     let mut merged_tests = selected_tests
         .into_iter()
-        .chain(route_augmented_tests.into_iter())
+        .chain(route_augmented_tests)
         .collect::<BTreeSet<_>>()
         .into_iter()
         .collect::<Vec<_>>();
@@ -80,8 +85,8 @@ fn discover_route_augmented_tests(
 
 fn bfs_related_tests(
     importers_by_target_abs: &BTreeMap<String, Vec<String>>,
-    repo_root: &Path,
     seed_paths_abs: &[String],
+    classifier: &mut ProjectClassifier,
 ) -> (Vec<String>, BTreeMap<String, i64>) {
     let mut queue: VecDeque<(String, i64)> = seed_paths_abs
         .iter()
@@ -111,7 +116,12 @@ fn bfs_related_tests(
 
     let rank_by_test_abs: BTreeMap<String, i64> = dist_by_abs
         .iter()
-        .filter(|(abs, _)| looks_like_test_file(repo_root, abs))
+        .filter(|(abs, _)| {
+            matches!(
+                classifier.classify_abs_path(Path::new(abs)),
+                FileKind::Test | FileKind::Mixed
+            )
+        })
         .map(|(abs, dist)| (abs.clone(), *dist))
         .collect::<BTreeMap<_, _>>();
 
@@ -125,10 +135,12 @@ fn bfs_related_tests(
 
 fn build_reverse_import_graph(
     repo_root: &Path,
+    language: DependencyLanguageId,
     exclude_globs: &[String],
 ) -> BTreeMap<String, Vec<String>> {
     let exclude = build_exclude_globset(exclude_globs);
     let mut importers_by_target_abs: BTreeMap<String, Vec<String>> = BTreeMap::new();
+    let mut dependency_cache = DependencyResolveCache::default();
 
     let walker = ignore::WalkBuilder::new(repo_root)
         .hidden(false)
@@ -142,11 +154,11 @@ fn build_reverse_import_graph(
             Ok(d) => d,
             Err(_) => continue,
         };
-        if !dent.file_type().map_or(false, |t| t.is_file()) {
+        if !dent.file_type().is_some_and(|t| t.is_file()) {
             continue;
         }
         let path = dent.path();
-        if !looks_like_source_file(path) {
+        if !looks_like_source_file(language, path) {
             continue;
         }
         let rel = path
@@ -162,9 +174,15 @@ fn build_reverse_import_graph(
         }
 
         let from_abs = normalize_abs_posix(&path.to_slash_lossy());
-        let specs = extract_import_specs(path);
+        let specs = extract_import_specs(language, path);
         for spec in specs {
-            let Some(resolved) = resolve_import_with_root(path, &spec, repo_root) else {
+            let Some(resolved) = resolve_import_with_root_cached(
+                language,
+                path,
+                &spec,
+                repo_root,
+                &mut dependency_cache,
+            ) else {
                 continue;
             };
             let target_abs = normalize_abs_posix(&resolved.to_slash_lossy());
@@ -202,32 +220,6 @@ fn build_exclude_globset(exclude_globs: &[String]) -> GlobSet {
     builder
         .build()
         .unwrap_or_else(|_| globset::GlobSet::empty())
-}
-
-fn looks_like_source_file(path: &Path) -> bool {
-    path.extension()
-        .and_then(|e| e.to_str())
-        .map(|ext| {
-            matches!(
-                ext,
-                "ts" | "tsx" | "js" | "jsx" | "mjs" | "cjs" | "mts" | "cts"
-            )
-        })
-        .unwrap_or(false)
-}
-
-fn looks_like_test_file(repo_root: &Path, abs_path_text: &str) -> bool {
-    let abs = PathBuf::from(abs_path_text);
-    let rel = abs
-        .strip_prefix(repo_root)
-        .ok()
-        .and_then(|p| p.to_str())
-        .unwrap_or(abs_path_text);
-    let rel = rel.replace('\\', "/");
-    rel.contains("/tests/")
-        || rel.contains(".test.")
-        || rel.contains(".spec.")
-        || rel.starts_with("tests/")
 }
 
 fn normalize_abs_posix(input: &str) -> String {

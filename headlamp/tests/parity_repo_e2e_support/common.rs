@@ -14,29 +14,12 @@ pub struct E2eRepo {
 }
 
 pub struct TempFile {
-    path: PathBuf,
+    pub path: PathBuf,
     existed: bool,
     original: Vec<u8>,
 }
 
 impl TempFile {
-    pub fn path(&self) -> &Path {
-        &self.path
-    }
-
-    pub fn append_line(path: PathBuf, line: &str) -> Option<Self> {
-        let existed = path.exists();
-        let original = std::fs::read(&path).ok()?;
-        let mut next = original.clone();
-        next.extend_from_slice(line.as_bytes());
-        std::fs::write(&path, next).ok()?;
-        Some(Self {
-            path,
-            existed,
-            original,
-        })
-    }
-
     pub fn create_or_replace(path: PathBuf, contents: &[u8]) -> Option<Self> {
         let existed = path.exists();
         let original = existed
@@ -111,118 +94,13 @@ pub fn setup_repo(repo: PathBuf, binaries: &ParityBinaries) -> Option<E2eRepo> {
 
 pub fn create_test_file(repo: &Path, name: &str, contents: &str) -> Option<TempFile> {
     let tests_dir = repo.join("tests");
-    let dir = tests_dir
-        .exists()
-        .then_some(tests_dir)
-        .unwrap_or_else(|| repo.join("__tests__"));
+    let dir = if tests_dir.exists() {
+        tests_dir
+    } else {
+        repo.join("__tests__")
+    };
     let path = dir.join(name);
     TempFile::create_or_replace(path, contents.as_bytes())
-}
-
-pub fn touch_real_source_file_used_by_tests(repo: &Path) -> Option<TempFile> {
-    let test_roots = [repo.join("tests"), repo.join("__tests__")];
-    let test_files = test_roots
-        .iter()
-        .filter(|p| p.exists())
-        .flat_map(|root| {
-            std::fs::read_dir(root)
-                .ok()
-                .into_iter()
-                .flatten()
-                .filter_map(|e| e.ok())
-                .map(|e| e.path())
-                .filter(|p| {
-                    p.is_file()
-                        && p.file_name()
-                            .and_then(|n| n.to_str())
-                            .is_some_and(|n| n.contains(".test.") || n.contains(".spec."))
-                })
-                .collect::<Vec<_>>()
-        })
-        .collect::<Vec<_>>();
-
-    for test_file in test_files {
-        let Ok(text) = std::fs::read_to_string(&test_file) else {
-            continue;
-        };
-
-        for import_path in extract_relative_imports(&text) {
-            let Some(resolved) = resolve_relative_module(repo, test_file.parent()?, &import_path)
-            else {
-                continue;
-            };
-            if resolved.exists() && resolved.is_file() {
-                return TempFile::append_line(resolved, "\n");
-            }
-        }
-    }
-    None
-}
-
-fn extract_relative_imports(text: &str) -> Vec<String> {
-    // intentionally simple: cover the common cases used in tests
-    let mut out = vec![];
-    for needle in ["from '", "from \"", "require('", "require(\""] {
-        let mut rest = text;
-        while let Some(i) = rest.find(needle) {
-            rest = &rest[i + needle.len()..];
-            let end_quote = if needle.ends_with('\"') { '\"' } else { '\'' };
-            let Some(j) = rest.find(end_quote) else { break };
-            let candidate = &rest[..j];
-            if candidate.starts_with("./") || candidate.starts_with("../") {
-                out.push(candidate.to_string());
-            }
-            rest = &rest[j + 1..];
-        }
-    }
-    out
-}
-
-fn resolve_relative_module(repo: &Path, base_dir: &Path, import_path: &str) -> Option<PathBuf> {
-    let joined = base_dir.join(import_path);
-    let joined = joined
-        .strip_prefix(repo)
-        .ok()
-        .map(|p| repo.join(p))
-        .unwrap_or(joined);
-
-    if joined.extension().is_some() {
-        return Some(joined);
-    }
-
-    for ext in ["js", "jsx", "ts", "tsx", "cjs", "mjs"] {
-        let candidate = joined.with_extension(ext);
-        if candidate.exists() {
-            return Some(candidate);
-        }
-    }
-    for ext in ["js", "jsx", "ts", "tsx", "cjs", "mjs"] {
-        let candidate = joined.join(format!("index.{ext}"));
-        if candidate.exists() {
-            return Some(candidate);
-        }
-    }
-    Some(joined)
-}
-
-pub fn git_add(repo: &Path, rel: &Path) -> bool {
-    Command::new("git")
-        .current_dir(repo)
-        .args(["add", "-A"])
-        .arg(rel)
-        .status()
-        .ok()
-        .is_some_and(|s| s.success())
-}
-
-pub fn git_reset(repo: &Path, rel: &Path) -> bool {
-    Command::new("git")
-        .current_dir(repo)
-        .args(["reset", "-q", "HEAD", "--"])
-        .arg(rel)
-        .status()
-        .ok()
-        .is_some_and(|s| s.success())
 }
 
 pub fn run_npm_test_dev_parity_normalized(
@@ -271,8 +149,8 @@ fn run_npm_test_dev(
     cmd.current_dir(repo).args(["run", "test:dev"]);
     if !extra_args.is_empty() {
         cmd.arg("--");
-        extra_args.iter().for_each(|a| {
-            cmd.arg(a);
+        extra_args.iter().for_each(|arg| {
+            cmd.arg(arg);
         });
     }
 
@@ -335,11 +213,11 @@ fn read_json(path: &Path) -> Option<Value> {
 }
 
 fn script_contains_test_dev_headlamp(script: &str) -> bool {
-    let s = script.to_ascii_lowercase();
-    s.contains("headlamp")
-        && s.contains("--changed=branch")
-        && s.contains("--coverage")
-        && s.contains("--onlyfailures")
+    let normalized = script.to_ascii_lowercase();
+    normalized.contains("headlamp")
+        && normalized.contains("--changed=branch")
+        && normalized.contains("--coverage")
+        && normalized.contains("--onlyfailures")
 }
 
 fn looks_like_target_repo(repo: &Path) -> bool {
@@ -387,7 +265,7 @@ fn find_first_matching_repo(search_root: &Path) -> Option<PathBuf> {
             .filter(|dir| !is_noise_dir(dir))
             .for_each(|dir| {
                 if looks_like_target_repo(&dir) {
-                    candidates.push(dir.clone());
+                    candidates.push(dir);
                 } else {
                     next.push(dir);
                 }

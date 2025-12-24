@@ -95,10 +95,7 @@ pub fn find_related_tests_fast(
         Ok(v) => v,
         Err(RunError::TimedOut { .. }) => return Ok(vec![]),
         Err(e) => {
-            return Err(RunError::Io(std::io::Error::new(
-                std::io::ErrorKind::Other,
-                e.to_string(),
-            )));
+            return Err(RunError::Io(std::io::Error::other(e.to_string())));
         }
     };
     if !out.status.success() && out.status.code() != Some(1) {
@@ -106,19 +103,6 @@ pub fn find_related_tests_fast(
     }
 
     let text = String::from_utf8_lossy(&out.stdout);
-    let looks_like_test = |p: &str| {
-        let lower = p.to_ascii_lowercase();
-        lower.ends_with(".test.ts")
-            || lower.ends_with(".test.tsx")
-            || lower.ends_with(".test.js")
-            || lower.ends_with(".test.jsx")
-            || lower.ends_with(".spec.ts")
-            || lower.ends_with(".spec.tsx")
-            || lower.ends_with(".spec.js")
-            || lower.ends_with(".spec.jsx")
-            || lower.contains("/tests/")
-            || lower.contains("/test/")
-    };
 
     let mut uniq: IndexSet<String> = IndexSet::new();
     for line in text.lines().map(str::trim).filter(|l| !l.is_empty()) {
@@ -129,7 +113,7 @@ pub fn find_related_tests_fast(
             repo_root.join(p)
         };
         let abs_posix = abs.to_slash_lossy().to_string();
-        if looks_like_test(&abs_posix) && abs.exists() {
+        if abs.exists() {
             uniq.insert(abs_posix);
         }
     }
@@ -154,14 +138,14 @@ pub fn cached_related(
 
     let mut bag: std::collections::BTreeMap<String, Vec<String>> =
         read_json_map(&file).unwrap_or_default();
-    if let Some(hit) = bag.get(&key) {
-        if hit.iter().all(|p| Path::new(p).exists()) {
-            let mut cached = hit.clone();
-            sort_paths_for_ts_parity(&mut cached);
-            cached.dedup();
-            return Ok(cached);
-        }
-    }
+    if let Some(hit) = bag.get(&key)
+        && hit.iter().all(|p| Path::new(p).exists())
+    {
+        let mut cached = hit.clone();
+        sort_paths_for_ts_parity(&mut cached);
+        cached.dedup();
+        return Ok(cached);
+    };
 
     let computed = compute()?;
     let mut computed_dedup = {
@@ -186,7 +170,7 @@ pub fn cached_related(
     Ok(computed_dedup)
 }
 
-fn sort_paths_for_ts_parity(paths: &mut Vec<String>) {
+fn sort_paths_for_ts_parity(paths: &mut [String]) {
     // headlamp-original preserves a stable, reverse-lexicographic ordering for related test paths,
     // which directly affects Jest execution order and therefore stdout ordering.
     paths.sort_by(|left, right| right.cmp(left));
@@ -235,15 +219,15 @@ pub fn build_seed_terms_ts_like(repo_root: &Path, seeds: &[String]) -> Vec<Strin
         let rel = abs
             .strip_prefix(repo_root)
             .ok()
-            .map(|p| to_posix(p))
+            .map(to_posix)
             .unwrap_or_else(|| to_posix(&abs));
         let rel = rel.replace('\\', "/");
         let without_ext = strip_js_ts_ext_ts_like(&rel);
         let base = without_ext
             .split('/')
-            .last()
-            .map(|s| s.to_string())
-            .unwrap_or_else(|| without_ext.clone());
+            .next_back()
+            .unwrap_or(without_ext.as_str())
+            .to_string();
         let segs = without_ext.split('/').collect::<Vec<_>>();
         let tail2 = segs
             .into_iter()

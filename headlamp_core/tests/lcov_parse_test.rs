@@ -38,7 +38,7 @@ end_of_record
         editor_cmd: None,
     };
     let root = std::path::Path::new("/repo");
-    let filtered = filter_report(report, root, &vec!["**/*.ts".to_string()], &vec![]);
+    let filtered = filter_report(report, root, &["**/*.ts".to_string()], &[]);
     let summary = format_summary(&filtered);
     assert!(summary.contains("Lines:"));
     let compact = format_compact(&filtered, &opts, root);

@@ -54,7 +54,7 @@ pub fn read_istanbul_coverage_tree(root: &Path) -> Vec<(PathBuf, CoverageReport)
         .git_exclude(false)
         .build()
         .filter_map(Result::ok)
-        .filter(|dent| dent.file_type().map_or(false, |t| t.is_file()))
+        .filter(|dent| dent.file_type().is_some_and(|t| t.is_file()))
         .filter(|dent| {
             dent.path().file_name().and_then(|x| x.to_str()) == Some("coverage-final.json")
         })

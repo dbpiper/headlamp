@@ -34,8 +34,10 @@ fn parses_coverage_detail_values() {
 
 #[test]
 fn config_tokens_apply_coverage_ui_only_when_coverage_active() {
-    let mut cfg = HeadlampConfig::default();
-    cfg.coverage_ui = Some(CoverageUi::Jest);
+    let cfg = HeadlampConfig {
+        coverage_ui: Some(CoverageUi::Jest),
+        ..Default::default()
+    };
 
     let argv = vec![];
     let cfg_tokens = config_tokens(&cfg, &argv);
@@ -106,13 +108,14 @@ fn windows_style_test_path_is_treated_as_selection() {
 }
 
 #[test]
-fn windows_style_src_path_infers_include_glob() {
+fn windows_style_src_path_is_treated_as_selection() {
     let cfg = HeadlampConfig::default();
     let argv = vec!["src\\foo.ts".to_string()];
     let cfg_tokens = config_tokens(&cfg, &argv);
     let parsed = derive_args(&cfg_tokens, &argv, true);
     assert!(parsed.selection_specified);
-    assert!(parsed.include_globs.iter().any(|g| g == "src/**/*"));
+    assert!(parsed.selection_paths.iter().any(|p| p == "src\\foo.ts"));
+    assert!(!parsed.include_globs.iter().any(|g| g == "src/**/*"));
 }
 
 #[test]
@@ -171,8 +174,10 @@ fn derive_args_boolean_flags_can_consume_false_as_lookahead() {
 
 #[test]
 fn cli_overrides_config_for_boolean_flags() {
-    let mut cfg = HeadlampConfig::default();
-    cfg.sequential = Some(true);
+    let cfg = HeadlampConfig {
+        sequential: Some(true),
+        ..Default::default()
+    };
     let argv = vec!["--sequential=false".to_string()];
     let parsed = derive_args(&config_tokens(&cfg, &argv), &argv, true);
     assert!(!parsed.sequential);

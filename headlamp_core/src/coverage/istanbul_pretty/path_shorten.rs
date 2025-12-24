@@ -83,7 +83,7 @@ fn slice_balanced(input: &str, width: usize, ellipsis: &str) -> String {
         return ellipsis.chars().take(width).collect();
     }
     let keep = width - visible_width(ellipsis);
-    let head = (keep + 1) / 2;
+    let head = keep.div_ceil(2);
     let tail = keep / 2;
     let start = input.chars().take(head).collect::<String>();
     let end = input
@@ -134,7 +134,7 @@ fn token_aware_middle(stem: String, budget: usize) -> String {
         return ellipsis.chars().take(budget).collect();
     }
     let tokens = stem
-        .split_inclusive(|c: char| c == '.' || c == '_' || c == '-')
+        .split_inclusive(|c: char| ['.', '_', '-'].contains(&c))
         .collect::<Vec<_>>();
     let mut left_index = 0usize;
     let mut right_index = tokens.len().saturating_sub(1);

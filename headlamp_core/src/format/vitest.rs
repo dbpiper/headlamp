@@ -34,14 +34,14 @@ fn filter_console_to_failed_tests(
     let matches_failed = |e: &crate::format::console::ConsoleEntry| -> bool {
         e.current_test_name
             .as_deref()
-            .is_some_and(|n| failed_names.iter().any(|f| *f == n))
+            .is_some_and(|n| failed_names.contains(&n))
     };
     if !console_entries.iter().any(matches_failed) {
         return console_entries;
     }
     console_entries
         .into_iter()
-        .filter(|e| matches_failed(e))
+        .filter(matches_failed)
         .collect::<Vec<_>>()
 }
 
@@ -315,9 +315,9 @@ fn render_assertion_block(messages_array: &[String]) -> Vec<String> {
         .filter(|line| {
             let simple = crate::format::stacks::strip_ansi_simple(line);
             let trimmed = simple.trim();
-            !trimmed.is_empty()
-                && !CODE_FRAME_LINE_RE.is_match(trimmed)
-                && !(trimmed.starts_with('|') && trimmed.contains('^'))
+            !(trimmed.is_empty()
+                || CODE_FRAME_LINE_RE.is_match(trimmed)
+                || (trimmed.starts_with('|') && trimmed.contains('^')))
         })
         .for_each(|line| out.push(format!("    {}", ansi::yellow(&format!("    {line}")))));
     if let Some(v) = expected {
@@ -646,8 +646,8 @@ fn vitest_footer_from_files(
 
     let time = agg
         .run_time_ms
-        .map(|ms| format!("{}ms", ms.max(0)))
-        .unwrap_or_else(|| String::new());
+        .map(|ms| format!("{ms}ms"))
+        .unwrap_or_default();
     let thread = ansi::dim("(in thread 0ms, 0.00%)");
 
     [
@@ -703,8 +703,8 @@ fn vitest_footer(agg: &TestRunAggregated, only_failures: bool) -> String {
 
     let time = agg
         .run_time_ms
-        .map(|ms| format!("{}ms", ms.max(0)))
-        .unwrap_or_else(|| String::new());
+        .map(|ms| format!("{ms}ms"))
+        .unwrap_or_default();
     let thread = ansi::dim("(in thread 0ms, 0.00%)");
 
     [

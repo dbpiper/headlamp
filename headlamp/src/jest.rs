@@ -14,6 +14,7 @@ use headlamp_core::coverage::print::{
 };
 use headlamp_core::format::ctx::make_ctx;
 use headlamp_core::format::vitest::render_vitest_from_test_model;
+use headlamp_core::selection::dependency_language::DependencyLanguageId;
 use headlamp_core::selection::related_tests::select_related_tests;
 use headlamp_core::selection::relevance::augment_rank_with_priority_paths;
 use headlamp_core::selection::route_index::{discover_tests_for_http_paths, get_route_index};
@@ -87,9 +88,11 @@ pub fn run_jest(repo_root: &Path, args: &ParsedArgs) -> Result<i32, RunError> {
     let discovery_args = args_for_discovery(&args.runner_args);
 
     let discovered_project_configs = list_all_jest_configs(repo_root);
-    let project_configs = (!discovered_project_configs.is_empty())
-        .then(|| discovered_project_configs)
-        .unwrap_or_else(|| vec![repo_root.to_path_buf()]);
+    let project_configs = if discovered_project_configs.is_empty() {
+        vec![repo_root.to_path_buf()]
+    } else {
+        discovered_project_configs
+    };
 
     let selection_is_tests_only = !selection_paths_abs.is_empty()
         && selection_paths_abs
@@ -115,6 +118,10 @@ pub fn run_jest(repo_root: &Path, args: &ParsedArgs) -> Result<i32, RunError> {
             .collect::<Vec<_>>()
             .join("|")
     });
+
+    let dependency_language = args
+        .dependency_language
+        .unwrap_or(DependencyLanguageId::TsJs);
 
     let related_selection = if selection_is_tests_only {
         headlamp_core::selection::related_tests::RelatedTestSelection {
@@ -144,13 +151,16 @@ pub fn run_jest(repo_root: &Path, args: &ParsedArgs) -> Result<i32, RunError> {
                         );
                         if args.changed.is_some() || args.changed_depth.is_some() {
                             return refine_by_transitive_seed_scan(
-                                repo_root,
-                                &project_configs,
-                                &jest_bin,
-                                &discovery_args,
-                                &production_seeds,
-                                augmented,
-                                max_depth_from_args(args.changed_depth),
+                                RefineByTransitiveSeedScanArgs {
+                                    repo_root,
+                                    dependency_language,
+                                    project_configs: &project_configs,
+                                    jest_bin: &jest_bin,
+                                    discovery_args: &discovery_args,
+                                    production_seeds_abs: &production_seeds,
+                                    candidate_tests_abs: augmented,
+                                    max_depth: max_depth_from_args(args.changed_depth),
+                                },
                             );
                         }
                         headlamp_core::selection::related_tests::RelatedTestSelection {
@@ -160,16 +170,24 @@ pub fn run_jest(repo_root: &Path, args: &ParsedArgs) -> Result<i32, RunError> {
                     } else {
                         if args.changed.is_some() || args.changed_depth.is_some() {
                             return refine_by_transitive_seed_scan(
-                                repo_root,
-                                &project_configs,
-                                &jest_bin,
-                                &discovery_args,
-                                &production_seeds,
-                                vec![],
-                                max_depth_from_args(args.changed_depth),
+                                RefineByTransitiveSeedScanArgs {
+                                    repo_root,
+                                    dependency_language,
+                                    project_configs: &project_configs,
+                                    jest_bin: &jest_bin,
+                                    discovery_args: &discovery_args,
+                                    production_seeds_abs: &production_seeds,
+                                    candidate_tests_abs: vec![],
+                                    max_depth: max_depth_from_args(args.changed_depth),
+                                },
                             );
                         }
-                        select_related_tests(repo_root, &production_seeds, &args.exclude_globs)
+                        select_related_tests(
+                            repo_root,
+                            dependency_language,
+                            &production_seeds,
+                            &args.exclude_globs,
+                        )
                     }
                 })
             })
@@ -209,15 +227,15 @@ pub fn run_jest(repo_root: &Path, args: &ParsedArgs) -> Result<i32, RunError> {
         "--reporters".to_string(),
         "default".to_string(),
     ];
-    let base_cmd_args = (!name_pattern_only_for_discovery)
-        .then(|| {
-            base_cmd_args
-                .iter()
-                .cloned()
-                .chain(std::iter::once("--runTestsByPath".to_string()))
-                .collect::<Vec<_>>()
-        })
-        .unwrap_or(base_cmd_args);
+    let base_cmd_args = if name_pattern_only_for_discovery {
+        base_cmd_args
+    } else {
+        base_cmd_args
+            .iter()
+            .cloned()
+            .chain(std::iter::once("--runTestsByPath".to_string()))
+            .collect::<Vec<_>>()
+    };
 
     let live_progress_enabled =
         should_enable_live_progress(headlamp_core::format::terminal::is_output_terminal());
@@ -326,12 +344,7 @@ pub fn run_jest(repo_root: &Path, args: &ParsedArgs) -> Result<i32, RunError> {
             .stdout_capture()
             .unchecked()
             .run()
-            .map_err(|e| {
-                RunError::Io(std::io::Error::new(
-                    std::io::ErrorKind::Other,
-                    e.to_string(),
-                ))
-            })?;
+            .map_err(|e| RunError::Io(std::io::Error::other(e.to_string())))?;
 
         let exit_code = out.status.code().unwrap_or(1);
 
@@ -492,14 +505,14 @@ pub fn run_jest(repo_root: &Path, args: &ParsedArgs) -> Result<i32, RunError> {
                 );
                 println!("{}", format_summary(&filtered));
                 println!("{}", format_compact(&filtered, &print_opts, repo_root));
-                if let Some(detail) = args.coverage_detail {
-                    if detail != headlamp_core::args::CoverageDetail::Auto {
-                        let hs = format_hotspots(&filtered, &print_opts, repo_root);
-                        if !hs.trim().is_empty() {
-                            println!("{hs}");
-                        }
+                if let Some(detail) = args.coverage_detail
+                    && detail != headlamp_core::args::CoverageDetail::Auto
+                {
+                    let hs = format_hotspots(&filtered, &print_opts, repo_root);
+                    if !hs.trim().is_empty() {
+                        println!("{hs}");
                     }
-                }
+                };
             }
         } else {
             // With --coverage-ui=jest, match TS behavior by not rendering Headlamp's coverage report.
@@ -538,15 +551,31 @@ fn augment_with_http_tests(
     combined.into_iter().collect::<Vec<_>>()
 }
 
-fn refine_by_transitive_seed_scan(
-    repo_root: &Path,
-    project_configs: &[PathBuf],
-    jest_bin: &Path,
-    discovery_args: &[String],
-    production_seeds_abs: &[String],
+#[derive(Debug)]
+struct RefineByTransitiveSeedScanArgs<'a> {
+    repo_root: &'a Path,
+    dependency_language: DependencyLanguageId,
+    project_configs: &'a [PathBuf],
+    jest_bin: &'a Path,
+    discovery_args: &'a [String],
+    production_seeds_abs: &'a [String],
     candidate_tests_abs: Vec<String>,
     max_depth: headlamp_core::selection::transitive_seed_refine::MaxDepth,
+}
+
+fn refine_by_transitive_seed_scan(
+    args: RefineByTransitiveSeedScanArgs<'_>,
 ) -> headlamp_core::selection::related_tests::RelatedTestSelection {
+    let RefineByTransitiveSeedScanArgs {
+        repo_root,
+        dependency_language,
+        project_configs,
+        jest_bin,
+        discovery_args,
+        production_seeds_abs,
+        candidate_tests_abs,
+        max_depth,
+    } = args;
     if !candidate_tests_abs.is_empty() {
         return headlamp_core::selection::related_tests::RelatedTestSelection {
             selected_test_paths_abs: candidate_tests_abs,
@@ -573,8 +602,13 @@ fn refine_by_transitive_seed_scan(
         .into_iter()
         .collect::<Vec<_>>();
 
-    let mut kept =
-        filter_tests_by_transitive_seed(repo_root, &all_tests, production_seeds_abs, max_depth);
+    let mut kept = filter_tests_by_transitive_seed(
+        repo_root,
+        dependency_language,
+        &all_tests,
+        production_seeds_abs,
+        max_depth,
+    );
     kept.sort();
     let rank_by_abs_path = kept
         .iter()
@@ -665,7 +699,7 @@ fn merge_bridge_json(
 }
 
 fn reorder_test_results_original_style(
-    test_results: &mut Vec<headlamp_core::test_model::TestSuiteResult>,
+    test_results: &mut [headlamp_core::test_model::TestSuiteResult],
     rank_by_abs_path: &BTreeMap<String, i64>,
 ) {
     let rank_or_inf = |abs_path: &str| -> i64 {
@@ -780,11 +814,15 @@ fn compute_directness_rank_base(
 }
 
 fn looks_like_test_path(candidate_path: &str) -> bool {
-    let p = candidate_path.replace('\\', "/");
-    p.contains("/__tests__/")
-        || p.contains("/tests/")
-        || p.contains(".test.")
-        || p.contains(".spec.")
+    let mut classifier = headlamp_core::project::classify::ProjectClassifier::for_path(
+        DependencyLanguageId::TsJs,
+        Path::new(candidate_path),
+    );
+    matches!(
+        classifier.classify_abs_path(Path::new(candidate_path)),
+        headlamp_core::project::classify::FileKind::Test
+            | headlamp_core::project::classify::FileKind::Mixed
+    )
 }
 
 fn filter_bridge_for_name_pattern_only(mut bridge: TestRunModel) -> TestRunModel {

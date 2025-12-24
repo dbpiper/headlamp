@@ -12,7 +12,7 @@ fn prefer_vscode(hint: Option<&str>) -> bool {
     hint_is_vscode
         || env::var("TERM_PROGRAM")
             .ok()
-            .map_or(false, |v| v.to_lowercase() == "vscode")
+            .is_some_and(|v| v.to_lowercase() == "vscode")
         || env::var("VSCODE_IPC_HOOK").is_ok()
 }
 

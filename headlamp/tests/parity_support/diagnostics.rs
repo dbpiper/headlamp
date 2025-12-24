@@ -200,7 +200,7 @@ fn build_rerun(
                     label: compare_side.label,
                     exit: compare_side.exit,
                     path,
-                    normalized_bytes: compare_side.normalized.as_bytes().len(),
+                    normalized_bytes: compare_side.normalized.len(),
                     token_stats_norm,
                 },
             )

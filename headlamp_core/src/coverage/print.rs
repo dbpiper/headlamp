@@ -27,8 +27,9 @@ pub fn filter_report(
         .into_iter()
         .filter(|file| {
             let rel = path_rel_posix(&file.path, root);
-            let included = include_set.as_ref().map_or(true, |s| s.is_match(&rel));
-            let excluded = exclude_set.as_ref().map_or(false, |s| s.is_match(&rel));
+            let included = include_set.as_ref().is_none()
+                || include_set.as_ref().is_some_and(|s| s.is_match(&rel));
+            let excluded = exclude_set.as_ref().is_some_and(|s| s.is_match(&rel));
             included && !excluded
         })
         .collect::<Vec<_>>();

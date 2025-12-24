@@ -40,8 +40,12 @@ fn select_related_tests_finds_transitive_importer_tests() {
     );
 
     let seed = repo.join("src/a.js").to_string_lossy().to_string();
-    let selection =
-        headlamp_core::selection::related_tests::select_related_tests(&repo, &[seed], &[]);
+    let selection = headlamp_core::selection::related_tests::select_related_tests(
+        &repo,
+        headlamp_core::selection::dependency_language::DependencyLanguageId::TsJs,
+        &[seed],
+        &[],
+    );
 
     let selected = selection.selected_test_paths_abs.join("\n");
     assert!(selected.contains("tests/index.test.js"));
@@ -69,8 +73,12 @@ fn select_related_tests_augments_with_http_route_tests() {
     );
 
     let seed = repo.join("server/routes.js").to_string_lossy().to_string();
-    let selection =
-        headlamp_core::selection::related_tests::select_related_tests(&repo, &[seed], &[]);
+    let selection = headlamp_core::selection::related_tests::select_related_tests(
+        &repo,
+        headlamp_core::selection::dependency_language::DependencyLanguageId::TsJs,
+        &[seed],
+        &[],
+    );
 
     let selected = selection.selected_test_paths_abs.join("\n");
     assert!(selected.contains("tests/http.test.js"));

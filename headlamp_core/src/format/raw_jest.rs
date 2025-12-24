@@ -299,7 +299,7 @@ fn extract_console_inline(lines: &[String]) -> Vec<String> {
         .map(|ln| ln.trim().to_string())
         .filter(|ln| !ln.is_empty())
         .collect::<Vec<_>>();
-    cand.sort_by(|a, b| b.len().cmp(&a.len()));
+    cand.sort_by_key(|b| std::cmp::Reverse(b.len()));
     cand.truncate(3);
     cand
 }

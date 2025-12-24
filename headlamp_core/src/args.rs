@@ -7,6 +7,7 @@ use indexmap::IndexSet;
 use once_cell::sync::Lazy;
 
 use crate::config::{ChangedMode, CoverageMode, CoverageUi, HeadlampConfig};
+use crate::selection::dependency_language::DependencyLanguageId;
 
 static TEST_LIKE_GLOBSET: Lazy<GlobSet> = Lazy::new(|| {
     let mut b = GlobSetBuilder::new();
@@ -19,7 +20,7 @@ static TEST_LIKE_GLOBSET: Lazy<GlobSet> = Lazy::new(|| {
     b.build().unwrap_or_else(|_| GlobSet::empty())
 });
 
-#[derive(Debug, Clone, Parser)]
+#[derive(Debug, Clone, Parser, Default)]
 #[command(
     name = "headlamp",
     disable_help_flag = true,
@@ -128,34 +129,12 @@ struct HeadlampCli {
 
     #[arg(long = "coverage.compact", default_value_t = false)]
     coverage_compact: bool,
-}
 
-impl Default for HeadlampCli {
-    fn default() -> Self {
-        Self {
-            coverage: false,
-            coverage_abort_on_failure: false,
-            coverage_ui: None,
-            coverage_ui_alt: None,
-            coverage_detail: None,
-            coverage_show_code: None,
-            coverage_mode: None,
-            coverage_max_files: None,
-            coverage_max_hotspots: None,
-            coverage_page_fit: None,
-            coverage_include: vec![],
-            coverage_exclude: vec![],
-            coverage_editor: None,
-            coverage_root: None,
-            only_failures: false,
-            show_logs: false,
-            sequential: false,
-            bootstrap_command: None,
-            changed: None,
-            changed_depth: None,
-            coverage_compact: false,
-        }
-    }
+    #[arg(long = "dependency-language")]
+    dependency_language: Option<String>,
+
+    #[arg(long = "dependencyLanguage")]
+    dependency_language_alt: Option<String>,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -185,6 +164,8 @@ pub struct ParsedArgs {
 
     pub changed: Option<ChangedMode>,
     pub changed_depth: Option<u32>,
+
+    pub dependency_language: Option<DependencyLanguageId>,
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -263,6 +244,11 @@ pub fn derive_args(cfg_tokens: &[String], argv: &[String], is_tty: bool) -> Pars
         .as_deref()
         .and_then(parse_changed_mode_string);
     let changed_depth: Option<u32> = parsed_cli.changed_depth;
+    let dependency_language: Option<DependencyLanguageId> = parsed_cli
+        .dependency_language
+        .or(parsed_cli.dependency_language_alt)
+        .as_deref()
+        .and_then(DependencyLanguageId::parse);
 
     let mut selection_specified = changed.is_some();
     let mut selection_paths: Vec<String> = vec![];
@@ -409,6 +395,7 @@ pub fn derive_args(cfg_tokens: &[String], argv: &[String], is_tty: bool) -> Pars
         bootstrap_command,
         changed,
         changed_depth,
+        dependency_language,
     }
 }
 
@@ -642,25 +629,26 @@ fn split_headlamp_tokens(tokens: &[String]) -> (Vec<String>, Vec<String>) {
         let tok = tokens[i].as_str();
         if is_headlamp(tok) {
             hl.push(tokens[i].clone());
-            if (takes_value(tok) || is_bool_flag(tok)) && !tok.contains('=') {
-                if let Some(next) = tokens.get(i + 1) {
-                    if tok == "--changed" {
-                        // `--changed` optionally consumes a value; if next looks like a flag, keep default.
-                        if !next.starts_with('-') {
-                            hl.push(next.clone());
-                            i += 1;
-                        }
-                    } else if is_bool_flag(tok) {
-                        if is_bool_literal(next) {
-                            hl.push(next.clone());
-                            i += 1;
-                        }
-                    } else if !next.starts_with('-') {
+            if (takes_value(tok) || is_bool_flag(tok))
+                && !tok.contains('=')
+                && let Some(next) = tokens.get(i + 1)
+            {
+                if tok == "--changed" {
+                    // `--changed` optionally consumes a value; if next looks like a flag, keep default.
+                    if !next.starts_with('-') {
                         hl.push(next.clone());
                         i += 1;
                     }
+                } else if is_bool_flag(tok) {
+                    if is_bool_literal(next) {
+                        hl.push(next.clone());
+                        i += 1;
+                    }
+                } else if !next.starts_with('-') {
+                    hl.push(next.clone());
+                    i += 1;
                 }
-            }
+            };
         } else {
             pass.push(tokens[i].clone());
         }
@@ -755,12 +743,6 @@ fn infer_glob_from_selection_path(path_text: &str) -> String {
     let p = Path::new(path_text);
     let is_dir = p.extension().is_none();
     if !is_dir {
-        // Keep behavior stable for ad-hoc file selections, but infer "src/**/*" when the user
-        // selects a production source file under src/ (common Windows-style input case).
-        // TODO: fix this hack
-        if path_text == "src" || path_text.starts_with("src/") {
-            return "src/**/*".to_string();
-        }
         return path_text.to_string();
     }
     let base = path_text.trim_end_matches('/').to_string();
@@ -772,8 +754,9 @@ fn infer_glob_from_selection_path(path_text: &str) -> String {
 }
 
 fn normalize_token_path_text(candidate: &str) -> Cow<'_, str> {
-    candidate
-        .contains('\\')
-        .then(|| Cow::Owned(candidate.replace('\\', "/")))
-        .unwrap_or(Cow::Borrowed(candidate))
+    if candidate.contains('\\') {
+        Cow::Owned(candidate.replace('\\', "/"))
+    } else {
+        Cow::Borrowed(candidate)
+    }
 }

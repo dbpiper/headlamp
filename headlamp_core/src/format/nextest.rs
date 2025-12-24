@@ -196,17 +196,17 @@ pub fn parse_nextest_libtest_json_output(
         }
     }
 
-    if !loose_log_lines.is_empty() {
-        if let Some((_key, first_suite)) = suites_by_key.iter_mut().next() {
-            first_suite
-                .console_entries
-                .extend(loose_log_lines.iter().map(|ln| TestConsoleEntry {
-                    message: Some(serde_json::Value::String((*ln).to_string())),
-                    type_name: Some("log".to_string()),
-                    origin: Some("cargo-nextest".to_string()),
-                }));
-        }
-    }
+    if !loose_log_lines.is_empty()
+        && let Some((_key, first_suite)) = suites_by_key.iter_mut().next()
+    {
+        first_suite
+            .console_entries
+            .extend(loose_log_lines.iter().map(|ln| TestConsoleEntry {
+                message: Some(serde_json::Value::String((*ln).to_string())),
+                type_name: Some("log".to_string()),
+                origin: Some("cargo-nextest".to_string()),
+            }));
+    };
 
     let suites = suites_by_key
         .into_values()
@@ -243,10 +243,7 @@ fn suite_key_from_test_name(
 fn finalize_suite(repo_root: &Path, suite: SuiteAcc) -> TestSuiteResult {
     let tests = suite.tests.into_values().collect::<Vec<_>>();
     let failed = tests.iter().filter(|t| t.status == "failed").count() as u64;
-    let status = (failed > 0)
-        .then(|| "failed")
-        .unwrap_or("passed")
-        .to_string();
+    let status = if failed > 0 { "failed" } else { "passed" }.to_string();
     let test_file_path = suite_display_path(repo_root, &suite.key);
     TestSuiteResult {
         test_file_path,
@@ -274,10 +271,11 @@ fn suite_display_path(repo_root: &Path, key: &SuiteKey) -> String {
 fn resolve_package_root(repo_root: &Path, crate_name: &str) -> PathBuf {
     let candidate = repo_root.join(crate_name);
     let cargo_toml = candidate.join("Cargo.toml");
-    cargo_toml
-        .exists()
-        .then_some(candidate)
-        .unwrap_or_else(|| repo_root.to_path_buf())
+    if cargo_toml.exists() {
+        candidate
+    } else {
+        repo_root.to_path_buf()
+    }
 }
 
 fn build_run_model(suites: Vec<TestSuiteResult>) -> TestRunModel {

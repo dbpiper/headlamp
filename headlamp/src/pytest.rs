@@ -31,12 +31,7 @@ pub fn run_pytest(repo_root: &Path, args: &ParsedArgs) -> Result<i32, RunError> 
         .dir(repo_root)
         .unchecked()
         .run()
-        .map_err(|e| {
-            RunError::Io(std::io::Error::new(
-                std::io::ErrorKind::Other,
-                e.to_string(),
-            ))
-        })?;
+        .map_err(|e| RunError::Io(std::io::Error::other(e.to_string())))?;
     let exit_code = out.status.code().unwrap_or(1);
 
     if args.coverage_abort_on_failure && exit_code != 0 {
@@ -64,14 +59,14 @@ pub fn run_pytest(repo_root: &Path, args: &ParsedArgs) -> Result<i32, RunError> 
                 editor_cmd: args.editor_cmd.clone(),
             };
             println!("{}", format_compact(&filtered, &print_opts, repo_root));
-            if let Some(detail) = args.coverage_detail {
-                if detail != headlamp_core::args::CoverageDetail::Auto {
-                    let hs = format_hotspots(&filtered, &print_opts, repo_root);
-                    if !hs.trim().is_empty() {
-                        println!("{hs}");
-                    }
+            if let Some(detail) = args.coverage_detail
+                && detail != headlamp_core::args::CoverageDetail::Auto
+            {
+                let hs = format_hotspots(&filtered, &print_opts, repo_root);
+                if !hs.trim().is_empty() {
+                    println!("{hs}");
                 }
-            }
+            };
         }
     }
 

@@ -103,7 +103,7 @@ fn tokenize(text: &str) -> Vec<Token> {
             continue;
         }
         if is_ws(byte) {
-            let end = scan_while(bytes, index, |b| is_ws(b));
+            let end = scan_while(bytes, index, is_ws);
             tokens.push(Token {
                 kind: TokenKind::Whitespace,
                 span: index..end,
@@ -164,9 +164,11 @@ fn consume_osc(bytes: &[u8], start: usize) -> (TokenKind, usize) {
 fn osc_kind(bytes: &[u8], start: usize, end: usize) -> TokenKind {
     let slice = bytes.get(start..end).unwrap_or(&[]);
     let is_osc8 = slice.windows(3).any(|w| w == [b']', b'8', b';']);
-    is_osc8
-        .then_some(TokenKind::Osc8Link)
-        .unwrap_or(TokenKind::AnsiEscape)
+    if is_osc8 {
+        TokenKind::Osc8Link
+    } else {
+        TokenKind::AnsiEscape
+    }
 }
 
 fn scan_while(bytes: &[u8], start: usize, keep: impl Fn(u8) -> bool) -> usize {

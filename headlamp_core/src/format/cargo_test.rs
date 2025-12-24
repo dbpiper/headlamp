@@ -120,11 +120,11 @@ fn parse_suite_block(repo_root: &Path, block: &SuiteBlock) -> TestSuiteResult {
             continue;
         }
         if let Some(status) = parse_status_only_line(line) {
-            if let Some(index) = last_pending_test_index.take() {
-                if let Some(test_case) = tests.get_mut(index) {
-                    test_case.status = status;
-                }
-            }
+            if let Some(index) = last_pending_test_index.take()
+                && let Some(test_case) = tests.get_mut(index)
+            {
+                test_case.status = status;
+            };
             line_index += 1;
             continue;
         }
@@ -163,10 +163,7 @@ fn parse_suite_block(repo_root: &Path, block: &SuiteBlock) -> TestSuiteResult {
     });
 
     let (_, failed, _) = count_test_statuses(&tests);
-    let status = (failed > 0)
-        .then(|| "failed")
-        .unwrap_or("passed")
-        .to_string();
+    let status = if failed > 0 { "failed" } else { "passed" }.to_string();
     let abs_suite_path = absolutize_repo_relative(repo_root, &block.source_path);
 
     TestSuiteResult {

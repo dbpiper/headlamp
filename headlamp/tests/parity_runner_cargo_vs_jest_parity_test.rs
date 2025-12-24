@@ -228,6 +228,67 @@ fn b_passes() {\n\
     );
 }
 
+fn write_dual_language_changed_depth_repo(repo: &Path, jest_node_modules: &Path) {
+    symlink_dir(jest_node_modules, &repo.join("node_modules"));
+
+    write_file(
+        &repo.join("jest.config.js"),
+        "module.exports = { testMatch: ['**/tests/**/*_test.js'] };\n",
+    );
+
+    write_file(
+        &repo.join("src/api/depth_anchor.js"),
+        "exports.anchor = () => 'anchor';\n",
+    );
+    write_file(
+        &repo.join("tests/depth_anchor_test.js"),
+        "const { anchor } = require('../src/api/depth_anchor');\n\ntest('anchor_passes', () => { expect(anchor()).toBe('anchor'); });\n",
+    );
+    write_file(
+        &repo.join("tests/api_test.js"),
+        "test('api_marker', () => { expect('api').toBe('api'); });\n",
+    );
+
+    write_file(
+        &repo.join("Cargo.toml"),
+        "\
+[package]\n\
+name = \"parity_changed_depth\"\n\
+version = \"0.1.0\"\n\
+edition = \"2024\"\n\
+\n\
+[lib]\n\
+path = \"src/lib.rs\"\n\
+",
+    );
+    write_file(&repo.join("src/lib.rs"), "pub mod api;\n");
+    write_file(&repo.join("src/api.rs"), "pub mod depth_anchor;\n");
+    write_file(
+        &repo.join("src/api/depth_anchor.rs"),
+        "pub fn anchor() -> &'static str { \"anchor\" }\n",
+    );
+    write_file(
+        &repo.join("tests/depth_anchor_test.rs"),
+        "\
+use parity_changed_depth::api::depth_anchor;\n\
+\n\
+#[test]\n\
+fn anchor_passes() {\n\
+    assert_eq!(depth_anchor::anchor(), \"anchor\");\n\
+}\n\
+",
+    );
+    write_file(
+        &repo.join("tests/api_test.rs"),
+        "\
+#[test]\n\
+fn api_marker() {\n\
+    assert_eq!(\"api\", \"api\");\n\
+}\n\
+",
+    );
+}
+
 fn assert_headlamp_runners_tty_parity(
     repo: &Path,
     headlamp_bin: &Path,
@@ -240,11 +301,11 @@ fn assert_headlamp_runners_tty_parity(
     runner_args.iter().for_each(|(runner, args)| {
         let (spec, exit, raw) =
             run_headlamp_with_args_tty(repo, headlamp_bin, columns, runner, args);
-        let raw_bytes = raw.as_bytes().len();
+        let raw_bytes = raw.len();
         let raw_lines = raw.lines().count();
         let (normalized, normalization_meta) =
             parity_support::normalize::normalize_tty_ui_runner_parity_with_meta(raw.clone(), repo);
-        let normalized_bytes = normalized.as_bytes().len();
+        let normalized_bytes = normalized.len();
         let normalized_lines = normalized.lines().count();
         let side_label = spec.side_label.clone();
         run_specs.push(spec);
@@ -460,5 +521,82 @@ fn parity_runner_changed_all_selects_multiple_tests_all_three() {
         &binaries.headlamp_bin,
         &runner_args,
         "changed=all selects multiple tests all three",
+    );
+}
+
+#[test]
+fn parity_runner_coverage_respects_changed_selection_all_three() {
+    let binaries = runner_parity_binaries();
+    let repo = mk_temp_dir("runner-parity-coverage-changed-selection");
+    write_dual_language_changed_selection_repo(&repo, &binaries.jest_node_modules);
+
+    parity_support::git_init(&repo);
+    parity_support::git_commit_all(&repo, "baseline");
+
+    write_file(
+        &repo.join("src/a.js"),
+        "exports.a = () => 'a'; // changed\n",
+    );
+    write_file(
+        &repo.join("src/a.rs"),
+        "pub fn a() -> &'static str { \"a\" } // changed\n",
+    );
+
+    let args = ["--coverage", "--coverage-ui=jest", "--changed=all"];
+    let runner_args: [(&str, &[&str]); 3] = [
+        ("jest", &args),
+        ("cargo-test", &args),
+        ("cargo-nextest", &args),
+    ];
+    assert_headlamp_runners_tty_parity(
+        &repo,
+        &binaries.headlamp_bin,
+        &runner_args,
+        "coverage respects changed selection all three",
+    );
+}
+
+#[test]
+fn parity_runner_changed_depth_affects_jest_and_is_not_overapplied_by_cargo_runners() {
+    let binaries = runner_parity_binaries();
+    let repo = mk_temp_dir("runner-parity-changed-depth");
+    write_dual_language_changed_depth_repo(&repo, &binaries.jest_node_modules);
+
+    parity_support::git_init(&repo);
+    parity_support::git_commit_all(&repo, "baseline");
+
+    write_file(
+        &repo.join("src/api/depth_anchor.js"),
+        "exports.anchor = () => 'anchor'; // changed\n",
+    );
+    write_file(
+        &repo.join("src/api/depth_anchor.rs"),
+        "pub fn anchor() -> &'static str { \"anchor\" } // changed\n",
+    );
+
+    let depth0_args = ["--changed=all", "--changed.depth=0"];
+    let depth1_args = ["--changed=all", "--changed.depth=1"];
+    let runner_depth0: [(&str, &[&str]); 3] = [
+        ("jest", &depth0_args),
+        ("cargo-test", &depth0_args),
+        ("cargo-nextest", &depth0_args),
+    ];
+    let runner_depth1: [(&str, &[&str]); 3] = [
+        ("jest", &depth1_args),
+        ("cargo-test", &depth1_args),
+        ("cargo-nextest", &depth1_args),
+    ];
+
+    assert_headlamp_runners_tty_parity(
+        &repo,
+        &binaries.headlamp_bin,
+        &runner_depth0,
+        "changed.depth=0 all three",
+    );
+    assert_headlamp_runners_tty_parity(
+        &repo,
+        &binaries.headlamp_bin,
+        &runner_depth1,
+        "changed.depth=1 all three",
     );
 }

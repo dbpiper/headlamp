@@ -23,8 +23,8 @@ fn selects_tests_by_import_seed() {
     let test_file = tests.join("test_foo.py");
     std::fs::write(&test_file, "from pkg.foo import x\n").unwrap();
 
-    let seeds = changed_seeds(&root, &[changed_file.clone()]);
-    let kept = filter_tests_by_seeds(&[test_file.clone()], &seeds);
+    let seeds = changed_seeds(&root, std::slice::from_ref(&changed_file));
+    let kept = filter_tests_by_seeds(std::slice::from_ref(&test_file), &seeds);
     assert_eq!(kept.len(), 1);
     assert_eq!(kept[0], test_file);
 }

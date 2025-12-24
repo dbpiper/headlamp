@@ -42,7 +42,7 @@ pub fn augment_rank_with_priority_paths(
         .map(|path_text| normalize_abs_posix(path_text))
         .enumerate()
         .fold(rank_by_path.clone(), |mut acc, (index, abs)| {
-            let priority_rank = -((total - index as i64) as i64);
+            let priority_rank = -(total - index as i64);
             let next = acc
                 .get(&abs)
                 .copied()

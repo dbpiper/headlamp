@@ -54,7 +54,7 @@ fn build_code_frame_from_source_location() {
 
 #[test]
 fn merge_msg_lines_dedupes() {
-    let merged = merge_msg_lines("a\nb\n", &vec!["b".to_string(), "c".to_string()]);
+    let merged = merge_msg_lines("a\nb\n", &["b".to_string(), "c".to_string()]);
     insta::assert_snapshot!("merge_msg_lines_dedupes", merged.join("\n"));
 }
 

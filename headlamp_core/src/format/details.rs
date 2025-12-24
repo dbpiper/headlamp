@@ -62,10 +62,10 @@ pub fn lines_from_details(details: Option<&Vec<Value>>) -> DetailLines {
     };
 
     let push_maybe = |value: &Value, bucket: &mut Vec<String>| {
-        if let Some(s) = value.as_str() {
-            if !s.trim().is_empty() {
-                bucket.extend(s.lines().map(|l| l.to_string()));
-            }
+        if let Some(s) = value.as_str()
+            && !s.trim().is_empty()
+        {
+            bucket.extend(s.lines().map(|l| l.to_string()));
         }
     };
 
@@ -155,26 +155,26 @@ pub fn lines_from_details(details: Option<&Vec<Value>>) -> DetailLines {
                 obj.get("message")
                     .into_iter()
                     .for_each(|v| push_maybe(v, &mut messages));
-                if let Some(err) = obj.get("error") {
-                    if let Value::Object(err_obj) = err {
-                        err_obj
-                            .get("stack")
-                            .into_iter()
-                            .for_each(|v| push_maybe(v, &mut stacks));
-                        err_obj
-                            .get("message")
-                            .into_iter()
-                            .for_each(|v| push_maybe(v, &mut messages));
-                    }
-                }
-                if let Some(mr) = obj.get("matcherResult") {
-                    if let Value::Object(mr_obj) = mr {
-                        ["stack", "message", "expected", "received"]
-                            .into_iter()
-                            .filter_map(|k| mr_obj.get(k))
-                            .for_each(|v| push_maybe(v, &mut messages));
-                    }
-                }
+                if let Some(err) = obj.get("error")
+                    && let Value::Object(err_obj) = err
+                {
+                    err_obj
+                        .get("stack")
+                        .into_iter()
+                        .for_each(|v| push_maybe(v, &mut stacks));
+                    err_obj
+                        .get("message")
+                        .into_iter()
+                        .for_each(|v| push_maybe(v, &mut messages));
+                };
+                if let Some(mr) = obj.get("matcherResult")
+                    && let Value::Object(mr_obj) = mr
+                {
+                    ["stack", "message", "expected", "received"]
+                        .into_iter()
+                        .filter_map(|k| mr_obj.get(k))
+                        .for_each(|v| push_maybe(v, &mut messages));
+                };
                 visit_deep(detail, 0, &mut stacks, &mut messages);
             }
             Value::Array(arr) => {

@@ -195,7 +195,7 @@ fn normalize_fixture_exts(text: &str) -> String {
     let with_src = src_ext
         .replace_all(&with_test_suffix, "$1.<EXT>")
         .to_string();
-    normalize_coverage_numbers(&tests_ext.replace_all(&with_src, "$1.<EXT>").to_string())
+    normalize_coverage_numbers(tests_ext.replace_all(&with_src, "$1.<EXT>").as_ref())
 }
 
 fn normalize_coverage_numbers(text: &str) -> String {
@@ -323,7 +323,7 @@ fn stage_stats(stage: &'static str, text: &str) -> NormalizationStageStats {
     );
     NormalizationStageStats {
         stage,
-        bytes: text.as_bytes().len(),
+        bytes: text.len(),
         lines: text.lines().count(),
         markers,
     }
@@ -625,7 +625,7 @@ impl RenderNormalizerState {
 
 fn is_project_stack_frame(line: &str) -> bool {
     let normalized = line.replace('\\', "/");
-    normalized.contains("/tests/") && !normalized.contains("/node_modules/")
+    !normalized.contains("/node_modules/")
 }
 
 fn normalize_time_line(raw: &str) -> String {

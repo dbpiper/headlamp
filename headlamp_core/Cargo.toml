@@ -27,6 +27,15 @@ path-slash = "0.2.1"
 dunce = "1.0.5"
 dashmap = "6.1.0"
 lcov = "0.8.1"
+syn = { version = "2.0.96", features = ["full"] }
+toml = "0.8.19"
+oxc_parser = "0.102.0"
+oxc_allocator = "0.102.0"
+oxc_span = "0.102.0"
+oxc_ast = "0.102.0"
+oxc_ast_visit = "0.102.0"
+oxc_syntax = "0.102.0"
+oxc_resolver = "11.16.0"
 
 [dev-dependencies]
 tempfile = "3.14.0"

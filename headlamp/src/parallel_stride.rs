@@ -36,11 +36,11 @@ where
                             }
                         }
                         Err(err) => {
-                            if let Ok(mut slot) = first_error.lock() {
-                                if slot.is_none() {
-                                    *slot = Some(err);
-                                }
-                            }
+                            if let Ok(mut slot) = first_error.lock()
+                                && slot.is_none()
+                            {
+                                *slot = Some(err);
+                            };
                             return;
                         }
                     }

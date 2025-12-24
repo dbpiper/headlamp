@@ -122,8 +122,8 @@ pub(super) fn composite_bar_pct(summary: &FileSummary, hotspots: &[UncoveredRang
         .min(summary.functions.pct())
         .min(summary.branches.pct());
     let total_lines = summary.lines.total;
-    let penalty = (total_lines > 0 && !hotspots.is_empty())
-        .then(|| {
+    let penalty = if total_lines > 0 && !hotspots.is_empty() {
+        {
             let largest = hotspots
                 .iter()
                 .map(|r| r.end - r.start + 1)
@@ -131,7 +131,9 @@ pub(super) fn composite_bar_pct(summary: &FileSummary, hotspots: &[UncoveredRang
                 .unwrap_or(0) as f64;
             let concentration = largest / (total_lines as f64);
             ((concentration * 100.0 * 0.5).round() as i64).min(15)
-        })
-        .unwrap_or(0);
+        }
+    } else {
+        0
+    };
     (base - (penalty as f64)).clamp(0.0, 100.0)
 }

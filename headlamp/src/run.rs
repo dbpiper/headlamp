@@ -52,12 +52,7 @@ pub fn run_bootstrap(repo_root: &Path, raw: &str) -> Result<(), RunError> {
             .unchecked()
             .run()
     }
-    .map_err(|e| {
-        RunError::Io(std::io::Error::new(
-            std::io::ErrorKind::Other,
-            e.to_string(),
-        ))
-    })?;
+    .map_err(|e| RunError::Io(std::io::Error::other(e.to_string())))?;
 
     status
         .status

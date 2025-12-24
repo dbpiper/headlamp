@@ -161,8 +161,8 @@ pub fn insert_route<A: Clone>(
     }
 }
 
-pub fn collect_route_handlers<'a, A: Clone>(
-    trie: &'a RouteTrie<A>,
+pub fn collect_route_handlers<A: Clone>(
+    trie: &RouteTrie<A>,
     segments: &[String],
     method: &str,
 ) -> Vec<A> {

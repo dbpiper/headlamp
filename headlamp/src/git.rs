@@ -86,10 +86,10 @@ fn list_unstaged_and_untracked(
         .statuses(Some(&mut opts))
         .map_err(|e| RunError::Io(std::io::Error::other(e.to_string())))?;
     for entry in statuses.iter() {
-        if entry.status().contains(Status::WT_NEW) {
-            if let Some(p) = entry.path() {
-                out.push(workdir.join(p));
-            }
+        if entry.status().contains(Status::WT_NEW)
+            && let Some(p) = entry.path()
+        {
+            out.push(workdir.join(p));
         }
     }
 

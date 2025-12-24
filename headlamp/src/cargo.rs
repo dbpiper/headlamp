@@ -34,36 +34,13 @@ pub fn run_cargo_test(repo_root: &Path, args: &ParsedArgs) -> Result<i32, RunErr
         .transpose()?
         .unwrap_or_default();
 
-    if args.collect_coverage && has_cargo_llvm_cov(repo_root) {
-        let out = duct_cmd(
-            "cargo",
-            ["llvm-cov", "--lcov", "--output-path", "coverage/lcov.info"],
-        )
-        .dir(repo_root)
-        .stderr_to_stdout()
-        .stdout_capture()
-        .unchecked()
-        .run()
-        .map_err(|e| {
-            RunError::Io(std::io::Error::new(
-                std::io::ErrorKind::Other,
-                e.to_string(),
-            ))
-        })?;
-        let exit_code = out.status.code().unwrap_or(1);
-        let combined = String::from_utf8_lossy(&out.stdout).to_string();
-        print_test_output(repo_root, args, exit_code, &combined);
-
-        if args.coverage_abort_on_failure && exit_code != 0 {
-            return Ok(normalize_runner_exit_code(exit_code));
-        }
-        if args.coverage_ui != CoverageUi::Jest {
-            print_lcov(repo_root, args);
-        }
-        return Ok(normalize_runner_exit_code(exit_code));
-    }
-
     let selection = derive_cargo_selection(repo_root, args, &changed);
+
+    if args.collect_coverage && has_cargo_llvm_cov(repo_root) {
+        let exit_code =
+            run_cargo_llvm_cov_test_and_render(repo_root, args, &selection.extra_cargo_args)?;
+        return finish_coverage_after_test_run(repo_root, args, exit_code);
+    }
 
     let exit_code = run_cargo_test_and_render(repo_root, args, None, &selection.extra_cargo_args)?;
 
@@ -87,36 +64,19 @@ pub fn run_cargo_nextest(repo_root: &Path, args: &ParsedArgs) -> Result<i32, Run
         .transpose()?
         .unwrap_or_default();
 
-    if args.collect_coverage && has_cargo_llvm_cov(repo_root) {
-        let out = duct_cmd(
-            "cargo",
-            ["llvm-cov", "--lcov", "--output-path", "coverage/lcov.info"],
-        )
-        .dir(repo_root)
-        .stderr_to_stdout()
-        .stdout_capture()
-        .unchecked()
-        .run()
-        .map_err(|e| {
-            RunError::Io(std::io::Error::new(
-                std::io::ErrorKind::Other,
-                e.to_string(),
-            ))
-        })?;
-        let exit_code = out.status.code().unwrap_or(1);
-        let combined = String::from_utf8_lossy(&out.stdout).to_string();
-        print_test_output_nextest(repo_root, args, exit_code, &combined);
-
-        if args.coverage_abort_on_failure && exit_code != 0 {
-            return Ok(normalize_runner_exit_code(exit_code));
-        }
-        if args.coverage_ui != CoverageUi::Jest {
-            print_lcov(repo_root, args);
-        }
-        return Ok(normalize_runner_exit_code(exit_code));
-    }
-
     let selection = derive_cargo_selection(repo_root, args, &changed);
+
+    if args.collect_coverage && has_cargo_llvm_cov(repo_root) {
+        if !has_cargo_nextest(repo_root) {
+            return Err(RunError::MissingRunner {
+                runner: "cargo-nextest".to_string(),
+                hint: "expected `cargo nextest` to be installed and available".to_string(),
+            });
+        }
+        let exit_code =
+            run_cargo_llvm_cov_nextest_and_render(repo_root, args, &selection.extra_cargo_args)?;
+        return finish_coverage_after_test_run(repo_root, args, exit_code);
+    }
     if !has_cargo_nextest(repo_root) {
         return Err(RunError::MissingRunner {
             runner: "cargo-nextest".to_string(),
@@ -137,8 +97,182 @@ pub fn run_cargo_nextest(repo_root: &Path, args: &ParsedArgs) -> Result<i32, Run
     Ok(normalize_runner_exit_code(exit_code))
 }
 
+fn finish_coverage_after_test_run(
+    repo_root: &Path,
+    args: &ParsedArgs,
+    exit_code: i32,
+) -> Result<i32, RunError> {
+    if args.coverage_abort_on_failure && exit_code != 0 {
+        return Ok(normalize_runner_exit_code(exit_code));
+    }
+    run_cargo_llvm_cov_report(repo_root)?;
+    if args.coverage_ui != CoverageUi::Jest {
+        print_lcov(repo_root, args);
+    }
+    Ok(normalize_runner_exit_code(exit_code))
+}
+
 fn normalize_runner_exit_code(exit_code: i32) -> i32 {
     if exit_code == 0 { 0 } else { 1 }
+}
+
+fn run_cargo_llvm_cov_test_and_render(
+    repo_root: &Path,
+    args: &ParsedArgs,
+    extra_cargo_args: &[String],
+) -> Result<i32, RunError> {
+    let cmd_args = build_llvm_cov_test_run_args(args, extra_cargo_args);
+    let out = duct_cmd("cargo", cmd_args)
+        .dir(repo_root)
+        .stderr_to_stdout()
+        .stdout_capture()
+        .unchecked()
+        .run()
+        .map_err(|e| RunError::Io(std::io::Error::other(e.to_string())))?;
+    let exit_code = out.status.code().unwrap_or(1);
+    let combined = String::from_utf8_lossy(&out.stdout).to_string();
+    print_test_output(repo_root, args, exit_code, &combined);
+    Ok(exit_code)
+}
+
+fn run_cargo_llvm_cov_nextest_and_render(
+    repo_root: &Path,
+    args: &ParsedArgs,
+    extra_cargo_args: &[String],
+) -> Result<i32, RunError> {
+    let cmd_args = build_llvm_cov_nextest_run_args(args, extra_cargo_args);
+    let out = duct_cmd("cargo", cmd_args)
+        .dir(repo_root)
+        .env("NEXTEST_EXPERIMENTAL_LIBTEST_JSON", "1")
+        .stderr_to_stdout()
+        .stdout_capture()
+        .unchecked()
+        .run()
+        .map_err(|e| RunError::Io(std::io::Error::other(e.to_string())))?;
+    let exit_code = out.status.code().unwrap_or(1);
+    let combined = String::from_utf8_lossy(&out.stdout).to_string();
+    print_test_output_nextest(repo_root, args, exit_code, &combined);
+    Ok(exit_code)
+}
+
+fn run_cargo_llvm_cov_report(repo_root: &Path) -> Result<(), RunError> {
+    let out = duct_cmd(
+        "cargo",
+        [
+            "llvm-cov",
+            "report",
+            "--lcov",
+            "--output-path",
+            "coverage/lcov.info",
+            "--color",
+            "never",
+        ],
+    )
+    .dir(repo_root)
+    .stderr_to_stdout()
+    .stdout_capture()
+    .unchecked()
+    .run()
+    .map_err(|e| RunError::Io(std::io::Error::other(e.to_string())))?;
+    if out.status.success() {
+        Ok(())
+    } else {
+        Err(RunError::CommandFailed {
+            message: format!(
+                "cargo llvm-cov report failed (exit={})",
+                out.status.code().unwrap_or(1)
+            ),
+        })
+    }
+}
+
+fn build_llvm_cov_test_run_args(args: &ParsedArgs, extra_cargo_args: &[String]) -> Vec<String> {
+    let (cargo_args, test_binary_args) = split_cargo_passthrough_args(&args.runner_args);
+    let mut cmd_args: Vec<String> = vec![
+        "llvm-cov".to_string(),
+        "test".to_string(),
+        "--no-report".to_string(),
+        "--color".to_string(),
+        "never".to_string(),
+    ];
+    cmd_args.extend(extra_cargo_args.iter().cloned());
+    cmd_args.extend(cargo_args);
+
+    let mut normalized_test_args: Vec<String> = vec!["--color".to_string(), "never".to_string()];
+    if should_force_pretty_test_output(&test_binary_args) {
+        normalized_test_args.extend(["--format".to_string(), "pretty".to_string()]);
+    }
+    if args.show_logs && should_force_nocapture(&test_binary_args) {
+        normalized_test_args.push("--nocapture".to_string());
+    }
+    if args.sequential && !test_binary_args.iter().any(|t| t == "--test-threads") {
+        normalized_test_args.extend(["--test-threads".to_string(), "1".to_string()]);
+    }
+    normalized_test_args.extend(test_binary_args);
+
+    cmd_args.push("--".to_string());
+    cmd_args.extend(normalized_test_args);
+    cmd_args
+}
+
+fn build_llvm_cov_nextest_run_args(args: &ParsedArgs, extra_cargo_args: &[String]) -> Vec<String> {
+    let (nextest_options, test_binary_args) = split_cargo_passthrough_args(&args.runner_args);
+    let has_user_test_threads = nextest_options.iter().any(|t| t == "--test-threads");
+    let has_user_color = nextest_options
+        .iter()
+        .any(|t| t == "--color" || t.starts_with("--color="));
+    let translated = translate_libtest_args_to_nextest(&test_binary_args);
+
+    let (success_output, failure_output) = if args.show_logs {
+        ("immediate", "immediate")
+    } else {
+        ("never", "never")
+    };
+
+    let mut cmd_args: Vec<String> = vec![
+        "llvm-cov".to_string(),
+        "nextest".to_string(),
+        "--no-report".to_string(),
+    ];
+    cmd_args.extend(extra_cargo_args.iter().cloned());
+    cmd_args.extend(nextest_options);
+
+    if !has_user_color {
+        cmd_args.extend(["--color".to_string(), "never".to_string()]);
+    }
+    cmd_args.extend([
+        "--status-level".to_string(),
+        "none".to_string(),
+        "--final-status-level".to_string(),
+        "none".to_string(),
+        "--no-fail-fast".to_string(),
+        "--show-progress".to_string(),
+        "none".to_string(),
+        "--success-output".to_string(),
+        success_output.to_string(),
+        "--failure-output".to_string(),
+        failure_output.to_string(),
+        "--cargo-quiet".to_string(),
+        "--no-input-handler".to_string(),
+        "--no-output-indent".to_string(),
+        "--message-format".to_string(),
+        "libtest-json-plus".to_string(),
+    ]);
+
+    if args.sequential && translated.test_threads.is_none() && !has_user_test_threads {
+        cmd_args.extend(["--test-threads".to_string(), "1".to_string()]);
+    } else if let Some(n) = translated.test_threads.as_ref() {
+        cmd_args.extend(["--test-threads".to_string(), n.to_string()]);
+    }
+
+    if let Some(user_filter) = translated.filter.as_deref() {
+        cmd_args.push(user_filter.to_string());
+    }
+    if !translated.passthrough.is_empty() {
+        cmd_args.push("--".to_string());
+        cmd_args.extend(translated.passthrough);
+    }
+    cmd_args
 }
 
 fn print_test_output(repo_root: &Path, args: &ParsedArgs, exit_code: i32, combined: &str) {
@@ -151,7 +285,7 @@ fn print_test_output(repo_root: &Path, args: &ParsedArgs, exit_code: i32, combin
     );
     let rendered = parse_cargo_test_output(repo_root, combined)
         .map(|mut model| {
-            reorder_test_results_original_style_for_cargo(&mut model.test_results);
+            reorder_test_results_original_style_for_cargo(model.test_results.as_mut_slice());
             render_vitest_from_test_model(&model, &ctx, args.only_failures)
         })
         .unwrap_or_else(|| combined.to_string());
@@ -170,7 +304,7 @@ fn print_test_output_nextest(repo_root: &Path, args: &ParsedArgs, exit_code: i32
     );
     let rendered = parse_nextest_libtest_json_output(repo_root, combined)
         .map(|mut model| {
-            reorder_test_results_original_style_for_cargo(&mut model.test_results);
+            reorder_test_results_original_style_for_cargo(model.test_results.as_mut_slice());
             render_vitest_from_test_model(&model, &ctx, args.only_failures)
         })
         .unwrap_or_else(|| combined.to_string());
@@ -179,7 +313,7 @@ fn print_test_output_nextest(repo_root: &Path, args: &ParsedArgs, exit_code: i32
     }
 }
 
-fn reorder_test_results_original_style_for_cargo(test_results: &mut Vec<TestSuiteResult>) {
+fn reorder_test_results_original_style_for_cargo(test_results: &mut [TestSuiteResult]) {
     let file_failed = |file: &TestSuiteResult| -> bool {
         file.status == "failed"
             || file
@@ -217,12 +351,7 @@ fn run_nextest_and_render(
         .stdout_capture()
         .unchecked()
         .run()
-        .map_err(|e| {
-            RunError::Io(std::io::Error::new(
-                std::io::ErrorKind::Other,
-                e.to_string(),
-            ))
-        })?;
+        .map_err(|e| RunError::Io(std::io::Error::other(e.to_string())))?;
     let exit_code = out.status.code().unwrap_or(1);
     let combined = String::from_utf8_lossy(&out.stdout).to_string();
 
@@ -243,12 +372,7 @@ fn run_cargo_test_and_render(
         .stdout_capture()
         .unchecked()
         .run()
-        .map_err(|e| {
-            RunError::Io(std::io::Error::new(
-                std::io::ErrorKind::Other,
-                e.to_string(),
-            ))
-        })?;
+        .map_err(|e| RunError::Io(std::io::Error::other(e.to_string())))?;
     let exit_code = out.status.code().unwrap_or(1);
     let combined = String::from_utf8_lossy(&out.stdout).to_string();
     print_test_output(repo_root, args, exit_code, &combined);
@@ -442,7 +566,7 @@ fn has_cargo_nextest(repo_root: &Path) -> bool {
         .unchecked()
         .run()
         .ok()
-        .map_or(false, |o| o.status.success())
+        .is_some_and(|o| o.status.success())
 }
 
 fn print_lcov(repo_root: &Path, args: &ParsedArgs) {
@@ -468,14 +592,14 @@ fn print_lcov(repo_root: &Path, args: &ParsedArgs) {
         editor_cmd: args.editor_cmd.clone(),
     };
     println!("{}", format_compact(&filtered, &print_opts, repo_root));
-    if let Some(detail) = args.coverage_detail {
-        if detail != headlamp_core::args::CoverageDetail::Auto {
-            let hs = format_hotspots(&filtered, &print_opts, repo_root);
-            if !hs.trim().is_empty() {
-                println!("{hs}");
-            }
+    if let Some(detail) = args.coverage_detail
+        && detail != headlamp_core::args::CoverageDetail::Auto
+    {
+        let hs = format_hotspots(&filtered, &print_opts, repo_root);
+        if !hs.trim().is_empty() {
+            println!("{hs}");
         }
-    }
+    };
 }
 
 fn has_cargo_llvm_cov(repo_root: &Path) -> bool {
@@ -486,7 +610,7 @@ fn has_cargo_llvm_cov(repo_root: &Path) -> bool {
         .unchecked()
         .run()
         .ok()
-        .map_or(false, |o| o.status.success())
+        .is_some_and(|o| o.status.success())
 }
 
 #[derive(Debug, Clone)]

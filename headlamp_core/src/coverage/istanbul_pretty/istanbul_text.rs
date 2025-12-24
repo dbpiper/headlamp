@@ -85,9 +85,11 @@ pub(super) fn render_istanbul_text_report(files: &[FullFileCoverage], max_cols: 
         totals.functions,
         totals.lines,
         "",
-        false,
-        file_width,
-        missing_width,
+        IstanbulTextRowLayout {
+            indent_file: false,
+            file_width,
+            missing_width,
+        },
     ));
 
     for (name, summary, uncovered) in rows {
@@ -98,9 +100,11 @@ pub(super) fn render_istanbul_text_report(files: &[FullFileCoverage], max_cols: 
             summary.functions,
             summary.lines,
             &uncovered,
-            true,
-            file_width,
-            missing_width,
+            IstanbulTextRowLayout {
+                indent_file: true,
+                file_width,
+                missing_width,
+            },
         ));
     }
 
@@ -217,6 +221,13 @@ fn render_uncovered_line_numbers(line_hits: &BTreeMap<u32, u32>) -> String {
     parts.join(",")
 }
 
+#[derive(Debug, Clone, Copy)]
+struct IstanbulTextRowLayout {
+    indent_file: bool,
+    file_width: usize,
+    missing_width: usize,
+}
+
 fn render_istanbul_text_row(
     file_label: &str,
     stmts: Counts,
@@ -224,13 +235,11 @@ fn render_istanbul_text_row(
     funcs: Counts,
     lines: Counts,
     uncovered: &str,
-    indent_file: bool,
-    file_width: usize,
-    missing_width: usize,
+    layout: IstanbulTextRowLayout,
 ) -> String {
     let file_cell = {
-        let leader_spaces = indent_file.then_some(1).unwrap_or(0);
-        istanbul_fill(file_label, file_width, false, leader_spaces)
+        let leader_spaces = if layout.indent_file { 1 } else { 0 };
+        istanbul_fill(file_label, layout.file_width, false, leader_spaces)
     };
 
     let stmts_pct = fmt_pct(stmts.pct());
@@ -248,7 +257,10 @@ fn render_istanbul_text_row(
     let branches_cell = tint_pct(branches.pct(), &format!(" {branches_pct:>8} "));
     let funcs_cell = tint_pct(funcs.pct(), &format!(" {funcs_pct:>7} "));
     let lines_cell = tint_pct(lines.pct(), &format!(" {lines_pct:>7} "));
-    let uncovered_cell = tint_pct(row_min, &istanbul_fill(uncovered, missing_width, false, 1));
+    let uncovered_cell = tint_pct(
+        row_min,
+        &istanbul_fill(uncovered, layout.missing_width, false, 1),
+    );
 
     format!(
         "{file_cell_colored}|{stmts_cell}|{branches_cell}|{funcs_cell}|{lines_cell}|{uncovered_cell}"

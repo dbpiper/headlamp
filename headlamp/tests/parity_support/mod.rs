@@ -63,9 +63,9 @@ pub fn assert_parity_normalized_outputs(
                 raw: side_0_out.to_string(),
                 normalized: side_0_out.to_string(),
                 meta: parity_meta::ParitySideMeta {
-                    raw_bytes: side_0_out.as_bytes().len(),
+                    raw_bytes: side_0_out.len(),
                     raw_lines: side_0_out.lines().count(),
-                    normalized_bytes: side_0_out.as_bytes().len(),
+                    normalized_bytes: side_0_out.len(),
                     normalized_lines: side_0_out.lines().count(),
                     normalization: parity_meta::NormalizationMeta {
                         normalizer: parity_meta::NormalizerKind::NonTty,
@@ -83,9 +83,9 @@ pub fn assert_parity_normalized_outputs(
                 raw: side_1_out.to_string(),
                 normalized: side_1_out.to_string(),
                 meta: parity_meta::ParitySideMeta {
-                    raw_bytes: side_1_out.as_bytes().len(),
+                    raw_bytes: side_1_out.len(),
                     raw_lines: side_1_out.lines().count(),
-                    normalized_bytes: side_1_out.as_bytes().len(),
+                    normalized_bytes: side_1_out.len(),
                     normalized_lines: side_1_out.lines().count(),
                     normalization: parity_meta::NormalizationMeta {
                         normalizer: parity_meta::NormalizerKind::NonTty,
@@ -115,14 +115,14 @@ pub fn assert_parity_non_tty_with_diagnostics(
     let (side_0_normalized, side_0_meta) = normalize::normalize_with_meta(side_0_raw.clone(), repo);
     let (side_1_normalized, side_1_meta) = normalize::normalize_with_meta(side_1_raw.clone(), repo);
 
-    let side_0_raw_bytes = side_0_raw.as_bytes().len();
+    let side_0_raw_bytes = side_0_raw.len();
     let side_0_raw_lines = side_0_raw.lines().count();
-    let side_0_norm_bytes = side_0_normalized.as_bytes().len();
+    let side_0_norm_bytes = side_0_normalized.len();
     let side_0_norm_lines = side_0_normalized.lines().count();
 
-    let side_1_raw_bytes = side_1_raw.as_bytes().len();
+    let side_1_raw_bytes = side_1_raw.len();
     let side_1_raw_lines = side_1_raw.lines().count();
-    let side_1_norm_bytes = side_1_normalized.as_bytes().len();
+    let side_1_norm_bytes = side_1_normalized.len();
     let side_1_norm_lines = side_1_normalized.lines().count();
 
     let label_0 = run_group
@@ -187,14 +187,14 @@ pub fn assert_parity_tty_ui_with_diagnostics(
     let (side_1_normalized, side_1_meta) =
         normalize::normalize_tty_ui_with_meta(side_1_raw.clone(), repo);
 
-    let side_0_raw_bytes = side_0_raw.as_bytes().len();
+    let side_0_raw_bytes = side_0_raw.len();
     let side_0_raw_lines = side_0_raw.lines().count();
-    let side_0_norm_bytes = side_0_normalized.as_bytes().len();
+    let side_0_norm_bytes = side_0_normalized.len();
     let side_0_norm_lines = side_0_normalized.lines().count();
 
-    let side_1_raw_bytes = side_1_raw.as_bytes().len();
+    let side_1_raw_bytes = side_1_raw.len();
     let side_1_raw_lines = side_1_raw.lines().count();
-    let side_1_norm_bytes = side_1_normalized.as_bytes().len();
+    let side_1_norm_bytes = side_1_normalized.len();
     let side_1_norm_lines = side_1_normalized.lines().count();
 
     let label_0 = run_group
@@ -575,7 +575,7 @@ fn run_one_rerun(
                 label: spec.side_label.clone(),
                 code: side_code,
                 path: side_path.to_string_lossy().to_string(),
-                bytes: side_out.as_bytes().len(),
+                bytes: side_out.len(),
                 tokens: side_tokens,
                 blocks: side_blocks,
             }
@@ -713,7 +713,7 @@ pub fn runner_parity_binaries() -> RunnerParityBinaries {
         .ok()
         .map(PathBuf::from)
         .filter(|p| p.exists())
-        .unwrap_or_else(|| ensure_headlamp_bin_from_target_dir());
+        .unwrap_or_else(ensure_headlamp_bin_from_target_dir);
 
     let js_deps_dir = PathBuf::from(env!("CARGO_MANIFEST_DIR"))
         .join("tests")
@@ -931,8 +931,8 @@ pub fn extract_istanbul_text_table_block(text: &str) -> String {
         .unwrap_or(header_idx);
 
     let end = (header_idx..lines.len())
-        .filter(|&index| is_istanbul_dash_line(lines[index]))
-        .last()
+        .rev()
+        .find(|&index| is_istanbul_dash_line(lines[index]))
         .unwrap_or(lines.len().saturating_sub(1));
 
     lines.get(start..=end).unwrap_or(&lines[..]).join("\n")
@@ -992,8 +992,7 @@ fn run_cmd_tty(mut cmd: Command, columns: usize) -> (i32, String) {
     let mut combined = String::from_utf8_lossy(&bytes).to_string();
     combined.push_str(&String::from_utf8_lossy(&out.stderr));
     let combined = combined
-        .replace('\u{0008}', "")
-        .replace('\u{0004}', "")
+        .replace(['\u{0008}', '\u{0004}'], "")
         .replace("^D", "");
     let _ = std::fs::remove_file(&capture_path);
     (code, combined)
@@ -1053,8 +1052,7 @@ fn run_cmd_tty_stdout_piped(mut cmd: Command, columns: usize) -> (i32, String) {
     ));
     combined.push_str(&String::from_utf8_lossy(&out.stderr));
     let combined = combined
-        .replace('\u{0008}', "")
-        .replace('\u{0004}', "")
+        .replace(['\u{0008}', '\u{0004}'], "")
         .replace("^D", "");
     let _ = std::fs::remove_file(&stdout_capture_path);
     let _ = std::fs::remove_file(&tty_capture_path);
@@ -1092,9 +1090,7 @@ fn shell_escape(text: &str) -> String {
 }
 
 fn ensure_rust_bin(rust_bin: &Path) {
-    if rust_bin.exists() {
-        return;
-    }
+    if rust_bin.exists() {}
 }
 
 pub fn run_parity_fixture_with_args(

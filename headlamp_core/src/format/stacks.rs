@@ -14,15 +14,15 @@ pub fn first_test_location(lines: &[String], project_hint: &Regex) -> Option<Str
     let re1 = Regex::new(r"\(([^()]+?:\d+:\d+)\)").unwrap();
     let re2 = Regex::new(r"\s([\w./-]+?:\d+:\d+)\s*$").unwrap();
     for ln in lines {
-        if let Some(c) = re1.captures(ln).and_then(|c| c.get(1)).map(|m| m.as_str()) {
-            if project_hint.is_match(c) {
-                return Some(c.to_string());
-            }
+        if let Some(c) = re1.captures(ln).and_then(|c| c.get(1)).map(|m| m.as_str())
+            && project_hint.is_match(c)
+        {
+            return Some(c.to_string());
         }
-        if let Some(c) = re2.captures(ln).and_then(|c| c.get(1)).map(|m| m.as_str()) {
-            if project_hint.is_match(c) {
-                return Some(c.to_string());
-            }
+        if let Some(c) = re2.captures(ln).and_then(|c| c.get(1)).map(|m| m.as_str())
+            && project_hint.is_match(c)
+        {
+            return Some(c.to_string());
         }
     }
     None

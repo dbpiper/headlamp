@@ -1,144 +1,101 @@
-use std::collections::{BTreeSet, HashMap, HashSet};
+use std::collections::{HashMap, HashSet};
 use std::path::{Path, PathBuf};
 
 use path_slash::PathExt;
 
-use crate::selection::import_extract::extract_import_specs;
-use crate::selection::import_resolve::resolve_import_with_root;
+use crate::selection::dependency_language::{
+    DependencyLanguageId, DependencyResolveCache, build_seed_terms, extract_import_specs,
+    resolve_import_with_root_cached,
+};
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub struct MaxDepth(pub u32);
 
+#[derive(Debug, Default)]
+struct ResolutionCache {
+    memo: HashMap<(PathBuf, String), Option<PathBuf>>,
+    dependency_cache: DependencyResolveCache,
+}
+
+#[derive(Debug)]
+struct MatchTransitivelyCtx<'a> {
+    repo_root: &'a Path,
+    language: DependencyLanguageId,
+    seed_terms: &'a [String],
+    max_depth: MaxDepth,
+    body_cache: &'a mut HashMap<PathBuf, String>,
+    spec_cache: &'a mut HashMap<PathBuf, Vec<String>>,
+    resolution_cache: &'a mut ResolutionCache,
+    visit_guard: &'a mut HashSet<(PathBuf, u32)>,
+}
+
 pub fn filter_tests_by_transitive_seed(
     repo_root: &Path,
+    language: DependencyLanguageId,
     candidate_test_paths_abs: &[String],
     production_selection_paths_abs: &[String],
     max_depth: MaxDepth,
 ) -> Vec<String> {
-    let seed_terms = build_seed_terms(repo_root, production_selection_paths_abs);
+    let seed_terms = build_seed_terms(language, repo_root, production_selection_paths_abs);
     if seed_terms.is_empty() {
         return vec![];
     }
 
     let mut body_cache: HashMap<PathBuf, String> = HashMap::new();
     let mut spec_cache: HashMap<PathBuf, Vec<String>> = HashMap::new();
-    let mut resolution_cache: HashMap<(PathBuf, String), Option<PathBuf>> = HashMap::new();
+    let mut resolution_cache = ResolutionCache::default();
     let mut visit_guard: HashSet<(PathBuf, u32)> = HashSet::new();
+
+    let mut ctx = MatchTransitivelyCtx {
+        repo_root,
+        language,
+        seed_terms: &seed_terms,
+        max_depth,
+        body_cache: &mut body_cache,
+        spec_cache: &mut spec_cache,
+        resolution_cache: &mut resolution_cache,
+        visit_guard: &mut visit_guard,
+    };
 
     candidate_test_paths_abs
         .iter()
-        .map(|abs| PathBuf::from(abs))
-        .filter(|abs| {
-            matches_transitively(
-                abs,
-                repo_root,
-                &seed_terms,
-                max_depth,
-                0,
-                &mut body_cache,
-                &mut spec_cache,
-                &mut resolution_cache,
-                &mut visit_guard,
-            )
+        .filter_map(|abs| {
+            let abs_path = PathBuf::from(abs);
+            matches_transitively(&mut ctx, &abs_path, 0).then_some(abs_path)
         })
         .filter_map(|abs| abs.to_str().map(|s| s.replace('\\', "/")))
         .collect::<Vec<_>>()
 }
 
-fn build_seed_terms(repo_root: &Path, production_selection_paths_abs: &[String]) -> Vec<String> {
-    let mut out: BTreeSet<String> = BTreeSet::new();
-    production_selection_paths_abs.iter().for_each(|abs| {
-        let abs_path = PathBuf::from(abs);
-        let Ok(rel) = abs_path.strip_prefix(repo_root) else {
-            return;
-        };
-        let Some(rel_text) = rel.to_str().map(|s| s.replace('\\', "/")) else {
-            return;
-        };
-        let without_ext = strip_ts_like_extension(&rel_text);
-        if without_ext.is_empty() {
-            return;
-        }
-        let base = Path::new(&without_ext)
-            .file_name()
-            .and_then(|s| s.to_str())
-            .unwrap_or("")
-            .to_string();
-        let last_two = last_two_segments(&without_ext);
-        [without_ext, base, last_two]
-            .into_iter()
-            .filter(|s| !s.is_empty())
-            .for_each(|s| {
-                out.insert(s);
-            });
-    });
-    out.into_iter().collect()
-}
-
-fn strip_ts_like_extension(input: &str) -> String {
-    let lowered = input.to_lowercase();
-    for ext in [".ts", ".tsx", ".js", ".jsx", ".mjs", ".cjs", ".mts", ".cts"] {
-        if lowered.ends_with(ext) {
-            return input[..input.len().saturating_sub(ext.len())].to_string();
-        }
-    }
-    input.to_string()
-}
-
-fn last_two_segments(path_text: &str) -> String {
-    let segs = path_text
-        .split('/')
-        .filter(|s| !s.is_empty())
-        .collect::<Vec<_>>();
-    if segs.len() < 2 {
-        return String::new();
-    }
-    format!("{}/{}", segs[segs.len() - 2], segs[segs.len() - 1])
-}
-
-fn matches_transitively(
-    abs_path: &Path,
-    repo_root: &Path,
-    seed_terms: &[String],
-    max_depth: MaxDepth,
-    depth: u32,
-    body_cache: &mut HashMap<PathBuf, String>,
-    spec_cache: &mut HashMap<PathBuf, Vec<String>>,
-    resolution_cache: &mut HashMap<(PathBuf, String), Option<PathBuf>>,
-    visit_guard: &mut HashSet<(PathBuf, u32)>,
-) -> bool {
-    if depth > max_depth.0 {
+fn matches_transitively(ctx: &mut MatchTransitivelyCtx<'_>, abs_path: &Path, depth: u32) -> bool {
+    if depth > ctx.max_depth.0 {
         return false;
     }
-    if !visit_guard.insert((abs_path.to_path_buf(), depth)) {
+    if !ctx.visit_guard.insert((abs_path.to_path_buf(), depth)) {
         return false;
     }
 
-    let body = read_file_cached(abs_path, body_cache);
-    if seed_terms.iter().any(|seed| body.contains(seed)) {
+    let body = read_file_cached(abs_path, ctx.body_cache);
+    if ctx.seed_terms.iter().any(|seed| body.contains(seed)) {
         return true;
     }
 
-    let specs = import_specs_cached(abs_path, spec_cache);
+    let specs = import_specs_cached(abs_path, ctx.language, ctx.spec_cache);
     specs.into_iter().any(|spec| {
-        let Some(target) = resolve_spec_cached(abs_path, &spec, repo_root, resolution_cache) else {
+        let Some(target) = resolve_spec_cached(
+            abs_path,
+            &spec,
+            ctx.repo_root,
+            ctx.language,
+            ctx.resolution_cache,
+        ) else {
             return false;
         };
-        let target_body = read_file_cached(&target, body_cache);
-        if seed_terms.iter().any(|seed| target_body.contains(seed)) {
+        let target_body = read_file_cached(&target, ctx.body_cache);
+        if ctx.seed_terms.iter().any(|seed| target_body.contains(seed)) {
             return true;
         }
-        matches_transitively(
-            &target,
-            repo_root,
-            seed_terms,
-            max_depth,
-            depth.saturating_add(1),
-            body_cache,
-            spec_cache,
-            resolution_cache,
-            visit_guard,
-        )
+        matches_transitively(ctx, &target, depth.saturating_add(1))
     })
 }
 
@@ -151,11 +108,15 @@ fn read_file_cached(abs_path: &Path, cache: &mut HashMap<PathBuf, String>) -> St
     content
 }
 
-fn import_specs_cached(abs_path: &Path, cache: &mut HashMap<PathBuf, Vec<String>>) -> Vec<String> {
+fn import_specs_cached(
+    abs_path: &Path,
+    language: DependencyLanguageId,
+    cache: &mut HashMap<PathBuf, Vec<String>>,
+) -> Vec<String> {
     if let Some(cached) = cache.get(abs_path) {
         return cached.clone();
     }
-    let specs = extract_import_specs(abs_path);
+    let specs = extract_import_specs(language, abs_path);
     cache.insert(abs_path.to_path_buf(), specs.clone());
     specs
 }
@@ -164,14 +125,21 @@ fn resolve_spec_cached(
     from_file: &Path,
     spec: &str,
     repo_root: &Path,
-    cache: &mut HashMap<(PathBuf, String), Option<PathBuf>>,
+    language: DependencyLanguageId,
+    cache: &mut ResolutionCache,
 ) -> Option<PathBuf> {
     let key = (from_file.to_path_buf(), spec.to_string());
-    if let Some(cached) = cache.get(&key) {
+    if let Some(cached) = cache.memo.get(&key) {
         return cached.clone();
     }
-    let resolved = resolve_import_with_root(from_file, spec, repo_root);
-    cache.insert(key, resolved.clone());
+    let resolved = resolve_import_with_root_cached(
+        language,
+        from_file,
+        spec,
+        repo_root,
+        &mut cache.dependency_cache,
+    );
+    cache.memo.insert(key, resolved.clone());
     resolved
 }
 

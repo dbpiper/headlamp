@@ -1,14 +1,9 @@
 use std::io::Write;
 
 use tempfile::NamedTempFile;
-use which::which;
 
 #[test]
 fn selection_extract_import_specs_from_file() {
-    if which("rg").is_err() {
-        return;
-    }
-
     let mut temp_file = NamedTempFile::new().unwrap();
     writeln!(
         temp_file,

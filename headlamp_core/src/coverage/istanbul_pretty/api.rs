@@ -72,8 +72,9 @@ fn render_pretty_output(
         .into_iter()
         .filter(|file| {
             let rel = file.rel_path.replace('\\', "/");
-            let included = include_set.as_ref().map_or(true, |s| s.is_match(&rel));
-            let excluded = exclude_set.as_ref().map_or(false, |s| s.is_match(&rel));
+            let included = include_set.as_ref().is_none()
+                || include_set.as_ref().is_some_and(|s| s.is_match(&rel));
+            let excluded = exclude_set.as_ref().is_some_and(|s| s.is_match(&rel));
             included && !excluded
         })
         .collect::<Vec<_>>();
@@ -101,14 +102,14 @@ fn render_pretty_output(
     out.push(render_istanbul_text_report(&files_for_text, istanbul_width));
     out.push(String::new());
     out.push(render_istanbul_text_summary(&files_for_text));
-    if let Some(detail) = coverage_detail {
-        if detail != crate::args::CoverageDetail::Auto {
-            let detail_blocks = render_detail_blocks(&files_for_text, print_opts);
-            if !detail_blocks.is_empty() {
-                out.push(detail_blocks);
-            }
+    if let Some(detail) = coverage_detail
+        && detail != crate::args::CoverageDetail::Auto
+    {
+        let detail_blocks = render_detail_blocks(&files_for_text, print_opts);
+        if !detail_blocks.is_empty() {
+            out.push(detail_blocks);
         }
-    }
+    };
 
     out.join("\n").trim_end().to_string()
 }

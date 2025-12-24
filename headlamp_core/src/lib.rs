@@ -3,6 +3,7 @@ pub mod config;
 pub mod coverage;
 pub mod error;
 pub mod format;
+pub mod project;
 pub mod selection;
 pub mod test_model;
 

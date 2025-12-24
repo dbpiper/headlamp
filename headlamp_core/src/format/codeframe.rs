@@ -131,13 +131,12 @@ pub fn build_code_frame_section(
         out.push(String::new());
         return out;
     }
-    if show_stacks {
-        if let Some(loc) = synth_loc {
-            if Path::new(&loc.file).exists() {
-                out.extend(render_source_code_frame(&loc.file, loc.line, loc.column, 3));
-                out.push(String::new());
-            }
-        }
-    }
+    if show_stacks
+        && let Some(loc) = synth_loc
+        && Path::new(&loc.file).exists()
+    {
+        out.extend(render_source_code_frame(&loc.file, loc.line, loc.column, 3));
+        out.push(String::new());
+    };
     out
 }

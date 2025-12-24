@@ -40,10 +40,7 @@ pub fn render_http_card(
     let has_abort = per_test_http
         .iter()
         .any(|evt| evt.kind.as_deref() == Some("abort"));
-    let transport = is_transport_error(corresponding.message.as_deref())
-        .then_some(true)
-        .unwrap_or(false)
-        || has_abort;
+    let transport = is_transport_error(corresponding.message.as_deref()) || has_abort;
     let http_likely = is_http_relevant(
         rel_path,
         assertion_full_name,
@@ -60,15 +57,14 @@ pub fn render_http_card(
     }
 
     let mut corr = corresponding.clone();
-    if !is_http_status_number(corr.expected_number) && !is_http_status_number(corr.received_number)
-    {
-        if let Some((expected_number, received_number)) =
+    if !is_http_status_number(corr.expected_number)
+        && !is_http_status_number(corr.received_number)
+        && let Some((expected_number, received_number)) =
             infer_http_numbers_from_text(assertion_failure_text)
-        {
-            corr.expected_number = expected_number.or(corr.expected_number);
-            corr.received_number = received_number.or(corr.received_number);
-        }
-    }
+    {
+        corr.expected_number = expected_number.or(corr.expected_number);
+        corr.received_number = received_number.or(corr.received_number);
+    };
 
     let relevant = pick_relevant_http(
         &corr,
@@ -379,7 +375,7 @@ fn summarize_url(method: Option<&str>, url: Option<&str>, route: Option<&str>) -
 }
 
 fn is_http_status_number(value: Option<i64>) -> bool {
-    value.is_some_and(|n| n >= 100 && n <= 599)
+    value.is_some_and(|n| (100..=599).contains(&n))
 }
 
 fn infer_http_numbers_from_text(text: &str) -> Option<(Option<i64>, Option<i64>)> {

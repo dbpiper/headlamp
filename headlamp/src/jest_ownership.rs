@@ -80,7 +80,7 @@ pub fn filter_candidates_for_project(
                     || abs.ends_with(rel)
                     || rel
                         .split('/')
-                        .last()
+                        .next_back()
                         .map(|base| abs.ends_with(&format!("/{base}")) || abs.ends_with(base))
                         .unwrap_or(false)
             })

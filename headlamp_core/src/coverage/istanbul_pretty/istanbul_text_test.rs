@@ -8,7 +8,7 @@ use super::model::FullFileCoverage;
 fn make_file_with_long_uncovered_list() -> FullFileCoverage {
     let line_hits = (1u32..=220)
         .map(|line_number| {
-            let hits = (line_number % 2 == 1).then_some(0).unwrap_or(1);
+            let hits = if line_number % 2 == 1 { 0 } else { 1 };
             (line_number, hits)
         })
         .collect::<BTreeMap<_, _>>();

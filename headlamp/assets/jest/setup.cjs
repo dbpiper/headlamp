@@ -40,10 +40,7 @@
           ) {
             continue;
           }
-          if (
-            file.includes("/tests/") ||
-            /\.((test|spec)\.[tj]sx?)$/i.test(file)
-          ) {
+          if (!file.includes("/node_modules/")) {
             return file;
           }
         }
