@@ -66,6 +66,7 @@ exit 0\n",
         &repo_root,
         &jest_bin,
         &args,
+        false,
         Duration::from_secs(1),
     )
     .unwrap();
@@ -73,6 +74,7 @@ exit 0\n",
         &repo_root,
         &jest_bin,
         &args,
+        false,
         Duration::from_secs(1),
     )
     .unwrap();
@@ -81,4 +83,56 @@ exit 0\n",
     let invocations = std::fs::read_to_string(&counter_file).unwrap_or_default();
     let count = invocations.lines().filter(|l| !l.trim().is_empty()).count();
     assert_eq!(count, 1);
+}
+
+#[test]
+fn discover_jest_list_tests_no_cache_reruns_each_time() {
+    #[cfg(not(unix))]
+    {
+        return;
+    }
+
+    let repo_root = mk_temp_dir("nocache_reruns_each_time");
+    write_file(
+        &repo_root.join("jest.config.js"),
+        "module.exports = { testMatch: ['**/tests/**/*.test.js'] };\n",
+    );
+    write_file(&repo_root.join("tests/a.test.js"), "test('a', () => {});\n");
+
+    let jest_bin = repo_root.join("node_modules").join(".bin").join("jest");
+    let counter_file = repo_root.join("jest_invocations.txt");
+    let test_file_abs = repo_root.join("tests/a.test.js");
+    write_executable(
+        &jest_bin,
+        &format!(
+            "#!/bin/sh\n\
+echo 1 >> \"{}\"\n\
+echo \"{}\"\n\
+exit 0\n",
+            counter_file.to_string_lossy(),
+            test_file_abs.to_string_lossy()
+        ),
+    );
+
+    let args: Vec<String> = vec!["--config".to_string(), "jest.config.js".to_string()];
+    let _ = discover_jest_list_tests_cached_with_timeout(
+        &repo_root,
+        &jest_bin,
+        &args,
+        true,
+        Duration::from_secs(1),
+    )
+    .unwrap();
+    let _ = discover_jest_list_tests_cached_with_timeout(
+        &repo_root,
+        &jest_bin,
+        &args,
+        true,
+        Duration::from_secs(1),
+    )
+    .unwrap();
+
+    let invocations = std::fs::read_to_string(&counter_file).unwrap_or_default();
+    let count = invocations.lines().filter(|l| !l.trim().is_empty()).count();
+    assert_eq!(count, 2);
 }

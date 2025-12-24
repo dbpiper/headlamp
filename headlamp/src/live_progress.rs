@@ -13,8 +13,8 @@ pub struct LiveProgress {
     ticker: Option<JoinHandle<()>>,
 }
 
-pub fn should_enable_live_progress(stdout_is_tty: bool) -> bool {
-    stdout_is_tty
+pub fn should_enable_live_progress(stdout_is_tty: bool, ci: bool) -> bool {
+    stdout_is_tty && !ci && std::env::var("CI").ok().is_none()
 }
 
 pub fn render_run_frame(

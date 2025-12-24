@@ -11,6 +11,11 @@ fn live_progress_render_run_frame_includes_clear_and_run_prefix() {
 
 #[test]
 fn live_progress_enable_gate_follows_tty_flag() {
-    assert!(!should_enable_live_progress(false));
-    assert!(should_enable_live_progress(true));
+    assert!(!should_enable_live_progress(false, false));
+    assert!(should_enable_live_progress(true, false));
+}
+
+#[test]
+fn live_progress_disabled_in_ci_mode() {
+    assert!(!should_enable_live_progress(true, true));
 }

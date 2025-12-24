@@ -126,8 +126,22 @@ pub fn find_related_tests_fast(
 pub fn cached_related(
     repo_root: &Path,
     selection_key: &str,
+    no_cache: bool,
     compute: impl FnOnce() -> Result<Vec<String>, RunError>,
 ) -> Result<Vec<String>, RunError> {
+    if no_cache {
+        let computed = compute()?;
+        let mut computed_dedup = {
+            let mut uniq = IndexSet::<String>::new();
+            for p in computed {
+                uniq.insert(p);
+            }
+            uniq.into_iter().collect::<Vec<_>>()
+        };
+        sort_paths_for_ts_parity(&mut computed_dedup);
+        computed_dedup.dedup();
+        return Ok(computed_dedup);
+    }
     let cache_root = default_cache_root();
     let repo_key = sha1_12(&repo_root.to_string_lossy());
     let dir = cache_root.join(repo_key);

@@ -118,6 +118,52 @@ struct HeadlampCli {
     )]
     sequential: bool,
 
+    #[arg(
+        long = "watch",
+        default_value_t = false,
+        num_args = 0..=1,
+        default_missing_value = "true",
+        value_parser = clap::value_parser!(bool)
+    )]
+    watch: bool,
+
+    #[arg(
+        long = "watchAll",
+        default_value_t = false,
+        num_args = 0..=1,
+        default_missing_value = "true",
+        value_parser = clap::value_parser!(bool)
+    )]
+    watch_all: bool,
+
+    #[arg(
+        long = "ci",
+        default_value_t = false,
+        num_args = 0..=1,
+        default_missing_value = "true",
+        value_parser = clap::value_parser!(bool)
+    )]
+    ci: bool,
+
+    #[arg(
+        long = "verbose",
+        default_value_t = false,
+        num_args = 0..=1,
+        default_missing_value = "true",
+        value_parser = clap::value_parser!(bool)
+    )]
+    verbose: bool,
+
+    #[arg(
+        long = "no-cache",
+        alias = "noCache",
+        default_value_t = false,
+        num_args = 0..=1,
+        default_missing_value = "true",
+        value_parser = clap::value_parser!(bool)
+    )]
+    no_cache: bool,
+
     #[arg(long = "bootstrapCommand")]
     bootstrap_command: Option<String>,
 
@@ -142,6 +188,11 @@ pub struct ParsedArgs {
     pub runner_args: Vec<String>,
     pub selection_paths: Vec<String>,
     pub selection_specified: bool,
+
+    pub watch: bool,
+    pub ci: bool,
+    pub verbose: bool,
+    pub no_cache: bool,
 
     pub collect_coverage: bool,
     pub coverage_ui: CoverageUi,
@@ -204,6 +255,10 @@ pub fn derive_args(cfg_tokens: &[String], argv: &[String], is_tty: bool) -> Pars
     let only_failures = parsed_cli.only_failures;
     let show_logs = parsed_cli.show_logs;
     let sequential = parsed_cli.sequential;
+    let ci = parsed_cli.ci;
+    let watch = !ci && (parsed_cli.watch || parsed_cli.watch_all);
+    let verbose = parsed_cli.verbose;
+    let no_cache = parsed_cli.no_cache;
     let bootstrap_command: Option<String> = parsed_cli.bootstrap_command;
 
     let coverage_ui = parsed_cli
@@ -376,6 +431,10 @@ pub fn derive_args(cfg_tokens: &[String], argv: &[String], is_tty: bool) -> Pars
             .into_iter()
             .collect::<Vec<_>>(),
         selection_specified,
+        watch,
+        ci,
+        verbose,
+        no_cache,
         collect_coverage,
         coverage_ui,
         coverage_abort_on_failure,
@@ -412,6 +471,18 @@ pub fn config_tokens(cfg: &HeadlampConfig, argv: &[String]) -> Vec<String> {
     }
     if cfg.sequential == Some(true) {
         tokens.push("--sequential".to_string());
+    }
+    if cfg.watch == Some(true) {
+        tokens.push("--watch".to_string());
+    }
+    if cfg.ci == Some(true) {
+        tokens.push("--ci".to_string());
+    }
+    if cfg.verbose == Some(true) {
+        tokens.push("--verbose".to_string());
+    }
+    if cfg.no_cache == Some(true) {
+        tokens.push("--no-cache".to_string());
     }
     if let Some(args) = cfg.jest_args.as_ref().filter(|a| !a.is_empty()) {
         tokens.extend(args.iter().cloned());
@@ -570,6 +641,12 @@ fn split_headlamp_tokens(tokens: &[String]) -> (Vec<String>, Vec<String>) {
             "--onlyFailures",
             "--showLogs",
             "--sequential",
+            "--watch",
+            "--watchAll",
+            "--ci",
+            "--verbose",
+            "--no-cache",
+            "--noCache",
             "--bootstrapCommand",
             "--changed",
             "--changed.depth",
@@ -607,6 +684,12 @@ fn split_headlamp_tokens(tokens: &[String]) -> (Vec<String>, Vec<String>) {
             "--onlyFailures",
             "--showLogs",
             "--sequential",
+            "--watch",
+            "--watchAll",
+            "--ci",
+            "--verbose",
+            "--no-cache",
+            "--noCache",
             "--coverage.showCode",
             "--coverage.pageFit",
         ]
@@ -627,6 +710,10 @@ fn split_headlamp_tokens(tokens: &[String]) -> (Vec<String>, Vec<String>) {
     let mut i = 0usize;
     while i < tokens.len() {
         let tok = tokens[i].as_str();
+        if tok == "--" {
+            pass.extend(tokens[i..].iter().cloned());
+            break;
+        }
         if is_headlamp(tok) {
             hl.push(tokens[i].clone());
             if (takes_value(tok) || is_bool_flag(tok))

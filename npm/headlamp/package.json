@@ -1,6 +1,6 @@
 {
   "name": "headlamp",
-  "version": "0.1.34",
+  "version": "0.1.35",
   "description": "Coverage-first, runner-agnostic test UX CLI for Jest (Rust binary distribution)",
   "license": "MIT",
   "type": "commonjs",

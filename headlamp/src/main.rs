@@ -57,35 +57,65 @@ fn main() {
         &argv,
         headlamp_core::format::terminal::is_output_terminal(),
     );
-    let code = match runner {
-        Runner::Jest | Runner::Vitest => match headlamp::jest::run_jest(&repo_root, &parsed) {
-            Ok(code) => code,
-            Err(err) => {
-                eprintln!("{err}");
-                1
-            }
-        },
-        Runner::Pytest => match headlamp::pytest::run_pytest(&repo_root, &parsed) {
-            Ok(code) => code,
-            Err(err) => {
-                eprintln!("{err}");
-                1
-            }
-        },
-        Runner::CargoTest => match headlamp::cargo::run_cargo_test(&repo_root, &parsed) {
-            Ok(code) => code,
-            Err(err) => {
-                eprintln!("{err}");
-                1
-            }
-        },
-        Runner::CargoNextest => match headlamp::cargo::run_cargo_nextest(&repo_root, &parsed) {
-            Ok(code) => code,
-            Err(err) => {
-                eprintln!("{err}");
-                1
-            }
-        },
+    if parsed.ci {
+        unsafe { std::env::set_var("CI", "1") };
+    }
+    if parsed.watch && parsed.ci {
+        eprintln!("headlamp: --watch is not allowed with --ci");
+        std::process::exit(2);
+    }
+    if parsed.verbose {
+        eprintln!(
+            "headlamp: runner={runner:?} repo_root={} watch={} ci={} no_cache={}",
+            repo_root.to_string_lossy(),
+            parsed.watch,
+            parsed.ci,
+            parsed.no_cache
+        );
+    }
+
+    let mut run_once = || -> i32 {
+        match runner {
+            Runner::Jest | Runner::Vitest => match headlamp::jest::run_jest(&repo_root, &parsed) {
+                Ok(code) => code,
+                Err(err) => {
+                    eprintln!("{err}");
+                    1
+                }
+            },
+            Runner::Pytest => match headlamp::pytest::run_pytest(&repo_root, &parsed) {
+                Ok(code) => code,
+                Err(err) => {
+                    eprintln!("{err}");
+                    1
+                }
+            },
+            Runner::CargoTest => match headlamp::cargo::run_cargo_test(&repo_root, &parsed) {
+                Ok(code) => code,
+                Err(err) => {
+                    eprintln!("{err}");
+                    1
+                }
+            },
+            Runner::CargoNextest => match headlamp::cargo::run_cargo_nextest(&repo_root, &parsed) {
+                Ok(code) => code,
+                Err(err) => {
+                    eprintln!("{err}");
+                    1
+                }
+            },
+        }
+    };
+
+    let code = if parsed.watch {
+        headlamp::watch::run_polling_watch_loop(
+            &repo_root,
+            std::time::Duration::from_millis(800),
+            parsed.verbose,
+            &mut run_once,
+        )
+    } else {
+        run_once()
     };
     std::process::exit(code);
 }
@@ -137,6 +167,10 @@ Flags:
   --coverage                     Enable coverage collection (runner-specific)
   --coverage-ui=jest|both         Coverage output mode
   --coverage.abortOnFailure       Exit on test failures without printing coverage
+  --watch                        Re-run on file changes (runner-agnostic polling watch)
+  --ci                           CI mode (disable interactive UI and set CI=1)
+  --verbose                      More Headlamp diagnostics
+  --no-cache                     Disable Headlamp caches (and runner caches when possible)
   --onlyFailures                 Show only failing tests during live output
   --showLogs                     Show full logs under failing tests
   --sequential                   Serialize execution (maps to jest --runInBand)

@@ -71,6 +71,11 @@ pub struct HeadlampConfig {
     pub vitest_args: Option<Vec<String>>,
     pub sequential: Option<bool>,
 
+    pub watch: Option<bool>,
+    pub ci: Option<bool>,
+    pub verbose: Option<bool>,
+    pub no_cache: Option<bool>,
+
     pub coverage: Option<CoverageConfig>,
     pub coverage_ui: Option<CoverageUi>,
     pub coverage_abort_on_failure: Option<bool>,

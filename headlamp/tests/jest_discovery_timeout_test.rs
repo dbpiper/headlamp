@@ -95,6 +95,7 @@ fn jest_list_tests_timeout_falls_back_to_rg_when_related_paths_exist() {
         &[],
         &related_production_paths_abs,
         &[],
+        false,
         Duration::from_millis(50),
     )
     .unwrap();

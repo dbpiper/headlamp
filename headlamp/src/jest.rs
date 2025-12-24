@@ -132,7 +132,7 @@ pub fn run_jest(repo_root: &Path, args: &ParsedArgs) -> Result<i32, RunError> {
         selection_key
             .as_ref()
             .map(|key| {
-                cached_related(repo_root, key, || {
+                cached_related(repo_root, key, args.no_cache, || {
                     find_related_tests_fast(
                         repo_root,
                         &production_seeds,
@@ -160,6 +160,7 @@ pub fn run_jest(repo_root: &Path, args: &ParsedArgs) -> Result<i32, RunError> {
                                     production_seeds_abs: &production_seeds,
                                     candidate_tests_abs: augmented,
                                     max_depth: max_depth_from_args(args.changed_depth),
+                                    no_cache: args.no_cache,
                                 },
                             );
                         }
@@ -179,6 +180,7 @@ pub fn run_jest(repo_root: &Path, args: &ParsedArgs) -> Result<i32, RunError> {
                                     production_seeds_abs: &production_seeds,
                                     candidate_tests_abs: vec![],
                                     max_depth: max_depth_from_args(args.changed_depth),
+                                    no_cache: args.no_cache,
                                 },
                             );
                         }
@@ -200,8 +202,12 @@ pub fn run_jest(repo_root: &Path, args: &ParsedArgs) -> Result<i32, RunError> {
             )
     };
 
-    let directness_rank_base =
-        compute_directness_rank_base(repo_root, &selection_paths_abs, &args.exclude_globs)?;
+    let directness_rank_base = compute_directness_rank_base(
+        repo_root,
+        &selection_paths_abs,
+        &args.exclude_globs,
+        args.no_cache,
+    )?;
     let directness_rank = augment_rank_with_priority_paths(
         &directness_rank_base,
         &related_selection.selected_test_paths_abs,
@@ -237,8 +243,10 @@ pub fn run_jest(repo_root: &Path, args: &ParsedArgs) -> Result<i32, RunError> {
             .collect::<Vec<_>>()
     };
 
-    let live_progress_enabled =
-        should_enable_live_progress(headlamp_core::format::terminal::is_output_terminal());
+    let live_progress_enabled = should_enable_live_progress(
+        headlamp_core::format::terminal::is_output_terminal(),
+        args.ci,
+    );
 
     #[derive(Debug)]
     struct ProjectRunOutput {
@@ -266,6 +274,7 @@ pub fn run_jest(repo_root: &Path, args: &ParsedArgs) -> Result<i32, RunError> {
                     cfg_path.parent().unwrap_or(repo_root),
                     &jest_bin,
                     &list_args,
+                    args.no_cache,
                     JEST_LIST_TESTS_TIMEOUT,
                 )?
             }
@@ -312,6 +321,9 @@ pub fn run_jest(repo_root: &Path, args: &ParsedArgs) -> Result<i32, RunError> {
         cmd_args.extend(["--config".to_string(), cfg_token.clone()]);
         cmd_args.extend(args.runner_args.iter().cloned());
         ensure_watchman_disabled_by_default(&mut cmd_args);
+        if args.no_cache && !cmd_args.iter().any(|t| t == "--no-cache") {
+            cmd_args.push("--no-cache".to_string());
+        }
         if args.sequential {
             cmd_args.push("--runInBand".to_string());
         }
@@ -561,6 +573,7 @@ struct RefineByTransitiveSeedScanArgs<'a> {
     production_seeds_abs: &'a [String],
     candidate_tests_abs: Vec<String>,
     max_depth: headlamp_core::selection::transitive_seed_refine::MaxDepth,
+    no_cache: bool,
 }
 
 fn refine_by_transitive_seed_scan(
@@ -575,6 +588,7 @@ fn refine_by_transitive_seed_scan(
         production_seeds_abs,
         candidate_tests_abs,
         max_depth,
+        no_cache,
     } = args;
     if !candidate_tests_abs.is_empty() {
         return headlamp_core::selection::related_tests::RelatedTestSelection {
@@ -593,6 +607,7 @@ fn refine_by_transitive_seed_scan(
                 cfg_path.parent().unwrap_or(repo_root),
                 jest_bin,
                 &list_args,
+                no_cache,
                 JEST_LIST_TESTS_TIMEOUT,
             )
             .ok()
@@ -752,6 +767,7 @@ fn compute_directness_rank_base(
     repo_root: &Path,
     selection_paths_abs: &[String],
     exclude_globs: &[String],
+    no_cache: bool,
 ) -> Result<BTreeMap<String, i64>, RunError> {
     let production_seeds = selection_paths_abs
         .iter()
@@ -776,7 +792,7 @@ fn compute_directness_rank_base(
     selection_key_parts.sort();
     let selection_key = selection_key_parts.join("|");
 
-    let related = cached_related(repo_root, &selection_key, || {
+    let related = cached_related(repo_root, &selection_key, no_cache, || {
         find_related_tests_fast(
             repo_root,
             &production_seeds,

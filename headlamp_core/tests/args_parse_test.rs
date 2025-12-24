@@ -192,3 +192,55 @@ fn derive_args_does_not_consume_selection_path_as_boolean_value() {
     assert!(parsed.selection_specified);
     assert!(parsed.selection_paths.iter().any(|p| p == "src/a.js"));
 }
+
+#[test]
+fn derive_args_parses_runner_agnostic_flags_and_does_not_forward_them() {
+    let cfg = HeadlampConfig::default();
+    let argv = vec![
+        "--watch".to_string(),
+        "--ci".to_string(),
+        "--verbose".to_string(),
+        "--no-cache".to_string(),
+        "-t".to_string(),
+        "UserCard".to_string(),
+    ];
+    let parsed = derive_args(&config_tokens(&cfg, &argv), &argv, true);
+    assert!(!parsed.watch);
+    assert!(parsed.ci);
+    assert!(parsed.verbose);
+    assert!(parsed.no_cache);
+    assert!(parsed.runner_args.iter().any(|t| t == "-t"));
+    assert!(!parsed.runner_args.iter().any(|t| t == "--watch"));
+    assert!(!parsed.runner_args.iter().any(|t| t == "--ci"));
+    assert!(!parsed.runner_args.iter().any(|t| t == "--verbose"));
+    assert!(!parsed.runner_args.iter().any(|t| t == "--no-cache"));
+}
+
+#[test]
+fn config_tokens_apply_runner_agnostic_flags() {
+    let cfg = HeadlampConfig {
+        ci: Some(true),
+        verbose: Some(true),
+        no_cache: Some(true),
+        ..Default::default()
+    };
+    let argv = vec![];
+    let cfg_tokens = config_tokens(&cfg, &argv);
+    assert!(cfg_tokens.iter().any(|t| t == "--ci"));
+    assert!(cfg_tokens.iter().any(|t| t == "--verbose"));
+    assert!(cfg_tokens.iter().any(|t| t == "--no-cache"));
+}
+
+#[test]
+fn double_dash_separator_forces_passthrough_even_for_headlamp_named_flags() {
+    let cfg = HeadlampConfig::default();
+    let argv = vec![
+        "--verbose".to_string(),
+        "--".to_string(),
+        "--verbose".to_string(),
+    ];
+    let parsed = derive_args(&config_tokens(&cfg, &argv), &argv, true);
+    assert!(parsed.verbose);
+    assert!(parsed.runner_args.iter().any(|t| t == "--"));
+    assert!(parsed.runner_args.iter().any(|t| t == "--verbose"));
+}

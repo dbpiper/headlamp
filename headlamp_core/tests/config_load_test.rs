@@ -79,6 +79,9 @@ fn config_loads_js_when_node_is_available() {
 module.exports = {
   sequential: true,
   coverageUi: 'jest',
+  ci: true,
+  verbose: true,
+  noCache: true,
 };
 "#,
     );
@@ -88,4 +91,7 @@ module.exports = {
         cfg.coverage_ui.map(|v| format!("{v:?}")),
         Some("Jest".to_string())
     );
+    assert_eq!(cfg.ci, Some(true));
+    assert_eq!(cfg.verbose, Some(true));
+    assert_eq!(cfg.no_cache, Some(true));
 }

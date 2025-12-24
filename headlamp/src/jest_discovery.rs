@@ -116,8 +116,12 @@ pub fn discover_jest_list_tests_cached_with_timeout(
     cwd: &Path,
     jest_bin: &Path,
     jest_args: &[String],
+    no_cache: bool,
     timeout: Duration,
 ) -> Result<Vec<String>, RunError> {
+    if no_cache {
+        return discover_jest_list_tests_with_timeout(cwd, jest_bin, jest_args, timeout);
+    }
     let cache_root = crate::fast_related::default_cache_root();
     let repo_key = sha1_12(&dunce::canonicalize(cwd).unwrap_or_else(|_| cwd.to_path_buf()));
     let dir = cache_root.join(repo_key);
@@ -172,6 +176,7 @@ pub fn discover_jest_list_tests_resilient_with_timeout(
     jest_args: &[String],
     related_production_paths_abs: &[String],
     exclude_globs: &[String],
+    no_cache: bool,
     timeout: Duration,
 ) -> Result<Vec<String>, RunError> {
     match discover_jest_list_tests_with_timeout(repo_root, jest_bin, jest_args, timeout) {
@@ -190,7 +195,7 @@ pub fn discover_jest_list_tests_resilient_with_timeout(
                 .collect::<Vec<_>>();
             key_parts.sort();
             let selection_key = key_parts.join("|");
-            cached_related(repo_root, &selection_key, || {
+            cached_related(repo_root, &selection_key, no_cache, || {
                 find_related_tests_fast(
                     repo_root,
                     related_production_paths_abs,
