@@ -5,6 +5,7 @@ use duct::cmd as duct_cmd;
 use serde::Deserialize;
 use which::which;
 
+use crate::config_ts::load_headlamp_config_ts_oxc;
 use crate::error::HeadlampError;
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Deserialize)]
@@ -150,7 +151,8 @@ pub fn load_headlamp_config_from_path(path: &Path) -> Result<HeadlampConfig, Hea
     match ext.as_str() {
         "json" | "json5" | "jsonc" => load_json_config(path),
         "yaml" | "yml" => load_yaml_config(path),
-        "ts" | "js" | "mjs" | "cjs" => load_js_config(path),
+        "ts" => load_ts_config_oxc(path),
+        "js" | "mjs" | "cjs" => load_js_config(path),
         _ => Ok(HeadlampConfig::default()),
     }
 }
@@ -237,6 +239,19 @@ process.stdout.write(JSON.stringify(cfg ?? {}));
     serde_json::from_str::<HeadlampConfig>(&stdout).map_err(|err| HeadlampError::ConfigParse {
         path: path.to_path_buf(),
         message: err.to_string(),
+    })
+}
+
+fn load_ts_config_oxc(path: &Path) -> Result<HeadlampConfig, HeadlampError> {
+    let value = load_headlamp_config_ts_oxc(path)?;
+    serde_json::from_value::<HeadlampConfig>(value.clone()).map_err(|err| {
+        HeadlampError::ConfigParse {
+            path: path.to_path_buf(),
+            message: format!(
+                "{err} (ts_config_json={})",
+                serde_json::to_string(&value).unwrap_or_default()
+            ),
+        }
     })
 }
 
