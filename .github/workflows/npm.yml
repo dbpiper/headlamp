@@ -97,18 +97,9 @@ jobs:
           $src = "target\${{ matrix.cargo_target }}\release\${{ matrix.binary_name }}"
           $out = "dist\${{ matrix.target_label }}-${{ matrix.binary_name }}.gz"
           New-Item -ItemType Directory -Force -Path dist | Out-Null
-          python - <<'PY'
-          import gzip
-          import os
-          import shutil
-          src = os.environ["SRC"]
-          out = os.environ["OUT"]
-          with open(src, "rb") as input_stream, gzip.open(out, "wb", compresslevel=9) as output_stream:
-              shutil.copyfileobj(input_stream, output_stream)
-          PY
-        env:
-          SRC: target/${{ matrix.cargo_target }}\release\${{ matrix.binary_name }}
-          OUT: dist\${{ matrix.target_label }}-${{ matrix.binary_name }}.gz
+          $env:SRC = $src
+          $env:OUT = $out
+          python -c "import gzip, os, shutil; src=os.environ['SRC']; out=os.environ['OUT']; f_in=open(src,'rb'); f_out=gzip.open(out,'wb',compresslevel=9); shutil.copyfileobj(f_in,f_out); f_out.close(); f_in.close()"
 
       - uses: actions/upload-artifact@v4
         with:
