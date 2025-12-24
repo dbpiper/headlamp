@@ -13,4 +13,5 @@ pub mod pytest;
 pub mod pytest_select;
 pub mod run;
 mod seed_match;
+pub mod streaming;
 pub mod watch;

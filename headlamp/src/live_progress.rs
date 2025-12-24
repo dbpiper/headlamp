@@ -98,6 +98,29 @@ impl LiveProgress {
         self.done_units.fetch_add(delta, Ordering::SeqCst);
     }
 
+    pub fn println_stdout(&self, line: &str) {
+        if let Ok(_guard) = self.write_lock.lock() {
+            if self.enabled {
+                let _ = std::io::stdout().write_all("\u{1b}[2K\r".as_bytes());
+            }
+            let _ = std::io::stdout().write_all(line.as_bytes());
+            let _ = std::io::stdout().write_all("\n".as_bytes());
+            let _ = std::io::stdout().flush();
+        }
+    }
+
+    pub fn eprintln_stderr(&self, line: &str) {
+        if let Ok(_guard) = self.write_lock.lock() {
+            if self.enabled {
+                let _ = std::io::stdout().write_all("\u{1b}[2K\r".as_bytes());
+                let _ = std::io::stdout().flush();
+            }
+            let _ = std::io::stderr().write_all(line.as_bytes());
+            let _ = std::io::stderr().write_all("\n".as_bytes());
+            let _ = std::io::stderr().flush();
+        }
+    }
+
     pub fn finish(mut self) {
         if !self.enabled {
             return;

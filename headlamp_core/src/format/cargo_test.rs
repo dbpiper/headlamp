@@ -5,6 +5,21 @@ use crate::test_model::TestConsoleEntry;
 use crate::test_model::{TestCaseResult, TestRunAggregated, TestRunModel, TestSuiteResult};
 
 #[derive(Debug, Clone)]
+pub enum CargoTestStreamEvent {
+    SuiteStarted { suite_path: String },
+    TestFinished {
+        suite_path: String,
+        test_name: String,
+        status: String,
+    },
+    OutputLine {
+        suite_path: String,
+        test_name: Option<String>,
+        line: String,
+    },
+}
+
+#[derive(Debug, Clone)]
 enum ParsedTestLine {
     Completed {
         name: String,
@@ -22,40 +37,129 @@ struct SuiteBlock {
     lines: Vec<String>,
 }
 
-pub fn parse_cargo_test_output(repo_root: &Path, combined_output: &str) -> Option<TestRunModel> {
-    let suite_blocks = split_suite_blocks(combined_output);
-    let suites = suite_blocks
-        .into_iter()
-        .map(|block| parse_suite_block(repo_root, &block))
-        .filter(|suite| !suite.test_results.is_empty())
-        .collect::<Vec<_>>();
-    if suites.is_empty() {
-        return None;
-    }
-    Some(build_test_run_model(suites))
+#[derive(Debug, Clone)]
+struct SuiteState {
+    source_path: String,
+    lines: Vec<String>,
+    active_output_test_name: Option<String>,
 }
 
-fn split_suite_blocks(combined_output: &str) -> Vec<SuiteBlock> {
-    let mut blocks: Vec<SuiteBlock> = vec![];
-    let mut current: Option<SuiteBlock> = None;
+#[derive(Debug, Clone)]
+pub struct CargoTestStreamParser {
+    repo_root: PathBuf,
+    suites: Vec<TestSuiteResult>,
+    current: Option<SuiteState>,
+}
 
-    for line in combined_output.lines() {
-        if let Some(source_path) = parse_suite_header_source_path(line) {
-            if let Some(prev) = current.take() {
-                blocks.push(prev);
-            }
-            current = Some(SuiteBlock {
-                source_path,
-                lines: vec![],
-            });
-            continue;
-        }
-        if let Some(block) = current.as_mut() {
-            block.lines.push(line.to_string());
+impl CargoTestStreamParser {
+    pub fn new(repo_root: &Path) -> Self {
+        Self {
+            repo_root: repo_root.to_path_buf(),
+            suites: vec![],
+            current: None,
         }
     }
-    current.into_iter().for_each(|b| blocks.push(b));
-    blocks
+
+    pub fn push_line(&mut self, line: &str) -> Vec<CargoTestStreamEvent> {
+        let mut events: Vec<CargoTestStreamEvent> = vec![];
+        if let Some(source_path) = parse_suite_header_source_path(line) {
+            self.flush_current_suite();
+            self.current = Some(SuiteState {
+                source_path: source_path.clone(),
+                lines: vec![],
+                active_output_test_name: None,
+            });
+            let abs_suite_path = absolutize_repo_relative(&self.repo_root, &source_path);
+            events.push(CargoTestStreamEvent::SuiteStarted {
+                suite_path: abs_suite_path,
+            });
+            return events;
+        }
+
+        let Some(state) = self.current.as_mut() else {
+            return events;
+        };
+        state.lines.push(line.to_string());
+
+        if let Some(parsed) = parse_test_line_extended(line) {
+            match parsed {
+                ParsedTestLine::Completed { name, status } => {
+                    state.active_output_test_name = None;
+                    let abs_suite_path =
+                        absolutize_repo_relative(&self.repo_root, &state.source_path);
+                    events.push(CargoTestStreamEvent::TestFinished {
+                        suite_path: abs_suite_path,
+                        test_name: name,
+                        status,
+                    });
+                    return events;
+                }
+                ParsedTestLine::Pending {
+                    ..
+                } => {
+                    return events;
+                }
+            }
+        }
+
+        // Best-effort grouping of libtest output blocks:
+        // `---- test_name stdout ----` begins a per-test output section.
+        let trimmed = line.trim();
+        if trimmed.starts_with("---- ") && trimmed.ends_with(" ----") {
+            let name = trimmed
+                .strip_prefix("---- ")
+                .and_then(|s| s.strip_suffix(" ----"))
+                .map(|s| s.trim().to_string());
+            state.active_output_test_name = name.clone();
+            let abs_suite_path = absolutize_repo_relative(&self.repo_root, &state.source_path);
+            events.push(CargoTestStreamEvent::OutputLine {
+                suite_path: abs_suite_path,
+                test_name: name,
+                line: trimmed.to_string(),
+            });
+            return events;
+        }
+
+        if !trimmed.is_empty() {
+            let abs_suite_path = absolutize_repo_relative(&self.repo_root, &state.source_path);
+            events.push(CargoTestStreamEvent::OutputLine {
+                suite_path: abs_suite_path,
+                test_name: state.active_output_test_name.clone(),
+                line: line.to_string(),
+            });
+        }
+
+        events
+    }
+
+    pub fn finalize(mut self) -> Option<TestRunModel> {
+        self.flush_current_suite();
+        (!self.suites.is_empty()).then(|| build_test_run_model(self.suites))
+    }
+
+    fn flush_current_suite(&mut self) {
+        let Some(state) = self.current.take() else {
+            return;
+        };
+        let suite = parse_suite_block(
+            &self.repo_root,
+            &SuiteBlock {
+                source_path: state.source_path,
+                lines: state.lines,
+            },
+        );
+        if !suite.test_results.is_empty() {
+            self.suites.push(suite);
+        }
+    }
+}
+
+pub fn parse_cargo_test_output(repo_root: &Path, combined_output: &str) -> Option<TestRunModel> {
+    let mut parser = CargoTestStreamParser::new(repo_root);
+    combined_output.lines().for_each(|line| {
+        let _ = parser.push_line(line);
+    });
+    parser.finalize()
 }
 
 fn parse_suite_header_source_path(line: &str) -> Option<String> {

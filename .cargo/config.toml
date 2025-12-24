@@ -1,0 +1,2 @@
+[alias]
+test-dev = "run -p headlamp -- --runner=cargo-nextest --changed=branch --coverage --onlyFailures"

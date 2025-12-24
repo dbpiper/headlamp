@@ -4,19 +4,190 @@ use duct::cmd as duct_cmd;
 
 use headlamp_core::args::ParsedArgs;
 use headlamp_core::config::CoverageUi;
+use headlamp_core::config::ChangedMode;
 use headlamp_core::coverage::lcov::{merge_reports, read_lcov_file, resolve_lcov_paths_to_root};
 use headlamp_core::coverage::print::{
     PrintOpts, filter_report, format_compact, format_hotspots, format_summary,
 };
-use headlamp_core::format::cargo_test::parse_cargo_test_output;
+use headlamp_core::format::cargo_test::{
+    CargoTestStreamEvent, CargoTestStreamParser, parse_cargo_test_output,
+};
 use headlamp_core::format::ctx::make_ctx;
-use headlamp_core::format::nextest::parse_nextest_libtest_json_output;
+use headlamp_core::format::nextest::{
+    NextestStreamParser, NextestStreamUpdate, parse_nextest_libtest_json_output,
+};
 use headlamp_core::format::vitest::render_vitest_from_test_model;
-use headlamp_core::test_model::TestSuiteResult;
+use headlamp_core::test_model::{TestRunAggregated, TestRunModel, TestSuiteResult};
 
 use crate::cargo_select::{changed_rust_seeds, filter_rust_tests_by_seeds, list_rust_test_files};
 use crate::git::changed_files;
+use crate::live_progress::{LiveProgress, should_enable_live_progress};
 use crate::run::{RunError, run_bootstrap};
+use crate::streaming::{OutputStream, StreamAction, StreamAdapter, run_streaming_capture_tail};
+
+fn empty_test_run_model_for_exit_code(exit_code: i32) -> TestRunModel {
+    let success = exit_code == 0;
+    let (num_total_test_suites, num_failed_test_suites, num_total_tests, num_failed_tests) =
+        if success { (0, 0, 0, 0) } else { (1, 1, 1, 1) };
+    TestRunModel {
+        start_time: 0,
+        test_results: vec![],
+        aggregated: TestRunAggregated {
+            num_total_test_suites,
+            num_passed_test_suites: num_total_test_suites.saturating_sub(num_failed_test_suites),
+            num_failed_test_suites,
+            num_total_tests,
+            num_passed_tests: num_total_tests.saturating_sub(num_failed_tests),
+            num_failed_tests,
+            num_pending_tests: 0,
+            num_todo_tests: 0,
+            num_timed_out_tests: None,
+            num_timed_out_test_suites: None,
+            start_time: 0,
+            success,
+            run_time_ms: Some(0),
+        },
+    }
+}
+
+#[derive(Debug)]
+struct NextestAdapter {
+    only_failures: bool,
+    show_logs: bool,
+    parser: NextestStreamParser,
+}
+
+impl NextestAdapter {
+    fn new(repo_root: &Path, only_failures: bool, show_logs: bool) -> Self {
+        Self {
+            only_failures,
+            show_logs,
+            parser: NextestStreamParser::new(repo_root),
+        }
+    }
+
+    fn actions_for_update(&self, update: &NextestStreamUpdate) -> Vec<StreamAction> {
+        let should_print = !self.only_failures || update.status == "failed";
+        if !should_print {
+            return vec![];
+        }
+        let mut out = vec![StreamAction::SetProgressLabel(update.suite_path.clone())];
+        let header = format!(
+            "{} {} > {}",
+            if update.status == "failed" { "FAIL" } else { "PASS" },
+            update.suite_path,
+            update.test_name
+        );
+        out.push(StreamAction::PrintStdout(header));
+        if self.show_logs {
+            if let Some(stdout) = update.stdout.as_deref().filter(|s| !s.trim().is_empty()) {
+                out.extend(
+                    stdout
+                        .lines()
+                        .map(str::trim)
+                        .filter(|ln| !ln.is_empty())
+                        .map(|ln| StreamAction::PrintStdout(format!("  {ln}"))),
+                );
+            }
+        }
+        out
+    }
+}
+
+#[derive(Debug)]
+struct CargoTestAdapter {
+    only_failures: bool,
+    show_logs: bool,
+    parser: CargoTestStreamParser,
+    failed_tests: std::collections::BTreeSet<String>,
+}
+
+impl CargoTestAdapter {
+    fn new(repo_root: &Path, only_failures: bool, show_logs: bool) -> Self {
+        Self {
+            only_failures,
+            show_logs,
+            parser: CargoTestStreamParser::new(repo_root),
+            failed_tests: std::collections::BTreeSet::new(),
+        }
+    }
+
+    fn actions_for_event(&mut self, event: CargoTestStreamEvent) -> Vec<StreamAction> {
+        match event {
+            CargoTestStreamEvent::SuiteStarted { suite_path } => {
+                vec![StreamAction::SetProgressLabel(suite_path)]
+            }
+            CargoTestStreamEvent::TestFinished {
+                suite_path,
+                test_name,
+                status,
+            } => {
+                if status == "failed" {
+                    self.failed_tests
+                        .insert(format!("{suite_path}::{test_name}"));
+                }
+                if self.only_failures && status != "failed" {
+                    return vec![];
+                }
+                vec![
+                    StreamAction::SetProgressLabel(suite_path.clone()),
+                    StreamAction::PrintStdout(format!(
+                        "{} {} > {}",
+                        if status == "failed" { "FAIL" } else { "PASS" },
+                        suite_path,
+                        test_name
+                    )),
+                ]
+            }
+            CargoTestStreamEvent::OutputLine {
+                suite_path,
+                test_name,
+                line,
+            } => {
+                if !self.show_logs {
+                    return vec![];
+                }
+                if self.only_failures {
+                    let Some(test_name) = test_name else {
+                        return vec![];
+                    };
+                    if !self.failed_tests.contains(&format!("{suite_path}::{test_name}")) {
+                        return vec![];
+                    }
+                }
+                vec![StreamAction::PrintStdout(line)]
+            }
+        }
+    }
+}
+
+impl StreamAdapter for CargoTestAdapter {
+    fn on_start(&mut self) -> Option<String> {
+        Some("cargo test".to_string())
+    }
+
+    fn on_line(&mut self, _stream: OutputStream, line: &str) -> Vec<StreamAction> {
+        self.parser
+            .push_line(line)
+            .into_iter()
+            .flat_map(|evt| self.actions_for_event(evt))
+            .collect::<Vec<_>>()
+    }
+}
+
+impl StreamAdapter for NextestAdapter {
+    fn on_start(&mut self) -> Option<String> {
+        Some("cargo nextest".to_string())
+    }
+
+    fn on_line(&mut self, _stream: OutputStream, line: &str) -> Vec<StreamAction> {
+        self.parser
+            .push_line(line)
+            .as_ref()
+            .map(|u| self.actions_for_update(u))
+            .unwrap_or_default()
+    }
+}
 
 fn run_optional_bootstrap(repo_root: &Path, args: &ParsedArgs) -> Result<(), RunError> {
     let Some(command) = args.bootstrap_command.as_deref() else {
@@ -35,6 +206,32 @@ pub fn run_cargo_test(repo_root: &Path, args: &ParsedArgs) -> Result<i32, RunErr
         .unwrap_or_default();
 
     let selection = derive_cargo_selection(repo_root, args, &changed);
+    if selection.changed_selection_attempted
+        && selection.selected_test_count == Some(0)
+        && args.changed.is_some()
+    {
+        let changed_mode = args.changed.map(changed_mode_to_cli_string).unwrap_or("all");
+        println!("headlamp: selected 0 tests (changed={changed_mode})");
+        let ctx = make_ctx(
+            repo_root,
+            None,
+            false,
+            args.show_logs,
+            args.editor_cmd.clone(),
+        );
+        let rendered = render_vitest_from_test_model(
+            &empty_test_run_model_for_exit_code(0),
+            &ctx,
+            args.only_failures,
+        );
+        if !rendered.trim().is_empty() {
+            println!("{rendered}");
+        }
+        if args.collect_coverage && args.coverage_ui != CoverageUi::Jest {
+            print_lcov(repo_root, args);
+        }
+        return Ok(0);
+    }
 
     if args.collect_coverage && has_cargo_llvm_cov(repo_root) {
         let exit_code =
@@ -42,7 +239,34 @@ pub fn run_cargo_test(repo_root: &Path, args: &ParsedArgs) -> Result<i32, RunErr
         return finish_coverage_after_test_run(repo_root, args, exit_code);
     }
 
-    let exit_code = run_cargo_test_and_render(repo_root, args, None, &selection.extra_cargo_args)?;
+    let live_progress_enabled = should_enable_live_progress(
+        headlamp_core::format::terminal::is_output_terminal(),
+        args.ci,
+    );
+    let live_progress = LiveProgress::start(1, live_progress_enabled);
+    let mut cmd = std::process::Command::new("cargo");
+    cmd.args(build_cargo_test_args(None, args, &selection.extra_cargo_args));
+    cmd.current_dir(repo_root);
+    let mut adapter = CargoTestAdapter::new(repo_root, args.only_failures, args.show_logs);
+    let (exit_code, _tail) =
+        run_streaming_capture_tail(cmd, &live_progress, &mut adapter, 1024 * 1024)?;
+    live_progress.increment_done(1);
+    live_progress.finish();
+    let model = adapter
+        .parser
+        .finalize()
+        .unwrap_or_else(|| empty_test_run_model_for_exit_code(exit_code));
+    let ctx = make_ctx(
+        repo_root,
+        None,
+        exit_code != 0,
+        args.show_logs,
+        args.editor_cmd.clone(),
+    );
+    let rendered = render_vitest_from_test_model(&model, &ctx, args.only_failures);
+    if !rendered.trim().is_empty() {
+        println!("{rendered}");
+    }
 
     if args.coverage_abort_on_failure && exit_code != 0 {
         return Ok(normalize_runner_exit_code(exit_code));
@@ -65,6 +289,32 @@ pub fn run_cargo_nextest(repo_root: &Path, args: &ParsedArgs) -> Result<i32, Run
         .unwrap_or_default();
 
     let selection = derive_cargo_selection(repo_root, args, &changed);
+    if selection.changed_selection_attempted
+        && selection.selected_test_count == Some(0)
+        && args.changed.is_some()
+    {
+        let changed_mode = args.changed.map(changed_mode_to_cli_string).unwrap_or("all");
+        println!("headlamp: selected 0 tests (changed={changed_mode})");
+        let ctx = make_ctx(
+            repo_root,
+            None,
+            false,
+            args.show_logs,
+            args.editor_cmd.clone(),
+        );
+        let rendered = render_vitest_from_test_model(
+            &empty_test_run_model_for_exit_code(0),
+            &ctx,
+            args.only_failures,
+        );
+        if !rendered.trim().is_empty() {
+            println!("{rendered}");
+        }
+        if args.collect_coverage && args.coverage_ui != CoverageUi::Jest {
+            print_lcov(repo_root, args);
+        }
+        return Ok(0);
+    }
 
     if args.collect_coverage && has_cargo_llvm_cov(repo_root) {
         if !has_cargo_nextest(repo_root) {
@@ -84,7 +334,36 @@ pub fn run_cargo_nextest(repo_root: &Path, args: &ParsedArgs) -> Result<i32, Run
         });
     }
 
-    let exit_code = run_nextest_and_render(repo_root, args, None, &selection.extra_cargo_args)?;
+    let live_progress_enabled = should_enable_live_progress(
+        headlamp_core::format::terminal::is_output_terminal(),
+        args.ci,
+    );
+    let live_progress = LiveProgress::start(1, live_progress_enabled);
+    let mut cmd = std::process::Command::new("cargo");
+    cmd.args(build_nextest_run_args(None, args, &selection.extra_cargo_args));
+    cmd.current_dir(repo_root);
+    cmd.env("NEXTEST_EXPERIMENTAL_LIBTEST_JSON", "1");
+    let mut adapter = NextestAdapter::new(repo_root, args.only_failures, args.show_logs);
+    let (exit_code, _tail) =
+        run_streaming_capture_tail(cmd, &live_progress, &mut adapter, 1024 * 1024)?;
+    live_progress.increment_done(1);
+    live_progress.finish();
+    let model = adapter
+        .parser
+        .clone()
+        .finalize()
+        .unwrap_or_else(|| empty_test_run_model_for_exit_code(exit_code));
+    let ctx = make_ctx(
+        repo_root,
+        None,
+        exit_code != 0,
+        args.show_logs,
+        args.editor_cmd.clone(),
+    );
+    let rendered = render_vitest_from_test_model(&model, &ctx, args.only_failures);
+    if !rendered.trim().is_empty() {
+        println!("{rendered}");
+    }
 
     if args.coverage_abort_on_failure && exit_code != 0 {
         return Ok(normalize_runner_exit_code(exit_code));
@@ -283,6 +562,17 @@ fn print_test_output(repo_root: &Path, args: &ParsedArgs, exit_code: i32, combin
         args.show_logs,
         args.editor_cmd.clone(),
     );
+    if combined.trim().is_empty() {
+        let rendered = render_vitest_from_test_model(
+            &empty_test_run_model_for_exit_code(exit_code),
+            &ctx,
+            args.only_failures,
+        );
+        if !rendered.trim().is_empty() {
+            println!("{rendered}");
+        }
+        return;
+    }
     let rendered = parse_cargo_test_output(repo_root, combined)
         .map(|mut model| {
             reorder_test_results_original_style_for_cargo(model.test_results.as_mut_slice());
@@ -302,6 +592,17 @@ fn print_test_output_nextest(repo_root: &Path, args: &ParsedArgs, exit_code: i32
         args.show_logs,
         args.editor_cmd.clone(),
     );
+    if combined.trim().is_empty() {
+        let rendered = render_vitest_from_test_model(
+            &empty_test_run_model_for_exit_code(exit_code),
+            &ctx,
+            args.only_failures,
+        );
+        if !rendered.trim().is_empty() {
+            println!("{rendered}");
+        }
+        return;
+    }
     let rendered = parse_nextest_libtest_json_output(repo_root, combined)
         .map(|mut model| {
             reorder_test_results_original_style_for_cargo(model.test_results.as_mut_slice());
@@ -335,48 +636,6 @@ fn reorder_test_results_original_style_for_cargo(test_results: &mut [TestSuiteRe
 
 fn normalize_abs_posix_for_ordering(input: &str) -> String {
     input.replace('\\', "/")
-}
-
-fn run_nextest_and_render(
-    repo_root: &Path,
-    args: &ParsedArgs,
-    filter: Option<&str>,
-    extra_cargo_args: &[String],
-) -> Result<i32, RunError> {
-    let cmd_args = build_nextest_run_args(filter, args, extra_cargo_args);
-    let out = duct_cmd("cargo", cmd_args)
-        .dir(repo_root)
-        .env("NEXTEST_EXPERIMENTAL_LIBTEST_JSON", "1")
-        .stderr_to_stdout()
-        .stdout_capture()
-        .unchecked()
-        .run()
-        .map_err(|e| RunError::Io(std::io::Error::other(e.to_string())))?;
-    let exit_code = out.status.code().unwrap_or(1);
-    let combined = String::from_utf8_lossy(&out.stdout).to_string();
-
-    print_test_output_nextest(repo_root, args, exit_code, &combined);
-    Ok(exit_code)
-}
-
-fn run_cargo_test_and_render(
-    repo_root: &Path,
-    args: &ParsedArgs,
-    filter: Option<&str>,
-    extra_cargo_args: &[String],
-) -> Result<i32, RunError> {
-    let cmd_args = build_cargo_test_args(filter, args, extra_cargo_args);
-    let out = duct_cmd("cargo", cmd_args)
-        .dir(repo_root)
-        .stderr_to_stdout()
-        .stdout_capture()
-        .unchecked()
-        .run()
-        .map_err(|e| RunError::Io(std::io::Error::other(e.to_string())))?;
-    let exit_code = out.status.code().unwrap_or(1);
-    let combined = String::from_utf8_lossy(&out.stdout).to_string();
-    print_test_output(repo_root, args, exit_code, &combined);
-    Ok(exit_code)
 }
 
 fn build_nextest_run_args(
@@ -507,8 +766,8 @@ fn build_cargo_test_args(
     if should_force_pretty_test_output(&test_binary_args) {
         normalized_test_args.extend(["--format".to_string(), "pretty".to_string()]);
     }
-    if args.show_logs && should_force_nocapture(&test_binary_args) {
-        normalized_test_args.push("--nocapture".to_string());
+    if args.show_logs && should_force_show_output(&test_binary_args) {
+        normalized_test_args.push("--show-output".to_string());
     }
     if args.sequential && !test_binary_args.iter().any(|t| t == "--test-threads") {
         normalized_test_args.extend(["--test-threads".to_string(), "1".to_string()]);
@@ -535,6 +794,11 @@ fn should_force_nocapture(test_binary_args: &[String]) -> bool {
             || token == "--show-output"
     });
     !overrides_capture
+}
+
+fn should_force_show_output(test_binary_args: &[String]) -> bool {
+    // Prefer `--show-output` (grouped per test) over `--nocapture` (interleaved chaos).
+    should_force_nocapture(test_binary_args)
 }
 
 fn split_cargo_passthrough_args(passthrough: &[String]) -> (Vec<String>, Vec<String>) {
@@ -616,6 +880,8 @@ fn has_cargo_llvm_cov(repo_root: &Path) -> bool {
 #[derive(Debug, Clone)]
 struct CargoSelection {
     extra_cargo_args: Vec<String>,
+    changed_selection_attempted: bool,
+    selected_test_count: Option<usize>,
 }
 
 fn derive_cargo_selection(
@@ -630,6 +896,8 @@ fn derive_cargo_selection(
     if changed.is_empty() {
         return CargoSelection {
             extra_cargo_args: vec![],
+            changed_selection_attempted: false,
+            selected_test_count: None,
         };
     }
 
@@ -637,6 +905,8 @@ fn derive_cargo_selection(
     if tests.is_empty() {
         return CargoSelection {
             extra_cargo_args: vec![],
+            changed_selection_attempted: true,
+            selected_test_count: Some(0),
         };
     }
 
@@ -648,8 +918,11 @@ fn derive_cargo_selection(
         .map(|s| s.to_string())
         .collect::<Vec<_>>();
 
+    let selected_count = test_targets.len();
     CargoSelection {
         extra_cargo_args: build_test_target_args(&test_targets),
+        changed_selection_attempted: true,
+        selected_test_count: Some(selected_count),
     }
 }
 
@@ -665,6 +938,8 @@ fn derive_selection_from_selection_paths(
     if abs.is_empty() {
         return CargoSelection {
             extra_cargo_args: vec![],
+            changed_selection_attempted: false,
+            selected_test_count: None,
         };
     }
 
@@ -677,12 +952,26 @@ fn derive_selection_from_selection_paths(
     if !direct_test_stems.is_empty() {
         return CargoSelection {
             extra_cargo_args: build_test_target_args(&direct_test_stems),
+            changed_selection_attempted: false,
+            selected_test_count: Some(direct_test_stems.len()),
         };
     }
 
     let test_targets = derive_test_targets_from_seeds(repo_root, &abs);
     CargoSelection {
         extra_cargo_args: build_test_target_args(&test_targets),
+        changed_selection_attempted: false,
+        selected_test_count: Some(test_targets.len()),
+    }
+}
+
+fn changed_mode_to_cli_string(mode: ChangedMode) -> &'static str {
+    match mode {
+        ChangedMode::All => "all",
+        ChangedMode::Staged => "staged",
+        ChangedMode::Unstaged => "unstaged",
+        ChangedMode::Branch => "branch",
+        ChangedMode::LastCommit => "lastCommit",
     }
 }
 

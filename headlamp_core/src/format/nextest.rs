@@ -7,6 +7,14 @@ use crate::test_model::{
     TestCaseResult, TestConsoleEntry, TestRunAggregated, TestRunModel, TestSuiteResult,
 };
 
+#[derive(Debug, Clone)]
+pub struct NextestStreamUpdate {
+    pub suite_path: String,
+    pub test_name: String,
+    pub status: String,
+    pub stdout: Option<String>,
+}
+
 #[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord)]
 struct SuiteKey {
     crate_name: String,
@@ -51,32 +59,35 @@ struct SuiteAcc {
     console_entries: Vec<TestConsoleEntry>,
 }
 
-pub fn parse_nextest_libtest_json_output(
-    repo_root: &Path,
-    combined_output: &str,
-) -> Option<TestRunModel> {
-    let trimmed_lines = combined_output.lines().map(str::trim).collect::<Vec<_>>();
-    let json_lines = trimmed_lines
-        .iter()
-        .copied()
-        .filter(|line| line.starts_with('{') && line.ends_with('}'))
-        .collect::<Vec<_>>();
-    if json_lines.is_empty() {
-        return None;
+#[derive(Debug, Clone)]
+pub struct NextestStreamParser {
+    repo_root: PathBuf,
+    suites_by_key: BTreeMap<SuiteKey, SuiteAcc>,
+    kind_by_crate_and_binary: BTreeMap<(String, String), String>,
+    loose_log_lines: Vec<String>,
+}
+
+impl NextestStreamParser {
+    pub fn new(repo_root: &Path) -> Self {
+        Self {
+            repo_root: repo_root.to_path_buf(),
+            suites_by_key: BTreeMap::new(),
+            kind_by_crate_and_binary: BTreeMap::new(),
+            loose_log_lines: vec![],
+        }
     }
-    let loose_log_lines = trimmed_lines
-        .iter()
-        .copied()
-        .filter(|line| !(line.starts_with('{') && line.ends_with('}')))
-        .filter(|line| !line.trim().is_empty())
-        .collect::<Vec<_>>();
 
-    let mut suites_by_key: BTreeMap<SuiteKey, SuiteAcc> = BTreeMap::new();
-    let mut kind_by_crate_and_binary: BTreeMap<(String, String), String> = BTreeMap::new();
-
-    for line in json_lines {
-        let Ok(event) = serde_json::from_str::<NextestEvent>(line) else {
-            continue;
+    pub fn push_line(&mut self, line: &str) -> Option<NextestStreamUpdate> {
+        let trimmed = line.trim();
+        if trimmed.is_empty() {
+            return None;
+        }
+        if !(trimmed.starts_with('{') && trimmed.ends_with('}')) {
+            self.loose_log_lines.push(trimmed.to_string());
+            return None;
+        }
+        let Ok(event) = serde_json::from_str::<NextestEvent>(trimmed) else {
+            return None;
         };
         match event {
             NextestEvent::Suite {
@@ -90,39 +101,36 @@ pub fn parse_nextest_libtest_json_output(
                 ..
             } => {
                 let Some(meta) = nextest else {
-                    continue;
+                    return None;
                 };
                 let key = SuiteKey {
                     crate_name: meta.crate_name,
                     test_binary: meta.test_binary,
                     kind: meta.kind,
                 };
-                kind_by_crate_and_binary.insert(
+                self.kind_by_crate_and_binary.insert(
                     (key.crate_name.clone(), key.test_binary.clone()),
                     key.kind.clone(),
                 );
                 match event.as_str() {
                     "started" => {
-                        suites_by_key
-                            .entry(key.clone())
-                            .or_insert_with(|| SuiteAcc {
-                                key,
-                                tests: BTreeMap::new(),
-                                console_entries: vec![],
-                            });
+                        self.suites_by_key.entry(key.clone()).or_insert_with(|| SuiteAcc {
+                            key,
+                            tests: BTreeMap::new(),
+                            console_entries: vec![],
+                        });
                     }
                     "ok" | "failed" => {
                         let _counts = (passed, failed, ignored, measured, filtered_out);
-                        suites_by_key
-                            .entry(key.clone())
-                            .or_insert_with(|| SuiteAcc {
-                                key: key.clone(),
-                                tests: BTreeMap::new(),
-                                console_entries: vec![],
-                            });
+                        self.suites_by_key.entry(key.clone()).or_insert_with(|| SuiteAcc {
+                            key: key.clone(),
+                            tests: BTreeMap::new(),
+                            console_entries: vec![],
+                        });
                     }
                     _ => {}
                 }
+                None
             }
             NextestEvent::Test {
                 event,
@@ -130,15 +138,17 @@ pub fn parse_nextest_libtest_json_output(
                 exec_time,
                 stdout,
             } => {
-                let Some(suite_key) = suite_key_from_test_name(&name, &kind_by_crate_and_binary)
+                let Some(suite_key) =
+                    suite_key_from_test_name(&name, &self.kind_by_crate_and_binary)
                 else {
-                    continue;
+                    return None;
                 };
                 let display_name = simplify_nextest_test_name(&name);
-                let suite = suites_by_key
+                let suite = self
+                    .suites_by_key
                     .entry(suite_key.clone())
                     .or_insert_with(|| SuiteAcc {
-                        key: suite_key,
+                        key: suite_key.clone(),
                         tests: BTreeMap::new(),
                         console_entries: vec![],
                     });
@@ -168,7 +178,7 @@ pub fn parse_nextest_libtest_json_output(
                                     failure_messages: vec![],
                                     failure_details: None,
                                 });
-                        test_case.status = status;
+                        test_case.status = status.clone();
                         test_case.duration = duration_ms;
                         if test_case.status == "failed" {
                             let msg = stdout.clone().unwrap_or_default();
@@ -188,35 +198,51 @@ pub fn parse_nextest_libtest_json_output(
                                     }),
                             );
                         }
-                        suite.tests.insert(display_name, test_case);
+                        suite.tests.insert(display_name.clone(), test_case);
+                        Some(NextestStreamUpdate {
+                            suite_path: suite_display_path(&self.repo_root, &suite_key),
+                            test_name: display_name,
+                            status,
+                            stdout,
+                        })
                     }
-                    _ => {}
+                    _ => None,
                 }
             }
         }
     }
 
-    if !loose_log_lines.is_empty()
-        && let Some((_key, first_suite)) = suites_by_key.iter_mut().next()
-    {
-        first_suite
-            .console_entries
-            .extend(loose_log_lines.iter().map(|ln| TestConsoleEntry {
-                message: Some(serde_json::Value::String((*ln).to_string())),
-                type_name: Some("log".to_string()),
-                origin: Some("cargo-nextest".to_string()),
+    pub fn finalize(mut self) -> Option<TestRunModel> {
+        if !self.loose_log_lines.is_empty()
+            && let Some((_key, first_suite)) = self.suites_by_key.iter_mut().next()
+        {
+            first_suite.console_entries.extend(self.loose_log_lines.iter().map(|ln| {
+                TestConsoleEntry {
+                    message: Some(serde_json::Value::String(ln.to_string())),
+                    type_name: Some("log".to_string()),
+                    origin: Some("cargo-nextest".to_string()),
+                }
             }));
-    };
-
-    let suites = suites_by_key
-        .into_values()
-        .map(|suite| finalize_suite(repo_root, suite))
-        .filter(|suite| !suite.test_results.is_empty())
-        .collect::<Vec<_>>();
-    if suites.is_empty() {
-        return None;
+        };
+        let suites = self
+            .suites_by_key
+            .into_values()
+            .map(|suite| finalize_suite(&self.repo_root, suite))
+            .filter(|suite| !suite.test_results.is_empty())
+            .collect::<Vec<_>>();
+        (!suites.is_empty()).then(|| build_run_model(suites))
     }
-    Some(build_run_model(suites))
+}
+
+pub fn parse_nextest_libtest_json_output(
+    repo_root: &Path,
+    combined_output: &str,
+) -> Option<TestRunModel> {
+    let mut parser = NextestStreamParser::new(repo_root);
+    combined_output.lines().for_each(|line| {
+        let _ = parser.push_line(line);
+    });
+    parser.finalize()
 }
 
 fn simplify_nextest_test_name(full: &str) -> String {
