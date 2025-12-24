@@ -4,7 +4,7 @@ use headlamp_core::format::bridge::{
     BridgeAggregated, BridgeAssertion, BridgeFileResult, BridgeJson,
 };
 use headlamp_core::format::ctx::make_ctx;
-use headlamp_core::format::vitest::render_vitest_from_jest_json;
+use headlamp_core::format::vitest::render_vitest_from_test_model;
 
 fn mk_bridge_console_event(
     level: &str,
@@ -102,7 +102,7 @@ fn vitest_renderer_filters_logs_to_current_failed_test_when_possible() {
         },
     };
 
-    let rendered = render_vitest_from_jest_json(&bridge, &ctx, true);
+    let rendered = render_vitest_from_test_model(&bridge, &ctx, true);
     assert!(rendered.contains("Logs:"));
     assert!(rendered.contains("err-fail"));
     assert!(!rendered.contains("log-pass"));

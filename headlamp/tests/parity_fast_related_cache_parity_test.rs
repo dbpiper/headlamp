@@ -62,6 +62,7 @@ fn parity_fast_related_cache_hit_fixture() {
         &binaries.rust_bin,
         &["src/a.js"],
         &["src/a.js"],
+        "jest",
     );
     assert_eq!(code_ts_1, code_rs_1);
     let n_ts_1 = normalize(out_ts_1, &repo);
@@ -74,6 +75,7 @@ fn parity_fast_related_cache_hit_fixture() {
         &binaries.rust_bin,
         &["src/a.js"],
         &["src/a.js"],
+        "jest",
     );
     assert_eq!(code_ts_2, code_rs_2);
     let n_ts_2 = normalize(out_ts_2, &repo);

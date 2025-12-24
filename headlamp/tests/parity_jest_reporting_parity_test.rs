@@ -24,6 +24,7 @@ fn parity_jest_only_failures_and_show_logs_fixture() {
         &binaries.rust_bin,
         &["--showLogs", "--onlyFailures"],
         &["--showLogs", "--onlyFailures"],
+        "jest",
     );
     assert_eq!(code_ts, code_rs);
     let out_ts_raw = out_ts.clone();
@@ -91,8 +92,14 @@ test('GET /hello', async () => {\n\
     );
     write_jest_config(&repo, "**/tests/**/*.test.js");
 
-    let (_spec, code_ts, out_ts, code_rs, out_rs) =
-        run_parity_fixture_with_args(&repo, &binaries.ts_cli, &binaries.rust_bin, &[], &[]);
+    let (_spec, code_ts, out_ts, code_rs, out_rs) = run_parity_fixture_with_args(
+        &repo,
+        &binaries.ts_cli,
+        &binaries.rust_bin,
+        &[],
+        &[],
+        "jest",
+    );
     assert_eq!(code_ts, code_rs);
 
     let n_ts = normalize(out_ts, &repo);
@@ -139,8 +146,14 @@ test('GET /abort', async () => {\n\
     );
     write_jest_config(&repo, "**/tests/**/*.test.js");
 
-    let (_spec, code_ts, out_ts, code_rs, out_rs) =
-        run_parity_fixture_with_args(&repo, &binaries.ts_cli, &binaries.rust_bin, &[], &[]);
+    let (_spec, code_ts, out_ts, code_rs, out_rs) = run_parity_fixture_with_args(
+        &repo,
+        &binaries.ts_cli,
+        &binaries.rust_bin,
+        &[],
+        &[],
+        "jest",
+    );
     assert_eq!(code_ts, code_rs);
 
     let n_ts = normalize(out_ts, &repo);
@@ -169,8 +182,14 @@ fn parity_jest_unhandled_rejection_live_fixture() {
     );
     write_jest_config(&repo, "**/tests/**/*.test.js");
 
-    let (_spec, code_ts, out_ts, code_rs, out_rs) =
-        run_parity_fixture_with_args(&repo, &binaries.ts_cli, &binaries.rust_bin, &[], &[]);
+    let (_spec, code_ts, out_ts, code_rs, out_rs) = run_parity_fixture_with_args(
+        &repo,
+        &binaries.ts_cli,
+        &binaries.rust_bin,
+        &[],
+        &[],
+        "jest",
+    );
     assert_eq!(code_ts, code_rs);
 
     let n_ts = normalize(out_ts, &repo);
@@ -194,8 +213,14 @@ fn parity_jest_no_live_progress_frames_when_not_tty_fixture() {
     );
     write_jest_config(&repo, "**/tests/**/*.test.js");
 
-    let (_spec, code_ts, out_ts, code_rs, out_rs) =
-        run_parity_fixture_with_args(&repo, &binaries.ts_cli, &binaries.rust_bin, &[], &[]);
+    let (_spec, code_ts, out_ts, code_rs, out_rs) = run_parity_fixture_with_args(
+        &repo,
+        &binaries.ts_cli,
+        &binaries.rust_bin,
+        &[],
+        &[],
+        "jest",
+    );
     assert_eq!(code_ts, code_rs);
     assert!(
         !out_ts.contains("\u{1b}[2K\rRUN "),

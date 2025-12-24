@@ -4,8 +4,10 @@ use serde::Serialize;
 use std::collections::BTreeMap;
 use std::path::{Path, PathBuf};
 use std::process::Command;
+use std::sync::OnceLock;
 use std::sync::atomic::{AtomicUsize, Ordering};
 
+pub mod cluster;
 pub mod diagnostics;
 pub mod diff_report;
 pub mod normalize;
@@ -13,6 +15,7 @@ pub mod parity_meta;
 pub mod token_ast;
 pub use normalize::normalize;
 pub use normalize::normalize_tty_ui;
+pub use parity_meta::ParitySideLabel;
 
 static CAPTURE_COUNTER: AtomicUsize = AtomicUsize::new(0);
 
@@ -24,6 +27,7 @@ fn next_capture_id() -> usize {
 pub struct ParityRunSpec {
     pub cwd: PathBuf,
     pub program: PathBuf,
+    pub side_label: ParitySideLabel,
     pub args: Vec<String>,
     pub env: BTreeMap<String, String>,
     pub tty_columns: Option<usize>,
@@ -31,164 +35,242 @@ pub struct ParityRunSpec {
 }
 
 #[derive(Debug, Clone)]
-pub struct ParityRunPair {
-    pub ts: ParityRunSpec,
-    pub rs: ParityRunSpec,
+pub struct ParityRunGroup {
+    pub sides: Vec<ParityRunSpec>,
 }
 
 pub fn assert_parity_normalized_outputs(
     repo: &Path,
     case: &str,
-    code_ts: i32,
-    out_ts: &str,
-    code_rs: i32,
-    out_rs: &str,
+    side_0_exit: i32,
+    side_0_out: &str,
+    side_1_exit: i32,
+    side_1_out: &str,
 ) {
+    let label_0 = ParitySideLabel {
+        binary: "unknown".to_string(),
+        runner_stack: "unknown".to_string(),
+    };
+    let label_1 = ParitySideLabel {
+        binary: "unknown".to_string(),
+        runner_stack: "unknown".to_string(),
+    };
     let compare_input = parity_meta::ParityCompareInput {
-        raw_ts: out_ts.to_string(),
-        raw_rs: out_rs.to_string(),
-        normalized_ts: out_ts.to_string(),
-        normalized_rs: out_rs.to_string(),
-        meta: parity_meta::ParityCompareMeta {
-            ts: parity_meta::ParitySideMeta {
-                raw_bytes: out_ts.as_bytes().len(),
-                raw_lines: out_ts.lines().count(),
-                normalized_bytes: out_ts.as_bytes().len(),
-                normalized_lines: out_ts.lines().count(),
-                normalization: parity_meta::NormalizationMeta {
-                    normalizer: parity_meta::NormalizerKind::NonTty,
-                    used_fallback: false,
-                    last_failed_tests_line: None,
-                    last_test_files_line: None,
-                    last_box_table_top_line: None,
-                    stages: vec![],
+        sides: vec![
+            parity_meta::ParityCompareSideInput {
+                label: label_0,
+                exit: side_0_exit,
+                raw: side_0_out.to_string(),
+                normalized: side_0_out.to_string(),
+                meta: parity_meta::ParitySideMeta {
+                    raw_bytes: side_0_out.as_bytes().len(),
+                    raw_lines: side_0_out.lines().count(),
+                    normalized_bytes: side_0_out.as_bytes().len(),
+                    normalized_lines: side_0_out.lines().count(),
+                    normalization: parity_meta::NormalizationMeta {
+                        normalizer: parity_meta::NormalizerKind::NonTty,
+                        used_fallback: false,
+                        last_failed_tests_line: None,
+                        last_test_files_line: None,
+                        last_box_table_top_line: None,
+                        stages: vec![],
+                    },
                 },
             },
-            rs: parity_meta::ParitySideMeta {
-                raw_bytes: out_rs.as_bytes().len(),
-                raw_lines: out_rs.lines().count(),
-                normalized_bytes: out_rs.as_bytes().len(),
-                normalized_lines: out_rs.lines().count(),
-                normalization: parity_meta::NormalizationMeta {
-                    normalizer: parity_meta::NormalizerKind::NonTty,
-                    used_fallback: false,
-                    last_failed_tests_line: None,
-                    last_test_files_line: None,
-                    last_box_table_top_line: None,
-                    stages: vec![],
+            parity_meta::ParityCompareSideInput {
+                label: label_1,
+                exit: side_1_exit,
+                raw: side_1_out.to_string(),
+                normalized: side_1_out.to_string(),
+                meta: parity_meta::ParitySideMeta {
+                    raw_bytes: side_1_out.as_bytes().len(),
+                    raw_lines: side_1_out.lines().count(),
+                    normalized_bytes: side_1_out.as_bytes().len(),
+                    normalized_lines: side_1_out.lines().count(),
+                    normalization: parity_meta::NormalizationMeta {
+                        normalizer: parity_meta::NormalizerKind::NonTty,
+                        used_fallback: false,
+                        last_failed_tests_line: None,
+                        last_test_files_line: None,
+                        last_box_table_top_line: None,
+                        stages: vec![],
+                    },
                 },
             },
-        },
+        ],
     };
 
-    assert_parity_with_diagnostics(repo, case, code_ts, code_rs, &compare_input, None);
+    assert_parity_with_diagnostics(repo, case, &compare_input, None);
 }
 
 pub fn assert_parity_non_tty_with_diagnostics(
     repo: &Path,
     case: &str,
-    code_ts: i32,
-    raw_ts: String,
-    code_rs: i32,
-    raw_rs: String,
-    run_pair: Option<&ParityRunPair>,
+    side_0_exit: i32,
+    side_0_raw: String,
+    side_1_exit: i32,
+    side_1_raw: String,
+    run_group: Option<&ParityRunGroup>,
 ) {
-    let (normalized_ts, meta_ts) = normalize::normalize_with_meta(raw_ts.clone(), repo);
-    let (normalized_rs, meta_rs) = normalize::normalize_with_meta(raw_rs.clone(), repo);
+    let (side_0_normalized, side_0_meta) = normalize::normalize_with_meta(side_0_raw.clone(), repo);
+    let (side_1_normalized, side_1_meta) = normalize::normalize_with_meta(side_1_raw.clone(), repo);
 
-    let ts_raw_bytes = raw_ts.as_bytes().len();
-    let ts_raw_lines = raw_ts.lines().count();
-    let ts_norm_bytes = normalized_ts.as_bytes().len();
-    let ts_norm_lines = normalized_ts.lines().count();
+    let side_0_raw_bytes = side_0_raw.as_bytes().len();
+    let side_0_raw_lines = side_0_raw.lines().count();
+    let side_0_norm_bytes = side_0_normalized.as_bytes().len();
+    let side_0_norm_lines = side_0_normalized.lines().count();
 
-    let rs_raw_bytes = raw_rs.as_bytes().len();
-    let rs_raw_lines = raw_rs.lines().count();
-    let rs_norm_bytes = normalized_rs.as_bytes().len();
-    let rs_norm_lines = normalized_rs.lines().count();
+    let side_1_raw_bytes = side_1_raw.as_bytes().len();
+    let side_1_raw_lines = side_1_raw.lines().count();
+    let side_1_norm_bytes = side_1_normalized.as_bytes().len();
+    let side_1_norm_lines = side_1_normalized.lines().count();
 
+    let label_0 = run_group
+        .and_then(|group| group.sides.first())
+        .map(|spec| spec.side_label.clone())
+        .unwrap_or(ParitySideLabel {
+            binary: "unknown".to_string(),
+            runner_stack: "unknown".to_string(),
+        });
+    let label_1 = run_group
+        .and_then(|group| group.sides.get(1))
+        .map(|spec| spec.side_label.clone())
+        .unwrap_or(ParitySideLabel {
+            binary: "unknown".to_string(),
+            runner_stack: "unknown".to_string(),
+        });
     let compare = parity_meta::ParityCompareInput {
-        raw_ts,
-        raw_rs,
-        normalized_ts,
-        normalized_rs,
-        meta: parity_meta::ParityCompareMeta {
-            ts: parity_meta::ParitySideMeta {
-                raw_bytes: ts_raw_bytes,
-                raw_lines: ts_raw_lines,
-                normalized_bytes: ts_norm_bytes,
-                normalized_lines: ts_norm_lines,
-                normalization: meta_ts,
+        sides: vec![
+            parity_meta::ParityCompareSideInput {
+                label: label_0,
+                exit: side_0_exit,
+                raw: side_0_raw,
+                normalized: side_0_normalized,
+                meta: parity_meta::ParitySideMeta {
+                    raw_bytes: side_0_raw_bytes,
+                    raw_lines: side_0_raw_lines,
+                    normalized_bytes: side_0_norm_bytes,
+                    normalized_lines: side_0_norm_lines,
+                    normalization: side_0_meta,
+                },
             },
-            rs: parity_meta::ParitySideMeta {
-                raw_bytes: rs_raw_bytes,
-                raw_lines: rs_raw_lines,
-                normalized_bytes: rs_norm_bytes,
-                normalized_lines: rs_norm_lines,
-                normalization: meta_rs,
+            parity_meta::ParityCompareSideInput {
+                label: label_1,
+                exit: side_1_exit,
+                raw: side_1_raw,
+                normalized: side_1_normalized,
+                meta: parity_meta::ParitySideMeta {
+                    raw_bytes: side_1_raw_bytes,
+                    raw_lines: side_1_raw_lines,
+                    normalized_bytes: side_1_norm_bytes,
+                    normalized_lines: side_1_norm_lines,
+                    normalization: side_1_meta,
+                },
             },
-        },
+        ],
     };
 
-    assert_parity_with_diagnostics(repo, case, code_ts, code_rs, &compare, run_pair);
+    assert_parity_with_diagnostics(repo, case, &compare, run_group);
 }
 
 pub fn assert_parity_tty_ui_with_diagnostics(
     repo: &Path,
     case: &str,
-    code_ts: i32,
-    raw_ts: String,
-    code_rs: i32,
-    raw_rs: String,
-    run_pair: Option<&ParityRunPair>,
+    side_0_exit: i32,
+    side_0_raw: String,
+    side_1_exit: i32,
+    side_1_raw: String,
+    run_group: Option<&ParityRunGroup>,
 ) {
-    let (normalized_ts, meta_ts) = normalize::normalize_tty_ui_with_meta(raw_ts.clone(), repo);
-    let (normalized_rs, meta_rs) = normalize::normalize_tty_ui_with_meta(raw_rs.clone(), repo);
+    let (side_0_normalized, side_0_meta) =
+        normalize::normalize_tty_ui_with_meta(side_0_raw.clone(), repo);
+    let (side_1_normalized, side_1_meta) =
+        normalize::normalize_tty_ui_with_meta(side_1_raw.clone(), repo);
 
-    let ts_raw_bytes = raw_ts.as_bytes().len();
-    let ts_raw_lines = raw_ts.lines().count();
-    let ts_norm_bytes = normalized_ts.as_bytes().len();
-    let ts_norm_lines = normalized_ts.lines().count();
+    let side_0_raw_bytes = side_0_raw.as_bytes().len();
+    let side_0_raw_lines = side_0_raw.lines().count();
+    let side_0_norm_bytes = side_0_normalized.as_bytes().len();
+    let side_0_norm_lines = side_0_normalized.lines().count();
 
-    let rs_raw_bytes = raw_rs.as_bytes().len();
-    let rs_raw_lines = raw_rs.lines().count();
-    let rs_norm_bytes = normalized_rs.as_bytes().len();
-    let rs_norm_lines = normalized_rs.lines().count();
+    let side_1_raw_bytes = side_1_raw.as_bytes().len();
+    let side_1_raw_lines = side_1_raw.lines().count();
+    let side_1_norm_bytes = side_1_normalized.as_bytes().len();
+    let side_1_norm_lines = side_1_normalized.lines().count();
 
+    let label_0 = run_group
+        .and_then(|group| group.sides.first())
+        .map(|spec| spec.side_label.clone())
+        .unwrap_or(ParitySideLabel {
+            binary: "unknown".to_string(),
+            runner_stack: "unknown".to_string(),
+        });
+    let label_1 = run_group
+        .and_then(|group| group.sides.get(1))
+        .map(|spec| spec.side_label.clone())
+        .unwrap_or(ParitySideLabel {
+            binary: "unknown".to_string(),
+            runner_stack: "unknown".to_string(),
+        });
     let compare = parity_meta::ParityCompareInput {
-        raw_ts,
-        raw_rs,
-        normalized_ts,
-        normalized_rs,
-        meta: parity_meta::ParityCompareMeta {
-            ts: parity_meta::ParitySideMeta {
-                raw_bytes: ts_raw_bytes,
-                raw_lines: ts_raw_lines,
-                normalized_bytes: ts_norm_bytes,
-                normalized_lines: ts_norm_lines,
-                normalization: meta_ts,
+        sides: vec![
+            parity_meta::ParityCompareSideInput {
+                label: label_0,
+                exit: side_0_exit,
+                raw: side_0_raw,
+                normalized: side_0_normalized,
+                meta: parity_meta::ParitySideMeta {
+                    raw_bytes: side_0_raw_bytes,
+                    raw_lines: side_0_raw_lines,
+                    normalized_bytes: side_0_norm_bytes,
+                    normalized_lines: side_0_norm_lines,
+                    normalization: side_0_meta,
+                },
             },
-            rs: parity_meta::ParitySideMeta {
-                raw_bytes: rs_raw_bytes,
-                raw_lines: rs_raw_lines,
-                normalized_bytes: rs_norm_bytes,
-                normalized_lines: rs_norm_lines,
-                normalization: meta_rs,
+            parity_meta::ParityCompareSideInput {
+                label: label_1,
+                exit: side_1_exit,
+                raw: side_1_raw,
+                normalized: side_1_normalized,
+                meta: parity_meta::ParitySideMeta {
+                    raw_bytes: side_1_raw_bytes,
+                    raw_lines: side_1_raw_lines,
+                    normalized_bytes: side_1_norm_bytes,
+                    normalized_lines: side_1_norm_lines,
+                    normalization: side_1_meta,
+                },
             },
-        },
+        ],
     };
 
-    assert_parity_with_diagnostics(repo, case, code_ts, code_rs, &compare, run_pair);
+    assert_parity_with_diagnostics(repo, case, &compare, run_group);
 }
 
 pub fn assert_parity_with_diagnostics(
     repo: &Path,
     case: &str,
-    code_ts: i32,
-    code_rs: i32,
     compare: &parity_meta::ParityCompareInput,
-    run_pair: Option<&ParityRunPair>,
+    run_group: Option<&ParityRunGroup>,
 ) {
-    if code_ts == code_rs && compare.normalized_ts == compare.normalized_rs {
+    if compare.sides.len() < 2 {
+        return;
+    }
+
+    let all_exits_equal = compare
+        .sides
+        .first()
+        .map(|first| compare.sides.iter().all(|side| side.exit == first.exit))
+        .unwrap_or(true);
+    let all_normalized_equal = compare
+        .sides
+        .first()
+        .map(|first| {
+            compare
+                .sides
+                .iter()
+                .all(|side| side.normalized == first.normalized)
+        })
+        .unwrap_or(true);
+    if all_exits_equal && all_normalized_equal {
         return;
     }
 
@@ -202,173 +284,227 @@ pub fn assert_parity_with_diagnostics(
         .join("headlamp-parity-dumps")
         .join(repo_key);
     let _ = std::fs::create_dir_all(&dump_dir);
-    let ts_path = dump_dir.join(format!("{safe}-ts.txt"));
-    let rs_path = dump_dir.join(format!("{safe}-rs.txt"));
-    let raw_ts_path = dump_dir.join(format!("{safe}-raw-ts.txt"));
-    let raw_rs_path = dump_dir.join(format!("{safe}-raw-rs.txt"));
-    let diff_path = dump_dir.join(format!("{safe}-diff.txt"));
-    let report_path = dump_dir.join(format!("{safe}-report.txt"));
-    let meta_path = dump_dir.join(format!("{safe}-meta.json"));
-    let analysis_path = dump_dir.join(format!("{safe}-analysis.json"));
-    let tokens_ts_path = dump_dir.join(format!("{safe}-tokens-ts.json"));
-    let tokens_rs_path = dump_dir.join(format!("{safe}-tokens-rs.json"));
-    let ast_ts_path = dump_dir.join(format!("{safe}-ast-ts.json"));
-    let ast_rs_path = dump_dir.join(format!("{safe}-ast-rs.json"));
-    let reruns_dir = dump_dir.join(format!("{safe}-reruns"));
 
-    let _ = std::fs::write(&ts_path, &compare.normalized_ts);
-    let _ = std::fs::write(&rs_path, &compare.normalized_rs);
-    let _ = std::fs::write(&raw_ts_path, &compare.raw_ts);
-    let _ = std::fs::write(&raw_rs_path, &compare.raw_rs);
-    let token_ast_summary = write_token_ast_files(
-        &tokens_ts_path,
-        &tokens_rs_path,
-        &ast_ts_path,
-        &ast_rs_path,
-        compare,
+    let pivot_index = cluster::pick_pivot_index(compare);
+    let clusters = cluster::cluster_indices_by_normalized(compare);
+
+    let report_path = dump_dir.join(format!("{safe}--report.txt"));
+    let meta_path = dump_dir.join(format!("{safe}--meta.json"));
+    let analysis_path = dump_dir.join(format!("{safe}--analysis.json"));
+    let reruns_dir = dump_dir.join(format!("{safe}--reruns"));
+
+    let side_dump_paths = compare
+        .sides
+        .iter()
+        .map(|side| {
+            let side_key = side.label.file_safe_label();
+            let normalized = dump_dir.join(format!("{safe}--{side_key}--normalized.txt"));
+            let raw = dump_dir.join(format!("{safe}--{side_key}--raw.txt"));
+            let tokens = dump_dir.join(format!("{safe}--{side_key}--tokens.json"));
+            let ast = dump_dir.join(format!("{safe}--{side_key}--ast.json"));
+            (normalized, raw, tokens, ast)
+        })
+        .collect::<Vec<_>>();
+
+    compare.sides.iter().zip(side_dump_paths.iter()).for_each(
+        |(side, (normalized_path, raw_path, _, _))| {
+            let _ = std::fs::write(normalized_path, &side.normalized);
+            let _ = std::fs::write(raw_path, &side.raw);
+        },
     );
-    let reruns = run_pair
-        .and_then(|pair| run_diagnostic_reruns(&reruns_dir, pair))
+
+    let token_ast_summary = TokenAstSummary {
+        sides: compare
+            .sides
+            .iter()
+            .zip(side_dump_paths.iter())
+            .map(|(side, (_, _, tokens_path, ast_path))| {
+                let raw = token_ast::build_token_stream(&side.raw);
+                let normalized = token_ast::build_token_stream(&side.normalized);
+                let doc_ast = token_ast::build_document_ast(&side.normalized);
+                let _ = std::fs::File::create(tokens_path)
+                    .ok()
+                    .and_then(|mut file| serde_json::to_writer_pretty(&mut file, &raw).ok());
+                let _ = std::fs::File::create(ast_path)
+                    .ok()
+                    .and_then(|mut file| serde_json::to_writer_pretty(&mut file, &doc_ast).ok());
+                TokenAstSideSummary {
+                    label: side.label.clone(),
+                    raw: raw.stats,
+                    normalized: normalized.stats,
+                    block_order: doc_ast.blocks.into_iter().map(|b| b.hash).collect(),
+                }
+            })
+            .collect(),
+    };
+    let reruns = run_group
+        .and_then(|group| run_diagnostic_reruns(&reruns_dir, group))
         .unwrap_or_default();
     let meta_file = ParityMetaFile {
-        compare: &compare.meta,
+        sides: compare
+            .sides
+            .iter()
+            .map(|side| ParityMetaSide {
+                label: &side.label,
+                meta: &side.meta,
+            })
+            .collect(),
         token_ast: token_ast_summary,
         reruns,
     };
     if let Ok(mut file) = std::fs::File::create(&meta_path) {
         let _ = serde_json::to_writer_pretty(&mut file, &meta_file);
     }
+
+    let diff_paths = clusters
+        .iter()
+        .filter(|cluster| !cluster.member_indices.contains(&pivot_index))
+        .filter_map(|cluster| {
+            cluster.member_indices.iter().copied().min_by(|&a, &b| {
+                compare.sides[a]
+                    .label
+                    .display_label()
+                    .cmp(&compare.sides[b].label.display_label())
+            })
+        })
+        .map(|other_index| {
+            let pivot_key = compare.sides[pivot_index].label.file_safe_label();
+            let other_key = compare.sides[other_index].label.file_safe_label();
+            let diff_path =
+                dump_dir.join(format!("{safe}--diff--{pivot_key}--vs--{other_key}.txt"));
+            let diff = similar_asserts::SimpleDiff::from_str(
+                &compare.sides[pivot_index].normalized,
+                &compare.sides[other_index].normalized,
+                &compare.sides[pivot_index].label.display_label(),
+                &compare.sides[other_index].label.display_label(),
+            )
+            .to_string();
+            let _ = std::fs::write(&diff_path, &diff);
+            diff_path.to_string_lossy().to_string()
+        })
+        .collect::<Vec<_>>();
+
     let artifacts = diagnostics::ArtifactPaths {
-        normalized_ts: ts_path.to_string_lossy().to_string(),
-        normalized_rs: rs_path.to_string_lossy().to_string(),
-        raw_ts: raw_ts_path.to_string_lossy().to_string(),
-        raw_rs: raw_rs_path.to_string_lossy().to_string(),
-        diff: diff_path.to_string_lossy().to_string(),
+        sides: compare
+            .sides
+            .iter()
+            .zip(side_dump_paths.iter())
+            .map(
+                |(side, (normalized, raw, tokens, ast))| diagnostics::SideArtifactPaths {
+                    label: side.label.clone(),
+                    normalized: normalized.to_string_lossy().to_string(),
+                    raw: raw.to_string_lossy().to_string(),
+                    tokens: tokens.to_string_lossy().to_string(),
+                    ast: ast.to_string_lossy().to_string(),
+                },
+            )
+            .collect(),
+        diffs: diff_paths.clone(),
         report: report_path.to_string_lossy().to_string(),
         meta: meta_path.to_string_lossy().to_string(),
         analysis: analysis_path.to_string_lossy().to_string(),
-        tokens_ts: tokens_ts_path.to_string_lossy().to_string(),
-        tokens_rs: tokens_rs_path.to_string_lossy().to_string(),
-        ast_ts: ast_ts_path.to_string_lossy().to_string(),
-        ast_rs: ast_rs_path.to_string_lossy().to_string(),
         reruns_dir: reruns_dir.to_string_lossy().to_string(),
     };
-    let bundle = diagnostics::build_bundle(
-        repo,
-        case,
-        code_ts,
-        code_rs,
-        artifacts,
-        compare,
-        &meta_file.reruns,
-    );
+    let bundle = diagnostics::build_bundle(repo, case, artifacts, compare, &meta_file.reruns);
     if let Ok(mut file) = std::fs::File::create(&analysis_path) {
         let _ = serde_json::to_writer_pretty(&mut file, &bundle);
     }
-
-    let diff = similar_asserts::SimpleDiff::from_str(
-        &compare.normalized_ts,
-        &compare.normalized_rs,
-        "ts",
-        "rs",
-    )
-    .to_string();
-    let _ = std::fs::write(&diff_path, &diff);
 
     let report = diff_report::build_parity_report_with_meta(compare);
     let _ = std::fs::write(&report_path, &report);
     let report_for_panic = truncate_report_for_panic(&report);
 
+    let side_labels = compare
+        .sides
+        .iter()
+        .enumerate()
+        .map(|(index, side)| {
+            format!(
+                "  - side_{index}: exit={} label={}",
+                side.exit,
+                side.label.display_label()
+            )
+        })
+        .collect::<Vec<_>>()
+        .join("\n");
+    let cluster_lines = clusters
+        .iter()
+        .enumerate()
+        .map(|(cluster_index, cluster)| {
+            let labels = cluster
+                .member_indices
+                .iter()
+                .map(|&i| compare.sides[i].label.display_label())
+                .collect::<Vec<_>>()
+                .join(", ");
+            format!(
+                "  - cluster_{cluster_index}: size={} [{}]",
+                cluster.member_indices.len(),
+                labels
+            )
+        })
+        .collect::<Vec<_>>()
+        .join("\n");
+    let diffs_for_panic = diff_paths
+        .iter()
+        .map(|p| format!("  - {p}"))
+        .collect::<Vec<_>>()
+        .join("\n");
+
     panic!(
-        "parity mismatch ({case}) repo={}: ts_exit={code_ts} rs_exit={code_rs}\n\nREPORT:\n{}\n\nDIFF: {}\nREPORT_FILE: {}\nMETA: {}\nANALYSIS: {}\nTS: {}\nRS: {}\nRAW_TS: {}\nRAW_RS: {}\nTOKENS_TS: {}\nTOKENS_RS: {}\nAST_TS: {}\nAST_RS: {}\nRERUNS_DIR: {}",
+        "parity mismatch ({case}) repo={}\n\nSIDES:\n{side_labels}\n\nCLUSTERS:\n{cluster_lines}\n\nREPORT:\n{}\n\nDIFF_FILES:\n{diffs_for_panic}\nREPORT_FILE: {}\nMETA: {}\nANALYSIS: {}\nRERUNS_DIR: {}",
         repo.display(),
         report_for_panic,
-        diff_path.display(),
         report_path.display(),
         meta_path.display(),
         analysis_path.display(),
-        ts_path.display(),
-        rs_path.display(),
-        raw_ts_path.display(),
-        raw_rs_path.display(),
-        tokens_ts_path.display(),
-        tokens_rs_path.display(),
-        ast_ts_path.display(),
-        ast_rs_path.display(),
         reruns_dir.display(),
     );
 }
 
 #[derive(Debug, Serialize)]
 struct ParityMetaFile<'a> {
-    compare: &'a parity_meta::ParityCompareMeta,
+    sides: Vec<ParityMetaSide<'a>>,
     token_ast: TokenAstSummary,
     reruns: Vec<RerunMeta>,
 }
 
 #[derive(Debug, Serialize)]
+struct ParityMetaSide<'a> {
+    label: &'a ParitySideLabel,
+    meta: &'a parity_meta::ParitySideMeta,
+}
+
+#[derive(Debug, Serialize)]
 struct TokenAstSummary {
-    ts_raw: token_ast::TokenStats,
-    rs_raw: token_ast::TokenStats,
-    ts_norm: token_ast::TokenStats,
-    rs_norm: token_ast::TokenStats,
-    ts_block_order: Vec<String>,
-    rs_block_order: Vec<String>,
+    sides: Vec<TokenAstSideSummary>,
+}
+
+#[derive(Debug, Serialize)]
+struct TokenAstSideSummary {
+    label: ParitySideLabel,
+    raw: token_ast::TokenStats,
+    normalized: token_ast::TokenStats,
+    block_order: Vec<String>,
 }
 
 #[derive(Debug, Clone, Serialize)]
 pub struct RerunMeta {
     variant: String,
-    ts_code: i32,
-    rs_code: i32,
-    ts_path: String,
-    rs_path: String,
-    ts_bytes: usize,
-    rs_bytes: usize,
-    ts_tokens: token_ast::TokenStats,
-    rs_tokens: token_ast::TokenStats,
-    ts_blocks: usize,
-    rs_blocks: usize,
+    sides: Vec<RerunSideMeta>,
 }
 
-fn write_token_ast_files(
-    tokens_ts_path: &Path,
-    tokens_rs_path: &Path,
-    ast_ts_path: &Path,
-    ast_rs_path: &Path,
-    compare: &parity_meta::ParityCompareInput,
-) -> TokenAstSummary {
-    let ts_raw = token_ast::build_token_stream(&compare.raw_ts);
-    let rs_raw = token_ast::build_token_stream(&compare.raw_rs);
-    let ts_norm = token_ast::build_token_stream(&compare.normalized_ts);
-    let rs_norm = token_ast::build_token_stream(&compare.normalized_rs);
-    let ast_ts = token_ast::build_document_ast(&compare.normalized_ts);
-    let ast_rs = token_ast::build_document_ast(&compare.normalized_rs);
-
-    let _ = std::fs::File::create(tokens_ts_path)
-        .ok()
-        .and_then(|mut f| serde_json::to_writer_pretty(&mut f, &ts_raw).ok());
-    let _ = std::fs::File::create(tokens_rs_path)
-        .ok()
-        .and_then(|mut f| serde_json::to_writer_pretty(&mut f, &rs_raw).ok());
-    let _ = std::fs::File::create(ast_ts_path)
-        .ok()
-        .and_then(|mut f| serde_json::to_writer_pretty(&mut f, &ast_ts).ok());
-    let _ = std::fs::File::create(ast_rs_path)
-        .ok()
-        .and_then(|mut f| serde_json::to_writer_pretty(&mut f, &ast_rs).ok());
-
-    TokenAstSummary {
-        ts_raw: ts_raw.stats,
-        rs_raw: rs_raw.stats,
-        ts_norm: ts_norm.stats,
-        rs_norm: rs_norm.stats,
-        ts_block_order: ast_ts.blocks.into_iter().map(|b| b.hash).collect(),
-        rs_block_order: ast_rs.blocks.into_iter().map(|b| b.hash).collect(),
-    }
+#[derive(Debug, Clone, Serialize)]
+pub struct RerunSideMeta {
+    label: ParitySideLabel,
+    code: i32,
+    path: String,
+    bytes: usize,
+    tokens: token_ast::TokenStats,
+    blocks: usize,
 }
 
-fn run_diagnostic_reruns(dir: &Path, run_pair: &ParityRunPair) -> Option<Vec<RerunMeta>> {
+fn run_diagnostic_reruns(dir: &Path, run_group: &ParityRunGroup) -> Option<Vec<RerunMeta>> {
     let _ = std::fs::create_dir_all(dir);
     let variants = [
         RerunVariant::non_tty("no_color", &[("NO_COLOR", "1")]),
@@ -380,7 +516,7 @@ fn run_diagnostic_reruns(dir: &Path, run_pair: &ParityRunPair) -> Option<Vec<Rer
     Some(
         variants
             .into_iter()
-            .filter_map(|variant| run_one_rerun(dir, run_pair, &variant))
+            .filter_map(|variant| run_one_rerun(dir, run_group, &variant))
             .collect(),
     )
 }
@@ -421,34 +557,34 @@ impl RerunVariant {
 
 fn run_one_rerun(
     dir: &Path,
-    run_pair: &ParityRunPair,
+    run_group: &ParityRunGroup,
     variant: &RerunVariant,
 ) -> Option<RerunMeta> {
-    let ts_path = dir.join(format!("ts-{}.txt", variant.id));
-    let rs_path = dir.join(format!("rs-{}.txt", variant.id));
+    let sides = run_group
+        .sides
+        .iter()
+        .map(|spec| {
+            let side_key = spec.side_label.file_safe_label();
+            let side_path = dir.join(format!("{side_key}--{}.txt", variant.id));
 
-    let (ts_code, ts_out) = run_variant_side(&run_pair.ts, variant);
-    let (rs_code, rs_out) = run_variant_side(&run_pair.rs, variant);
-    let _ = std::fs::write(&ts_path, &ts_out);
-    let _ = std::fs::write(&rs_path, &rs_out);
-
-    let ts_tokens = token_ast::build_token_stream(&ts_out).stats;
-    let rs_tokens = token_ast::build_token_stream(&rs_out).stats;
-    let ts_blocks = token_ast::build_document_ast(&ts_out).blocks.len();
-    let rs_blocks = token_ast::build_document_ast(&rs_out).blocks.len();
+            let (side_code, side_out) = run_variant_side(spec, variant);
+            let _ = std::fs::write(&side_path, &side_out);
+            let side_tokens = token_ast::build_token_stream(&side_out).stats;
+            let side_blocks = token_ast::build_document_ast(&side_out).blocks.len();
+            RerunSideMeta {
+                label: spec.side_label.clone(),
+                code: side_code,
+                path: side_path.to_string_lossy().to_string(),
+                bytes: side_out.as_bytes().len(),
+                tokens: side_tokens,
+                blocks: side_blocks,
+            }
+        })
+        .collect::<Vec<_>>();
 
     Some(RerunMeta {
         variant: variant.id.to_string(),
-        ts_code,
-        rs_code,
-        ts_path: ts_path.to_string_lossy().to_string(),
-        rs_path: rs_path.to_string_lossy().to_string(),
-        ts_bytes: ts_out.as_bytes().len(),
-        rs_bytes: rs_out.as_bytes().len(),
-        ts_tokens,
-        rs_tokens,
-        ts_blocks,
-        rs_blocks,
+        sides,
     })
 }
 
@@ -498,12 +634,12 @@ pub struct ParityBinaries {
     pub node_modules: PathBuf,
 }
 
-fn env_path_or_default(var: &str, default: &str) -> PathBuf {
+fn env_path(var: &str) -> Option<PathBuf> {
     std::env::var(var)
         .ok()
-        .filter(|s| !s.trim().is_empty())
+        .map(|s| s.trim().to_string())
+        .filter(|s| !s.is_empty())
         .map(PathBuf::from)
-        .unwrap_or_else(|| PathBuf::from(default))
 }
 
 pub fn parity_binaries() -> Option<ParityBinaries> {
@@ -511,20 +647,10 @@ pub fn parity_binaries() -> Option<ParityBinaries> {
         return None;
     }
 
-    let ts_cli = env_path_or_default(
-        "HEADLAMP_PARITY_TS_CLI",
-        "/Users/david/src/headlamp-original/dist/cli.cjs",
-    );
-    let rust_bin = env_path_or_default(
-        "HEADLAMP_PARITY_RS_BIN",
-        "/Users/david/src/headlamp/target/debug/headlamp",
-    );
-    let node_modules = env_path_or_default(
-        "HEADLAMP_PARITY_NODE_MODULES",
-        "/Users/david/src/headlamp-original/node_modules",
-    );
+    let ts_cli = env_path("HEADLAMP_PARITY_TS_CLI")?;
+    let rust_bin = env_path("HEADLAMP_PARITY_RS_BIN")?;
+    let node_modules = env_path("HEADLAMP_PARITY_NODE_MODULES")?;
 
-    ensure_rust_bin(&rust_bin);
     if !(ts_cli.exists() && rust_bin.exists() && node_modules.exists()) {
         return None;
     }
@@ -534,6 +660,110 @@ pub fn parity_binaries() -> Option<ParityBinaries> {
         rust_bin,
         node_modules,
     })
+}
+
+#[derive(Debug, Clone)]
+pub struct RunnerParityBinaries {
+    pub headlamp_bin: PathBuf,
+    pub jest_node_modules: PathBuf,
+}
+
+fn npm_program() -> &'static str {
+    if cfg!(windows) { "npm.cmd" } else { "npm" }
+}
+
+fn ensure_js_deps_node_modules(js_deps_dir: &Path) -> Result<PathBuf, String> {
+    static INIT: OnceLock<Result<PathBuf, String>> = OnceLock::new();
+    INIT.get_or_init(|| {
+        let node_modules = js_deps_dir.join("node_modules");
+        let jest_bin =
+            node_modules
+                .join(".bin")
+                .join(if cfg!(windows) { "jest.cmd" } else { "jest" });
+        if jest_bin.exists() {
+            return Ok(node_modules);
+        }
+
+        let status = Command::new(npm_program())
+            .current_dir(js_deps_dir)
+            .args(["ci", "--silent"])
+            .env("npm_config_loglevel", "error")
+            .status()
+            .map_err(|e| format!("failed to run npm ci: {e}"))?;
+        if !status.success() {
+            return Err(format!(
+                "npm ci failed in {} (status={:?})",
+                js_deps_dir.display(),
+                status.code()
+            ));
+        }
+        if !jest_bin.exists() {
+            return Err(format!(
+                "jest not found at {} after npm ci",
+                jest_bin.display()
+            ));
+        }
+        Ok(node_modules)
+    })
+    .clone()
+}
+
+pub fn runner_parity_binaries() -> RunnerParityBinaries {
+    let headlamp_bin = std::env::var("CARGO_BIN_EXE_headlamp")
+        .ok()
+        .map(PathBuf::from)
+        .filter(|p| p.exists())
+        .unwrap_or_else(|| ensure_headlamp_bin_from_target_dir());
+
+    let js_deps_dir = PathBuf::from(env!("CARGO_MANIFEST_DIR"))
+        .join("tests")
+        .join("js_deps");
+    let jest_node_modules = ensure_js_deps_node_modules(&js_deps_dir)
+        .unwrap_or_else(|e| panic!("failed to ensure Jest deps: {e}"));
+
+    RunnerParityBinaries {
+        headlamp_bin,
+        jest_node_modules,
+    }
+}
+
+fn ensure_headlamp_bin_from_target_dir() -> PathBuf {
+    let manifest_dir = PathBuf::from(env!("CARGO_MANIFEST_DIR"));
+    let workspace_root = manifest_dir
+        .parent()
+        .unwrap_or_else(|| panic!("expected {} to have a parent dir", manifest_dir.display()))
+        .to_path_buf();
+
+    let target_dir = std::env::var("CARGO_TARGET_DIR")
+        .ok()
+        .map(PathBuf::from)
+        .unwrap_or_else(|| workspace_root.join("target"));
+
+    let exe_name = if cfg!(windows) {
+        "headlamp.exe"
+    } else {
+        "headlamp"
+    };
+    let bin_path = target_dir.join("debug").join(exe_name);
+    if bin_path.exists() {
+        return bin_path;
+    }
+
+    let status = Command::new("cargo")
+        .current_dir(&workspace_root)
+        .args(["build", "-q", "-p", "headlamp"])
+        .status()
+        .unwrap_or_else(|e| panic!("failed to run cargo build: {e}"));
+    if !status.success() {
+        panic!(
+            "failed to build headlamp binary (status={:?})",
+            status.code()
+        );
+    }
+    if !bin_path.exists() {
+        panic!("headlamp binary missing at {}", bin_path.display());
+    }
+    bin_path
 }
 
 pub fn mk_temp_dir(name: &str) -> PathBuf {
@@ -559,11 +789,27 @@ pub fn write_jest_config(repo: &Path, test_match: &str) {
     );
 }
 
-fn build_env_map(repo: &Path, is_ts: bool) -> BTreeMap<String, String> {
+fn program_display_name(program: &Path) -> String {
+    program
+        .file_stem()
+        .and_then(|s| s.to_str())
+        .unwrap_or("unknown")
+        .to_string()
+}
+
+fn headlamp_runner_stack(runner: &str) -> String {
+    match runner {
+        "cargo-test" => "cargo-test->cargo".to_string(),
+        "cargo-nextest" => "cargo-nextest->nextest".to_string(),
+        other => format!("{other}->{other}"),
+    }
+}
+
+fn build_env_map(repo: &Path, side_label: &ParitySideLabel) -> BTreeMap<String, String> {
     let mut env: BTreeMap<String, String> = BTreeMap::new();
     env.insert("CI".to_string(), "1".to_string());
     if std::env::var_os("HEADLAMP_CACHE_DIR").is_none() {
-        let suffix = if is_ts { "ts" } else { "rs" };
+        let suffix = side_label.file_safe_label();
         env.insert(
             "HEADLAMP_CACHE_DIR".to_string(),
             repo.join(format!(".headlamp-cache-{suffix}"))
@@ -606,8 +852,14 @@ pub fn assert_parity_with_args(
     ts_args: &[&str],
     rs_args: &[&str],
 ) {
-    let (_spec, code_ts, out_ts, code_rs, out_rs) =
-        run_parity_fixture_with_args(repo, &binaries.ts_cli, &binaries.rust_bin, ts_args, rs_args);
+    let (_spec, code_ts, out_ts, code_rs, out_rs) = run_parity_fixture_with_args(
+        repo,
+        &binaries.ts_cli,
+        &binaries.rust_bin,
+        ts_args,
+        rs_args,
+        "jest",
+    );
 
     let n_ts = normalize(out_ts, repo);
     let n_rs = normalize(out_rs, repo);
@@ -629,6 +881,7 @@ pub fn assert_parity_tty_ui_with_args(
         columns,
         ts_args,
         rs_args,
+        "jest",
     );
 
     let n_ts = normalize_tty_ui(out_ts, repo);
@@ -842,11 +1095,6 @@ fn ensure_rust_bin(rust_bin: &Path) {
     if rust_bin.exists() {
         return;
     }
-    let _ = Command::new("cargo")
-        .current_dir("/Users/david/src/headlamp")
-        .args(["build", "-q", "-p", "headlamp"])
-        .status()
-        .unwrap();
 }
 
 pub fn run_parity_fixture_with_args(
@@ -855,32 +1103,44 @@ pub fn run_parity_fixture_with_args(
     rust_bin: &Path,
     ts_args: &[&str],
     rs_args: &[&str],
-) -> (ParityRunPair, i32, String, i32, String) {
+    runner: &str,
+) -> (ParityRunGroup, i32, String, i32, String) {
+    let ts_side_label = ParitySideLabel {
+        binary: "node".to_string(),
+        runner_stack: format!("ts-cli->{runner}"),
+    };
+    let rs_side_label = ParitySideLabel {
+        binary: program_display_name(rust_bin),
+        runner_stack: headlamp_runner_stack(runner),
+    };
+    let ts_env = build_env_map(repo, &ts_side_label);
+    let rs_env = build_env_map(repo, &rs_side_label);
+
     let mut cmd_ts = Command::new("node");
-    cmd_ts.current_dir(repo).arg(ts_cli).arg("--sequential");
-    cmd_ts.env("CI", "1");
-    if std::env::var_os("HEADLAMP_CACHE_DIR").is_none() {
-        cmd_ts.env(
-            "HEADLAMP_CACHE_DIR",
-            repo.join(".headlamp-cache-ts")
-                .to_string_lossy()
-                .to_string(),
-        );
-    }
+    cmd_ts
+        .current_dir(repo)
+        .arg(ts_cli)
+        .arg("--sequential")
+        .arg(format!("--runner={runner}"));
+    ts_env.iter().for_each(|(k, v)| {
+        cmd_ts.env(k, v);
+    });
     ts_args.iter().for_each(|arg| {
         cmd_ts.arg(arg);
     });
     let ts_spec = ParityRunSpec {
         cwd: repo.to_path_buf(),
         program: PathBuf::from("node"),
+        side_label: ts_side_label,
         args: [
             ts_cli.to_string_lossy().to_string(),
             "--sequential".to_string(),
+            format!("--runner={runner}"),
         ]
         .into_iter()
         .chain(ts_args.iter().map(|s| s.to_string()))
         .collect::<Vec<_>>(),
-        env: build_env_map(repo, true),
+        env: ts_env,
         tty_columns: None,
         stdout_piped: false,
     };
@@ -889,36 +1149,30 @@ pub fn run_parity_fixture_with_args(
     let mut cmd_rs = Command::new(rust_bin);
     cmd_rs
         .current_dir(repo)
-        .arg("--runner=jest")
+        .arg(format!("--runner={runner}"))
         .arg("--sequential");
-    cmd_rs.env("CI", "1");
-    if std::env::var_os("HEADLAMP_CACHE_DIR").is_none() {
-        cmd_rs.env(
-            "HEADLAMP_CACHE_DIR",
-            repo.join(".headlamp-cache-rs")
-                .to_string_lossy()
-                .to_string(),
-        );
-    }
+    rs_env.iter().for_each(|(k, v)| {
+        cmd_rs.env(k, v);
+    });
     rs_args.iter().for_each(|arg| {
         cmd_rs.arg(arg);
     });
     let rs_spec = ParityRunSpec {
         cwd: repo.to_path_buf(),
         program: rust_bin.to_path_buf(),
-        args: ["--runner=jest".to_string(), "--sequential".to_string()]
+        side_label: rs_side_label,
+        args: [format!("--runner={runner}"), "--sequential".to_string()]
             .into_iter()
             .chain(rs_args.iter().map(|s| s.to_string()))
             .collect(),
-        env: build_env_map(repo, false),
+        env: rs_env,
         tty_columns: None,
         stdout_piped: false,
     };
     let (code_rs, out_rs) = run_cmd(cmd_rs);
     (
-        ParityRunPair {
-            ts: ts_spec,
-            rs: rs_spec,
+        ParityRunGroup {
+            sides: vec![ts_spec, rs_spec],
         },
         code_ts,
         out_ts,
@@ -934,31 +1188,44 @@ pub fn run_parity_fixture_with_args_tty(
     columns: usize,
     ts_args: &[&str],
     rs_args: &[&str],
-) -> (ParityRunPair, i32, String, i32, String) {
+    runner: &str,
+) -> (ParityRunGroup, i32, String, i32, String) {
+    let ts_side_label = ParitySideLabel {
+        binary: "node".to_string(),
+        runner_stack: format!("ts-cli->{runner}"),
+    };
+    let rs_side_label = ParitySideLabel {
+        binary: program_display_name(rust_bin),
+        runner_stack: headlamp_runner_stack(runner),
+    };
+    let ts_env = build_env_map(repo, &ts_side_label);
+    let rs_env = build_env_map(repo, &rs_side_label);
+
     let mut cmd_ts = Command::new("node");
-    cmd_ts.current_dir(repo).arg(ts_cli).arg("--sequential");
-    if std::env::var_os("HEADLAMP_CACHE_DIR").is_none() {
-        cmd_ts.env(
-            "HEADLAMP_CACHE_DIR",
-            repo.join(".headlamp-cache-ts")
-                .to_string_lossy()
-                .to_string(),
-        );
-    }
+    cmd_ts
+        .current_dir(repo)
+        .arg(ts_cli)
+        .arg("--sequential")
+        .arg(format!("--runner={runner}"));
+    ts_env.iter().for_each(|(k, v)| {
+        cmd_ts.env(k, v);
+    });
     ts_args.iter().for_each(|arg| {
         cmd_ts.arg(arg);
     });
     let ts_spec = ParityRunSpec {
         cwd: repo.to_path_buf(),
         program: PathBuf::from("node"),
+        side_label: ts_side_label,
         args: [
             ts_cli.to_string_lossy().to_string(),
             "--sequential".to_string(),
+            format!("--runner={runner}"),
         ]
         .into_iter()
         .chain(ts_args.iter().map(|s| s.to_string()))
         .collect::<Vec<_>>(),
-        env: build_env_map(repo, true),
+        env: ts_env,
         tty_columns: Some(columns),
         stdout_piped: false,
     };
@@ -967,41 +1234,121 @@ pub fn run_parity_fixture_with_args_tty(
     let mut cmd_rs = Command::new(rust_bin);
     cmd_rs
         .current_dir(repo)
-        .arg("--runner=jest")
+        .arg(format!("--runner={runner}"))
         .arg("--sequential");
-    if std::env::var_os("HEADLAMP_CACHE_DIR").is_none() {
-        cmd_rs.env(
-            "HEADLAMP_CACHE_DIR",
-            repo.join(".headlamp-cache-rs")
-                .to_string_lossy()
-                .to_string(),
-        );
-    }
+    rs_env.iter().for_each(|(k, v)| {
+        cmd_rs.env(k, v);
+    });
     rs_args.iter().for_each(|arg| {
         cmd_rs.arg(arg);
     });
     let rs_spec = ParityRunSpec {
         cwd: repo.to_path_buf(),
         program: rust_bin.to_path_buf(),
-        args: ["--runner=jest".to_string(), "--sequential".to_string()]
+        side_label: rs_side_label,
+        args: [format!("--runner={runner}"), "--sequential".to_string()]
             .into_iter()
             .chain(rs_args.iter().map(|s| s.to_string()))
             .collect(),
-        env: build_env_map(repo, false),
+        env: rs_env,
         tty_columns: Some(columns),
         stdout_piped: false,
     };
     let (code_rs, out_rs) = run_cmd_tty(cmd_rs, columns);
     (
-        ParityRunPair {
-            ts: ts_spec,
-            rs: rs_spec,
+        ParityRunGroup {
+            sides: vec![ts_spec, rs_spec],
         },
         code_ts,
         out_ts,
         code_rs,
         out_rs,
     )
+}
+
+pub fn run_parity_headlamp_vs_headlamp_with_args_tty(
+    repo: &Path,
+    headlamp_bin: &Path,
+    columns: usize,
+    baseline_runner: &str,
+    candidate_runner: &str,
+    baseline_args: &[&str],
+    candidate_args: &[&str],
+) -> (ParityRunGroup, i32, String, i32, String) {
+    let baseline_spec =
+        mk_headlamp_tty_run_spec(repo, headlamp_bin, columns, baseline_runner, baseline_args);
+    let candidate_spec = mk_headlamp_tty_run_spec(
+        repo,
+        headlamp_bin,
+        columns,
+        candidate_runner,
+        candidate_args,
+    );
+
+    let (code_baseline, out_baseline) =
+        run_cmd_tty(build_command_from_spec(&baseline_spec), columns);
+    let (code_candidate, out_candidate) =
+        run_cmd_tty(build_command_from_spec(&candidate_spec), columns);
+
+    (
+        ParityRunGroup {
+            sides: vec![baseline_spec, candidate_spec],
+        },
+        code_baseline,
+        out_baseline,
+        code_candidate,
+        out_candidate,
+    )
+}
+
+pub fn run_headlamp_with_args_tty(
+    repo: &Path,
+    headlamp_bin: &Path,
+    columns: usize,
+    runner: &str,
+    args: &[&str],
+) -> (ParityRunSpec, i32, String) {
+    let spec = mk_headlamp_tty_run_spec(repo, headlamp_bin, columns, runner, args);
+    let (code, out) = run_cmd_tty(build_command_from_spec(&spec), columns);
+    (spec, code, out)
+}
+
+fn mk_headlamp_tty_run_spec(
+    repo: &Path,
+    headlamp_bin: &Path,
+    columns: usize,
+    runner: &str,
+    args: &[&str],
+) -> ParityRunSpec {
+    let base_args = [format!("--runner={runner}"), "--sequential".to_string()];
+    let side_label = ParitySideLabel {
+        binary: program_display_name(headlamp_bin),
+        runner_stack: headlamp_runner_stack(runner),
+    };
+    ParityRunSpec {
+        cwd: repo.to_path_buf(),
+        program: headlamp_bin.to_path_buf(),
+        side_label: side_label.clone(),
+        args: base_args
+            .into_iter()
+            .chain(args.iter().map(|s| s.to_string()))
+            .collect(),
+        env: build_env_map(repo, &side_label),
+        tty_columns: Some(columns),
+        stdout_piped: false,
+    }
+}
+
+fn build_command_from_spec(spec: &ParityRunSpec) -> Command {
+    let mut cmd = Command::new(&spec.program);
+    cmd.current_dir(&spec.cwd);
+    spec.args.iter().for_each(|arg| {
+        cmd.arg(arg);
+    });
+    spec.env.iter().for_each(|(k, v)| {
+        cmd.env(k, v);
+    });
+    cmd
 }
 
 pub fn run_parity_fixture_with_args_tty_stdout_piped(
@@ -1011,31 +1358,44 @@ pub fn run_parity_fixture_with_args_tty_stdout_piped(
     columns: usize,
     ts_args: &[&str],
     rs_args: &[&str],
-) -> (ParityRunPair, i32, String, i32, String) {
+    runner: &str,
+) -> (ParityRunGroup, i32, String, i32, String) {
+    let ts_side_label = ParitySideLabel {
+        binary: "node".to_string(),
+        runner_stack: format!("ts-cli->{runner}"),
+    };
+    let rs_side_label = ParitySideLabel {
+        binary: program_display_name(rust_bin),
+        runner_stack: headlamp_runner_stack(runner),
+    };
+    let ts_env = build_env_map(repo, &ts_side_label);
+    let rs_env = build_env_map(repo, &rs_side_label);
+
     let mut cmd_ts = Command::new("node");
-    cmd_ts.current_dir(repo).arg(ts_cli).arg("--sequential");
-    if std::env::var_os("HEADLAMP_CACHE_DIR").is_none() {
-        cmd_ts.env(
-            "HEADLAMP_CACHE_DIR",
-            repo.join(".headlamp-cache-ts")
-                .to_string_lossy()
-                .to_string(),
-        );
-    }
+    cmd_ts
+        .current_dir(repo)
+        .arg(ts_cli)
+        .arg("--sequential")
+        .arg(format!("--runner={runner}"));
+    ts_env.iter().for_each(|(k, v)| {
+        cmd_ts.env(k, v);
+    });
     ts_args.iter().for_each(|arg| {
         cmd_ts.arg(arg);
     });
     let ts_spec = ParityRunSpec {
         cwd: repo.to_path_buf(),
         program: PathBuf::from("node"),
+        side_label: ts_side_label,
         args: [
             ts_cli.to_string_lossy().to_string(),
             "--sequential".to_string(),
+            format!("--runner={runner}"),
         ]
         .into_iter()
         .chain(ts_args.iter().map(|s| s.to_string()))
         .collect::<Vec<_>>(),
-        env: build_env_map(repo, true),
+        env: ts_env,
         tty_columns: Some(columns),
         stdout_piped: true,
     };
@@ -1044,35 +1404,30 @@ pub fn run_parity_fixture_with_args_tty_stdout_piped(
     let mut cmd_rs = Command::new(rust_bin);
     cmd_rs
         .current_dir(repo)
-        .arg("--runner=jest")
+        .arg(format!("--runner={runner}"))
         .arg("--sequential");
-    if std::env::var_os("HEADLAMP_CACHE_DIR").is_none() {
-        cmd_rs.env(
-            "HEADLAMP_CACHE_DIR",
-            repo.join(".headlamp-cache-rs")
-                .to_string_lossy()
-                .to_string(),
-        );
-    }
+    rs_env.iter().for_each(|(k, v)| {
+        cmd_rs.env(k, v);
+    });
     rs_args.iter().for_each(|arg| {
         cmd_rs.arg(arg);
     });
     let rs_spec = ParityRunSpec {
         cwd: repo.to_path_buf(),
         program: rust_bin.to_path_buf(),
-        args: ["--runner=jest".to_string(), "--sequential".to_string()]
+        side_label: rs_side_label,
+        args: [format!("--runner={runner}"), "--sequential".to_string()]
             .into_iter()
             .chain(rs_args.iter().map(|s| s.to_string()))
             .collect(),
-        env: build_env_map(repo, false),
+        env: rs_env,
         tty_columns: Some(columns),
         stdout_piped: true,
     };
     let (code_rs, out_rs) = run_cmd_tty_stdout_piped(cmd_rs, columns);
     (
-        ParityRunPair {
-            ts: ts_spec,
-            rs: rs_spec,
+        ParityRunGroup {
+            sides: vec![ts_spec, rs_spec],
         },
         code_ts,
         out_ts,
@@ -1087,19 +1442,19 @@ pub fn run_rust_fixture_with_args_tty_stdout_piped(
     columns: usize,
     rs_args: &[&str],
 ) -> (i32, String) {
+    let side_label = ParitySideLabel {
+        binary: program_display_name(rust_bin),
+        runner_stack: headlamp_runner_stack("jest"),
+    };
+    let env = build_env_map(repo, &side_label);
     let mut cmd_rs = Command::new(rust_bin);
     cmd_rs
         .current_dir(repo)
         .arg("--runner=jest")
         .arg("--sequential");
-    if std::env::var_os("HEADLAMP_CACHE_DIR").is_none() {
-        cmd_rs.env(
-            "HEADLAMP_CACHE_DIR",
-            repo.join(".headlamp-cache-rs")
-                .to_string_lossy()
-                .to_string(),
-        );
-    }
+    env.iter().for_each(|(k, v)| {
+        cmd_rs.env(k, v);
+    });
     rs_args.iter().for_each(|arg| {
         cmd_rs.arg(arg);
     });

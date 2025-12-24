@@ -2,6 +2,39 @@ use std::collections::BTreeMap;
 
 use serde::Serialize;
 
+#[derive(Debug, Clone, Serialize)]
+pub struct ParitySideLabel {
+    pub binary: String,
+    pub runner_stack: String,
+}
+
+impl ParitySideLabel {
+    pub fn display_label(&self) -> String {
+        format!("{}[{}]", self.binary, self.runner_stack)
+    }
+
+    pub fn file_safe_label(&self) -> String {
+        let label = self.display_label();
+        let mut out: String = String::with_capacity(label.len());
+        let mut prev_dash = false;
+        for ch in label.chars() {
+            let lower = ch.to_ascii_lowercase();
+            let keep = lower.is_ascii_alphanumeric() || matches!(lower, '-' | '_' | '.');
+            let mapped = if keep { lower } else { '-' };
+            if mapped == '-' {
+                if !prev_dash {
+                    out.push('-');
+                }
+                prev_dash = true;
+            } else {
+                out.push(mapped);
+                prev_dash = false;
+            }
+        }
+        out.trim_matches(['-', '_']).to_string()
+    }
+}
+
 #[derive(Debug, Clone, Copy, Serialize)]
 pub enum NormalizerKind {
     NonTty,
@@ -36,16 +69,15 @@ pub struct ParitySideMeta {
 }
 
 #[derive(Debug, Clone, Serialize)]
-pub struct ParityCompareMeta {
-    pub ts: ParitySideMeta,
-    pub rs: ParitySideMeta,
+pub struct ParityCompareSideInput {
+    pub label: ParitySideLabel,
+    pub exit: i32,
+    pub raw: String,
+    pub normalized: String,
+    pub meta: ParitySideMeta,
 }
 
 #[derive(Debug, Clone)]
 pub struct ParityCompareInput {
-    pub raw_ts: String,
-    pub raw_rs: String,
-    pub normalized_ts: String,
-    pub normalized_rs: String,
-    pub meta: ParityCompareMeta,
+    pub sides: Vec<ParityCompareSideInput>,
 }

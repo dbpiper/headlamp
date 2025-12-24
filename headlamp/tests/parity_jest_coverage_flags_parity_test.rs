@@ -42,6 +42,7 @@ fn parity_jest_coverage_page_fit_tty_fixture() {
         120,
         &["--coverage", "--coverage.pageFit=true"],
         &["--coverage", "--coverage.pageFit=true"],
+        "jest",
     );
 
     let n_ts = normalize_tty_ui(out_ts, &repo);
@@ -71,6 +72,7 @@ fn parity_jest_coverage_max_files_tty_fixture() {
         120,
         &["--coverage", "--coverage.maxFiles=3"],
         &["--coverage", "--coverage.maxFiles=3"],
+        "jest",
     );
 
     let n_ts = normalize_tty_ui(out_ts.clone(), &repo);
@@ -115,6 +117,7 @@ fn parity_jest_coverage_include_exclude_tty_fixture() {
             "--coverage.include=src/file_0.js,src/file_1.js",
             "--coverage.exclude=src/file_1.js",
         ],
+        "jest",
     );
 
     let n_ts = normalize_tty_ui(out_ts.clone(), &repo);
@@ -166,6 +169,7 @@ fn parity_jest_coverage_detail_all_prints_hotspots_non_tty_fixture() {
             "--coverage.detail=all",
             "--coverage.mode=compact",
         ],
+        "jest",
     );
 
     assert_eq!(code_ts, code_rs);
@@ -213,6 +217,7 @@ fn parity_jest_coverage_editor_links_tty_fixture() {
             "--coverage.mode=compact",
             "--coverage.editor=vscode://file/{file}:{line}",
         ],
+        "jest",
     );
 
     let out_ts_raw = out_ts.clone();
@@ -262,6 +267,7 @@ fn parity_jest_coverage_abort_on_failure_flag_parses_fixture() {
         &binaries.rust_bin,
         &["--coverage", "--coverage.abortOnFailure=true"],
         &["--coverage", "--coverage.abortOnFailure=true"],
+        "jest",
     );
 
     assert_eq!(code_ts, code_rs);
@@ -293,6 +299,7 @@ fn parity_jest_coverage_ui_flag_accepts_kebab_and_camel_fixture() {
         &binaries.rust_bin,
         &["--coverage", "--coverage-ui=jest"],
         &["--coverage", "--coverage-ui=jest"],
+        "jest",
     );
     assert_eq!(code_ts_a, code_rs_a);
     let n_ts_a = normalize(out_ts_a, &repo);
@@ -305,6 +312,7 @@ fn parity_jest_coverage_ui_flag_accepts_kebab_and_camel_fixture() {
         &binaries.rust_bin,
         &["--coverage", "--coverageUi=jest"],
         &["--coverage", "--coverageUi=jest"],
+        "jest",
     );
     assert_eq!(code_ts_b, code_rs_b);
     let n_ts_b = normalize(out_ts_b, &repo);

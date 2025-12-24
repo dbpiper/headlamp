@@ -12,16 +12,16 @@ use headlamp_core::coverage::lcov::{merge_reports, read_lcov_file, resolve_lcov_
 use headlamp_core::coverage::print::{
     PrintOpts, filter_report, format_compact, format_hotspots, format_summary,
 };
-use headlamp_core::format::bridge::BridgeConsoleEntry;
-use headlamp_core::format::bridge::BridgeJson;
 use headlamp_core::format::ctx::make_ctx;
-use headlamp_core::format::vitest::render_vitest_from_jest_json;
+use headlamp_core::format::vitest::render_vitest_from_test_model;
 use headlamp_core::selection::related_tests::select_related_tests;
 use headlamp_core::selection::relevance::augment_rank_with_priority_paths;
 use headlamp_core::selection::route_index::{discover_tests_for_http_paths, get_route_index};
 use headlamp_core::selection::transitive_seed_refine::{
     filter_tests_by_transitive_seed, max_depth_from_args,
 };
+use headlamp_core::test_model::TestConsoleEntry;
+use headlamp_core::test_model::TestRunModel;
 use indexmap::IndexSet;
 
 use crate::fast_related::{
@@ -225,7 +225,7 @@ pub fn run_jest(repo_root: &Path, args: &ParsedArgs) -> Result<i32, RunError> {
     #[derive(Debug)]
     struct ProjectRunOutput {
         exit_code: i32,
-        bridge: Option<BridgeJson>,
+        bridge: Option<TestRunModel>,
         captured_stdout: Vec<String>,
         captured_stderr: Vec<String>,
         coverage_failure_lines: Vec<String>,
@@ -348,7 +348,7 @@ pub fn run_jest(repo_root: &Path, args: &ParsedArgs) -> Result<i32, RunError> {
 
         let bridge = std::fs::read_to_string(&out_json)
             .ok()
-            .and_then(|raw| serde_json::from_str::<BridgeJson>(&raw).ok())
+            .and_then(|raw| serde_json::from_str::<TestRunModel>(&raw).ok())
             .map(|mut bridge| {
                 merge_console_entries_into_bridge_json(
                     &mut bridge,
@@ -372,7 +372,7 @@ pub fn run_jest(repo_root: &Path, args: &ParsedArgs) -> Result<i32, RunError> {
     live_progress.finish();
 
     let mut exit_codes: Vec<i32> = vec![];
-    let mut bridges: Vec<BridgeJson> = vec![];
+    let mut bridges: Vec<TestRunModel> = vec![];
     let mut captured_stdout_all: Vec<String> = vec![];
     let mut captured_stderr_all: Vec<String> = vec![];
     let mut coverage_failure_lines: IndexSet<String> = IndexSet::new();
@@ -400,7 +400,7 @@ pub fn run_jest(repo_root: &Path, args: &ParsedArgs) -> Result<i32, RunError> {
             args.show_logs,
             args.editor_cmd.clone(),
         );
-        let pretty = render_vitest_from_jest_json(&merged, &ctx, args.only_failures);
+        let pretty = render_vitest_from_test_model(&merged, &ctx, args.only_failures);
         let combined = raw_output_all.join("\n");
         let maybe_merged = (!args.only_failures && looks_sparse(&pretty)).then(|| {
             let raw_also = headlamp_core::format::raw_jest::format_jest_output_vitest(
@@ -599,9 +599,9 @@ fn config_token(repo_root: &Path, cfg: &Path) -> String {
 }
 
 fn merge_bridge_json(
-    items: &[BridgeJson],
+    items: &[TestRunModel],
     rank_by_abs_path: &BTreeMap<String, i64>,
-) -> Option<BridgeJson> {
+) -> Option<TestRunModel> {
     if items.is_empty() {
         return None;
     }
@@ -618,11 +618,11 @@ fn merge_bridge_json(
             .as_millis() as u64
     });
 
-    let sum_u64 = |f: fn(&headlamp_core::format::bridge::BridgeAggregated) -> u64| -> u64 {
+    let sum_u64 = |f: fn(&headlamp_core::test_model::TestRunAggregated) -> u64| -> u64 {
         items.iter().map(|b| f(&b.aggregated)).sum::<u64>()
     };
     let sum_opt_u64 =
-        |f: fn(&headlamp_core::format::bridge::BridgeAggregated) -> Option<u64>| -> Option<u64> {
+        |f: fn(&headlamp_core::test_model::TestRunAggregated) -> Option<u64>| -> Option<u64> {
             let total = items
                 .iter()
                 .map(|b| f(&b.aggregated).unwrap_or(0))
@@ -636,7 +636,7 @@ fn merge_bridge_json(
         .collect::<Vec<_>>();
     reorder_test_results_original_style(&mut test_results, rank_by_abs_path);
 
-    let aggregated = headlamp_core::format::bridge::BridgeAggregated {
+    let aggregated = headlamp_core::test_model::TestRunAggregated {
         num_total_test_suites: sum_u64(|a| a.num_total_test_suites),
         num_passed_test_suites: sum_u64(|a| a.num_passed_test_suites),
         num_failed_test_suites: sum_u64(|a| a.num_failed_test_suites),
@@ -657,7 +657,7 @@ fn merge_bridge_json(
         ),
     };
 
-    Some(BridgeJson {
+    Some(TestRunModel {
         start_time,
         test_results,
         aggregated,
@@ -665,7 +665,7 @@ fn merge_bridge_json(
 }
 
 fn reorder_test_results_original_style(
-    test_results: &mut Vec<headlamp_core::format::bridge::BridgeFileResult>,
+    test_results: &mut Vec<headlamp_core::test_model::TestSuiteResult>,
     rank_by_abs_path: &BTreeMap<String, i64>,
 ) {
     let rank_or_inf = |abs_path: &str| -> i64 {
@@ -675,7 +675,7 @@ fn reorder_test_results_original_style(
             .unwrap_or(i64::MAX)
     };
 
-    let file_failed = |file: &headlamp_core::format::bridge::BridgeFileResult| -> bool {
+    let file_failed = |file: &headlamp_core::test_model::TestSuiteResult| -> bool {
         file.status == "failed"
             || file
                 .test_results
@@ -787,8 +787,8 @@ fn looks_like_test_path(candidate_path: &str) -> bool {
         || p.contains(".spec.")
 }
 
-fn filter_bridge_for_name_pattern_only(mut bridge: BridgeJson) -> BridgeJson {
-    let mut kept: Vec<headlamp_core::format::bridge::BridgeFileResult> = vec![];
+fn filter_bridge_for_name_pattern_only(mut bridge: TestRunModel) -> TestRunModel {
+    let mut kept: Vec<headlamp_core::test_model::TestSuiteResult> = vec![];
     for mut file in bridge.test_results.into_iter() {
         let suite_has_failure =
             !file.failure_message.trim().is_empty() || file.test_exec_error.is_some();
@@ -1072,7 +1072,7 @@ struct JestBridgeEventMeta {
 fn collect_bridge_entries_from_bridge_events(
     stdout_bytes: &[u8],
     stderr_bytes: &[u8],
-) -> BTreeMap<String, Vec<BridgeConsoleEntry>> {
+) -> BTreeMap<String, Vec<TestConsoleEntry>> {
     let parse_lines = |bytes: &[u8]| -> Vec<(String, String)> {
         String::from_utf8_lossy(bytes)
             .lines()
@@ -1086,7 +1086,7 @@ fn collect_bridge_entries_from_bridge_events(
             .collect()
     };
 
-    let mut by_test_path: BTreeMap<String, Vec<BridgeConsoleEntry>> = BTreeMap::new();
+    let mut by_test_path: BTreeMap<String, Vec<TestConsoleEntry>> = BTreeMap::new();
     for (test_path, payload) in parse_lines(stdout_bytes)
         .into_iter()
         .chain(parse_lines(stderr_bytes).into_iter())
@@ -1094,7 +1094,7 @@ fn collect_bridge_entries_from_bridge_events(
         by_test_path
             .entry(test_path)
             .or_default()
-            .push(BridgeConsoleEntry {
+            .push(TestConsoleEntry {
                 message: Some(serde_json::Value::String(format!(
                     "[JEST-BRIDGE-EVENT] {payload}"
                 ))),
@@ -1106,8 +1106,8 @@ fn collect_bridge_entries_from_bridge_events(
 }
 
 fn merge_console_entries_into_bridge_json(
-    bridge: &mut BridgeJson,
-    extra_console_by_test_path: &BTreeMap<String, Vec<BridgeConsoleEntry>>,
+    bridge: &mut TestRunModel,
+    extra_console_by_test_path: &BTreeMap<String, Vec<TestConsoleEntry>>,
 ) {
     bridge.test_results.iter_mut().for_each(|file| {
         let key = file.test_file_path.replace('\\', "/");

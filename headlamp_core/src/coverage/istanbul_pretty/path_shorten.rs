@@ -15,7 +15,11 @@ pub fn shorten_path_preserving_filename(rel_path: &str, max_width: usize) -> Str
     let dirs = parts[..parts.len().saturating_sub(1)].to_vec();
 
     let (stem, ext) = split_multi_ext(base);
-    let base_label = format!("{}{}", token_aware_middle(stem, max_width.saturating_sub(visible_width(&ext))), ext);
+    let base_label = format!(
+        "{}{}",
+        token_aware_middle(stem, max_width.saturating_sub(visible_width(&ext))),
+        ext
+    );
     if visible_width(&base_label) >= max_width {
         return slice_balanced(base, max_width, ellipsis);
     }
@@ -36,7 +40,13 @@ pub fn shorten_path_preserving_filename(rel_path: &str, max_width: usize) -> Str
     slice_balanced(&base_label, max_width, ellipsis)
 }
 
-fn join_parts(dirs: &[&str], head_keep: usize, tail_keep: usize, base: &str, ellipsis: &str) -> String {
+fn join_parts(
+    dirs: &[&str],
+    head_keep: usize,
+    tail_keep: usize,
+    base: &str,
+    ellipsis: &str,
+) -> String {
     let head = dirs.iter().take(head_keep).copied().collect::<Vec<_>>();
     let tail = dirs
         .iter()
@@ -76,7 +86,14 @@ fn slice_balanced(input: &str, width: usize, ellipsis: &str) -> String {
     let head = (keep + 1) / 2;
     let tail = keep / 2;
     let start = input.chars().take(head).collect::<String>();
-    let end = input.chars().rev().take(tail).collect::<Vec<_>>().into_iter().rev().collect::<String>();
+    let end = input
+        .chars()
+        .rev()
+        .take(tail)
+        .collect::<Vec<_>>()
+        .into_iter()
+        .rev()
+        .collect::<String>();
     format!("{start}{ellipsis}{end}")
 }
 
@@ -147,5 +164,3 @@ fn token_aware_middle(stem: String, budget: usize) -> String {
         slice_balanced(&stem, budget, ellipsis)
     }
 }
-
-

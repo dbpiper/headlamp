@@ -28,6 +28,7 @@ fn parity_jest_coverage_basic_fixture() {
         &binaries.rust_bin,
         &["--coverage"],
         &["--coverage"],
+        "jest",
     );
     assert_eq!(code_ts, code_rs);
 
@@ -62,6 +63,7 @@ fn parity_jest_coverage_max_hotspots_fixture() {
         &binaries.rust_bin,
         &["--coverage", "--coverage.maxHotspots=1"],
         &["--coverage", "--coverage.maxHotspots=1"],
+        "jest",
     );
     assert_eq!(code_ts, code_rs);
 
@@ -95,6 +97,7 @@ fn parity_jest_coverage_selection_order_fixture() {
         &binaries.rust_bin,
         &["--coverage", "src/a.js"],
         &["--coverage", "src/a.js"],
+        "jest",
     );
     assert_eq!(code_ts, code_rs);
 
@@ -135,6 +138,7 @@ fn parity_jest_coverage_multi_project_isolated_directories_fixture() {
         &binaries.rust_bin,
         &["--coverage"],
         &["--coverage"],
+        "jest",
     );
     assert_eq!(code_ts, code_rs);
 
@@ -172,6 +176,7 @@ fn parity_jest_coverage_threshold_failure_lines_fixture() {
         &binaries.rust_bin,
         &["--coverage"],
         &["--coverage"],
+        "jest",
     );
     assert_eq!(code_ts, code_rs);
 

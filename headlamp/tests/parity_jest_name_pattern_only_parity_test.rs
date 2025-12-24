@@ -1,6 +1,8 @@
 mod parity_support;
 
-use parity_support::{assert_parity_with_args, mk_repo, parity_binaries, write_file, write_jest_config};
+use parity_support::{
+    assert_parity_with_args, mk_repo, parity_binaries, write_file, write_jest_config,
+};
 
 #[test]
 fn parity_jest_name_pattern_only_skips_run_tests_by_path_fixture() {
@@ -17,5 +19,3 @@ fn parity_jest_name_pattern_only_skips_run_tests_by_path_fixture() {
 
     assert_parity_with_args(&repo, &binaries, &["-t", "alpha"], &["-t", "alpha"]);
 }
-
-

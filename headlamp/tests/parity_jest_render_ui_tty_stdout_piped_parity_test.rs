@@ -18,12 +18,8 @@ fn parity_jest_render_ui_tty_stdout_piped_keeps_color_and_width() {
     );
     write_jest_config(&repo, "**/tests/**/*.test.js");
 
-    let (code_rs, out_rs) = run_rust_fixture_with_args_tty_stdout_piped(
-        &repo,
-        &binaries.rust_bin,
-        120,
-        &[],
-    );
+    let (code_rs, out_rs) =
+        run_rust_fixture_with_args_tty_stdout_piped(&repo, &binaries.rust_bin, 120, &[]);
 
     assert_eq!(code_rs, 0);
 
@@ -42,5 +38,3 @@ fn parity_jest_render_ui_tty_stdout_piped_keeps_color_and_width() {
         "expected wide-rule/table rendering based on TTY columns even when stdout is piped; got:\n{out_rs}"
     );
 }
-
-

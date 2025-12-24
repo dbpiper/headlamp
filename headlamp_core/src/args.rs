@@ -757,6 +757,7 @@ fn infer_glob_from_selection_path(path_text: &str) -> String {
     if !is_dir {
         // Keep behavior stable for ad-hoc file selections, but infer "src/**/*" when the user
         // selects a production source file under src/ (common Windows-style input case).
+        // TODO: fix this hack
         if path_text == "src" || path_text.starts_with("src/") {
             return "src/**/*".to_string();
         }

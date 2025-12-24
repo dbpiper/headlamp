@@ -1,56 +1,158 @@
 use std::cmp::min;
 
+use super::cluster;
 use super::parity_meta::ParityCompareInput;
 use super::token_ast;
 
 pub fn build_parity_report_with_meta(compare: &ParityCompareInput) -> String {
+    if compare.sides.len() < 2 {
+        return "Parity report: only one side".to_string();
+    }
+
+    let clusters = cluster::cluster_indices_by_normalized(compare);
+    let pivot_index = cluster::pick_pivot_index(compare);
+    let pivot_label = compare.sides[pivot_index].label.display_label();
+
     let mut sections: Vec<String> = vec![];
     sections.push(build_artifact_summary(compare));
-    sections.push(build_token_ast_summary(compare));
-    sections.push(build_block_order_summary(compare));
-    sections.push(build_classification_section(
-        &compare.normalized_ts,
-        &compare.normalized_rs,
-    ));
-    sections.push(build_first_mismatch_section(
-        &compare.normalized_ts,
-        &compare.normalized_rs,
-    ));
-    sections.push(build_blank_runs_section(
-        &compare.normalized_ts,
-        &compare.normalized_rs,
-    ));
-    sections.push(build_table_section(
-        &compare.normalized_ts,
-        &compare.normalized_rs,
-    ));
-    sections.push(build_istanbul_table_section(
-        &compare.normalized_ts,
-        &compare.normalized_rs,
-    ));
-    sections.push(build_counts_section(
-        &compare.normalized_ts,
-        &compare.normalized_rs,
-    ));
+    sections.push(build_cluster_summary(compare, pivot_index, &clusters));
+    sections.push(build_token_ast_summary(compare, pivot_index, &clusters));
+    sections.push(build_block_order_summary(compare, pivot_index, &clusters));
+
+    let pivot_norm = &compare.sides[pivot_index].normalized;
+
+    clusters
+        .iter()
+        .filter(|cluster| !cluster.member_indices.contains(&pivot_index))
+        .filter_map(|cluster| {
+            cluster.member_indices.iter().copied().min_by(|&a, &b| {
+                compare.sides[a]
+                    .label
+                    .display_label()
+                    .cmp(&compare.sides[b].label.display_label())
+            })
+        })
+        .for_each(|other_index| {
+            let other_label = compare.sides[other_index].label.display_label();
+            let other_norm = &compare.sides[other_index].normalized;
+
+            sections.push(format!("Comparison: {pivot_label} vs {other_label}"));
+            sections.push(build_classification_section(pivot_norm, other_norm));
+            sections.push(build_first_mismatch_section(
+                &pivot_label,
+                &other_label,
+                pivot_norm,
+                other_norm,
+            ));
+            sections.push(build_blank_runs_section(
+                &pivot_label,
+                &other_label,
+                pivot_norm,
+                other_norm,
+            ));
+            sections.push(build_table_section(
+                &pivot_label,
+                &other_label,
+                pivot_norm,
+                other_norm,
+            ));
+            sections.push(build_istanbul_table_section(
+                &pivot_label,
+                &other_label,
+                pivot_norm,
+                other_norm,
+            ));
+            sections.push(build_counts_section(
+                &pivot_label,
+                &other_label,
+                pivot_norm,
+                other_norm,
+            ));
+        });
+
     sections
         .into_iter()
-        .filter(|s| !s.is_empty())
+        .filter(|section| !section.is_empty())
         .collect::<Vec<_>>()
         .join("\n\n")
 }
 
-fn build_token_ast_summary(compare: &ParityCompareInput) -> String {
-    let ts_raw = token_ast::build_token_stream(&compare.raw_ts);
-    let rs_raw = token_ast::build_token_stream(&compare.raw_rs);
-    let ts_norm = token_ast::build_token_stream(&compare.normalized_ts);
-    let rs_norm = token_ast::build_token_stream(&compare.normalized_rs);
+fn build_cluster_summary(
+    compare: &ParityCompareInput,
+    pivot_index: usize,
+    clusters: &[cluster::OutputCluster],
+) -> String {
+    let mut lines: Vec<String> = vec![
+        "Clusters".to_string(),
+        format!(
+            "- pivot: {}",
+            compare.sides[pivot_index].label.display_label()
+        ),
+        format!("- cluster_count: {}", clusters.len()),
+    ];
+    clusters
+        .iter()
+        .enumerate()
+        .for_each(|(cluster_index, cluster)| {
+            let member_labels = cluster
+                .member_indices
+                .iter()
+                .map(|&i| compare.sides[i].label.display_label())
+                .collect::<Vec<_>>()
+                .join(", ");
+            lines.push(format!(
+                "- cluster_{cluster_index}: size={} [{member_labels}]",
+                cluster.member_indices.len()
+            ));
+        });
+    lines.join("\n")
+}
 
+fn build_token_ast_summary(
+    compare: &ParityCompareInput,
+    pivot_index: usize,
+    clusters: &[cluster::OutputCluster],
+) -> String {
     let mut lines: Vec<String> = vec!["Token stats".to_string()];
-    lines.extend(render_token_stats_side("ts_raw", &ts_raw.stats));
-    lines.extend(render_token_stats_side("rs_raw", &rs_raw.stats));
-    lines.extend(render_token_stats_side("ts_norm", &ts_norm.stats));
-    lines.extend(render_token_stats_side("rs_norm", &rs_norm.stats));
-    lines.extend(render_token_delta(&ts_norm.stats, &rs_norm.stats));
+    compare.sides.iter().for_each(|side| {
+        let raw = token_ast::build_token_stream(&side.raw);
+        let norm = token_ast::build_token_stream(&side.normalized);
+        lines.extend(render_token_stats_side(
+            &format!("{}_raw", side.label.display_label()),
+            &raw.stats,
+        ));
+        lines.extend(render_token_stats_side(
+            &format!("{}_norm", side.label.display_label()),
+            &norm.stats,
+        ));
+    });
+
+    let pivot_norm = token_ast::build_token_stream(&compare.sides[pivot_index].normalized).stats;
+    let pivot_label = compare.sides[pivot_index].label.display_label();
+
+    clusters
+        .iter()
+        .filter(|cluster| !cluster.member_indices.contains(&pivot_index))
+        .filter_map(|cluster| {
+            cluster.member_indices.iter().copied().min_by(|&a, &b| {
+                compare.sides[a]
+                    .label
+                    .display_label()
+                    .cmp(&compare.sides[b].label.display_label())
+            })
+        })
+        .for_each(|other_index| {
+            let other_label = compare.sides[other_index].label.display_label();
+            let other_norm =
+                token_ast::build_token_stream(&compare.sides[other_index].normalized).stats;
+            lines.extend(render_token_delta(
+                &pivot_label,
+                &other_label,
+                &pivot_norm,
+                &other_norm,
+            ));
+        });
+
     lines.join("\n")
 }
 
@@ -67,11 +169,16 @@ fn render_token_stats_side(label: &str, stats: &token_ast::TokenStats) -> Vec<St
     )]
 }
 
-fn render_token_delta(ts: &token_ast::TokenStats, rs: &token_ast::TokenStats) -> Vec<String> {
-    let mut kinds = ts
+fn render_token_delta(
+    label_a: &str,
+    label_b: &str,
+    a: &token_ast::TokenStats,
+    b: &token_ast::TokenStats,
+) -> Vec<String> {
+    let mut kinds = a
         .counts_by_kind
         .keys()
-        .chain(rs.counts_by_kind.keys())
+        .chain(b.counts_by_kind.keys())
         .copied()
         .collect::<std::collections::BTreeSet<_>>()
         .into_iter()
@@ -80,66 +187,120 @@ fn render_token_delta(ts: &token_ast::TokenStats, rs: &token_ast::TokenStats) ->
     let by_kind = kinds
         .into_iter()
         .map(|k| {
-            let a = ts.counts_by_kind.get(&k).copied().unwrap_or(0);
-            let b = rs.counts_by_kind.get(&k).copied().unwrap_or(0);
-            format!("{k:?}:{a}->{b}")
+            let a_count = a.counts_by_kind.get(&k).copied().unwrap_or(0);
+            let b_count = b.counts_by_kind.get(&k).copied().unwrap_or(0);
+            format!("{k:?}:{a_count}->{b_count}")
         })
         .collect::<Vec<_>>()
         .join(" ");
-    vec![format!("- norm_token_delta: {by_kind}")]
+    vec![format!(
+        "- norm_token_delta: {label_a} -> {label_b}: {by_kind}"
+    )]
 }
 
-fn build_block_order_summary(compare: &ParityCompareInput) -> String {
-    let ts = token_ast::build_document_ast(&compare.normalized_ts);
-    let rs = token_ast::build_document_ast(&compare.normalized_rs);
-    let ts_order = ts
-        .blocks
+fn build_block_order_summary(
+    compare: &ParityCompareInput,
+    pivot_index: usize,
+    clusters: &[cluster::OutputCluster],
+) -> String {
+    let orders = compare
+        .sides
         .iter()
-        .map(|b| b.hash.as_str())
+        .map(|side| {
+            token_ast::build_document_ast(&side.normalized)
+                .blocks
+                .into_iter()
+                .map(|block| block.hash)
+                .collect::<Vec<_>>()
+        })
         .collect::<Vec<_>>();
-    let rs_order = rs
-        .blocks
-        .iter()
-        .map(|b| b.hash.as_str())
-        .collect::<Vec<_>>();
+
     let mut lines: Vec<String> = vec!["Block order".to_string()];
-    lines.push(format!("- ts: [{}]", ts_order.join(",")));
-    lines.push(format!("- rs: [{}]", rs_order.join(",")));
-    lines.extend(render_block_moves(&ts_order, &rs_order));
+    compare.sides.iter().enumerate().for_each(|(index, side)| {
+        lines.push(format!(
+            "- {}: [{}]",
+            side.label.display_label(),
+            orders[index].join(",")
+        ));
+    });
+
+    let pivot_label = compare.sides[pivot_index].label.display_label();
+    let pivot_order = orders[pivot_index]
+        .iter()
+        .map(String::as_str)
+        .collect::<Vec<_>>();
+
+    clusters
+        .iter()
+        .filter(|cluster| !cluster.member_indices.contains(&pivot_index))
+        .filter_map(|cluster| {
+            cluster.member_indices.iter().copied().min_by(|&a, &b| {
+                compare.sides[a]
+                    .label
+                    .display_label()
+                    .cmp(&compare.sides[b].label.display_label())
+            })
+        })
+        .for_each(|other_index| {
+            let other_label = compare.sides[other_index].label.display_label();
+            let other_order = orders[other_index]
+                .iter()
+                .map(String::as_str)
+                .collect::<Vec<_>>();
+            lines.push(format!("Block moves: {pivot_label} vs {other_label}"));
+            lines.extend(render_block_moves_pair(
+                &pivot_label,
+                &other_label,
+                &pivot_order,
+                &other_order,
+            ));
+        });
+
     lines.join("\n")
 }
 
-fn render_block_moves(ts_order: &[&str], rs_order: &[&str]) -> Vec<String> {
-    let ts_pos = ts_order
+fn render_block_moves_pair(
+    label_a: &str,
+    label_b: &str,
+    order_a: &[&str],
+    order_b: &[&str],
+) -> Vec<String> {
+    let pos_a = order_a
         .iter()
         .enumerate()
-        .map(|(i, h)| (h.to_string(), i))
+        .map(|(index, hash)| (hash.to_string(), index))
         .collect::<std::collections::BTreeMap<String, usize>>();
-    let rs_pos = rs_order
+    let pos_b = order_b
         .iter()
         .enumerate()
-        .map(|(i, h)| (h.to_string(), i))
+        .map(|(index, hash)| (hash.to_string(), index))
         .collect::<std::collections::BTreeMap<String, usize>>();
-    let moved = ts_pos
+    let moved = pos_a
         .iter()
-        .filter_map(|(h, ti)| rs_pos.get(h).map(|ri| (h.as_str(), *ti, *ri)))
-        .filter(|(_, ti, ri)| ti != ri)
+        .filter_map(|(hash, a_index)| {
+            pos_b
+                .get(hash)
+                .map(|b_index| (hash.as_str(), *a_index, *b_index))
+        })
+        .filter(|(_, a_index, b_index)| a_index != b_index)
         .take(12)
-        .map(|(h, ti, ri)| format!("  - {h}: ts={ti} rs={ri}"))
+        .map(|(hash, a_index, b_index)| {
+            format!("  - moved: {hash} {label_a}={a_index} {label_b}={b_index}")
+        })
         .collect::<Vec<_>>();
-    let missing_in_rs = ts_pos
+    let missing_in_b = pos_a
         .keys()
-        .filter(|h| !rs_pos.contains_key(*h))
+        .filter(|hash| !pos_b.contains_key(*hash))
         .take(12)
-        .map(|h| format!("  - missing_in_rs: {h}"))
+        .map(|hash| format!("  - missing_in: {label_b}: {hash}"))
         .collect::<Vec<_>>();
-    let missing_in_ts = rs_pos
+    let missing_in_a = pos_b
         .keys()
-        .filter(|h| !ts_pos.contains_key(*h))
+        .filter(|hash| !pos_a.contains_key(*hash))
         .take(12)
-        .map(|h| format!("  - missing_in_ts: {h}"))
+        .map(|hash| format!("  - missing_in: {label_a}: {hash}"))
         .collect::<Vec<_>>();
-    [moved, missing_in_rs, missing_in_ts]
+    [moved, missing_in_b, missing_in_a]
         .into_iter()
         .flatten()
         .collect::<Vec<_>>()
@@ -147,71 +308,76 @@ fn render_block_moves(ts_order: &[&str], rs_order: &[&str]) -> Vec<String> {
 
 pub fn build_parity_report(out_ts: &str, out_rs: &str) -> String {
     build_parity_report_with_meta(&ParityCompareInput {
-        raw_ts: out_ts.to_string(),
-        raw_rs: out_rs.to_string(),
-        normalized_ts: out_ts.to_string(),
-        normalized_rs: out_rs.to_string(),
-        meta: super::parity_meta::ParityCompareMeta {
-            ts: super::parity_meta::ParitySideMeta {
-                raw_bytes: out_ts.as_bytes().len(),
-                raw_lines: out_ts.lines().count(),
-                normalized_bytes: out_ts.as_bytes().len(),
-                normalized_lines: out_ts.lines().count(),
-                normalization: super::parity_meta::NormalizationMeta {
-                    normalizer: super::parity_meta::NormalizerKind::NonTty,
-                    used_fallback: false,
-                    last_failed_tests_line: None,
-                    last_test_files_line: None,
-                    last_box_table_top_line: None,
-                    stages: vec![],
+        sides: vec![
+            super::parity_meta::ParityCompareSideInput {
+                label: super::parity_meta::ParitySideLabel {
+                    binary: "unknown".to_string(),
+                    runner_stack: "unknown".to_string(),
+                },
+                exit: 0,
+                raw: out_ts.to_string(),
+                normalized: out_ts.to_string(),
+                meta: super::parity_meta::ParitySideMeta {
+                    raw_bytes: out_ts.as_bytes().len(),
+                    raw_lines: out_ts.lines().count(),
+                    normalized_bytes: out_ts.as_bytes().len(),
+                    normalized_lines: out_ts.lines().count(),
+                    normalization: super::parity_meta::NormalizationMeta {
+                        normalizer: super::parity_meta::NormalizerKind::NonTty,
+                        used_fallback: false,
+                        last_failed_tests_line: None,
+                        last_test_files_line: None,
+                        last_box_table_top_line: None,
+                        stages: vec![],
+                    },
                 },
             },
-            rs: super::parity_meta::ParitySideMeta {
-                raw_bytes: out_rs.as_bytes().len(),
-                raw_lines: out_rs.lines().count(),
-                normalized_bytes: out_rs.as_bytes().len(),
-                normalized_lines: out_rs.lines().count(),
-                normalization: super::parity_meta::NormalizationMeta {
-                    normalizer: super::parity_meta::NormalizerKind::NonTty,
-                    used_fallback: false,
-                    last_failed_tests_line: None,
-                    last_test_files_line: None,
-                    last_box_table_top_line: None,
-                    stages: vec![],
+            super::parity_meta::ParityCompareSideInput {
+                label: super::parity_meta::ParitySideLabel {
+                    binary: "unknown".to_string(),
+                    runner_stack: "unknown".to_string(),
+                },
+                exit: 0,
+                raw: out_rs.to_string(),
+                normalized: out_rs.to_string(),
+                meta: super::parity_meta::ParitySideMeta {
+                    raw_bytes: out_rs.as_bytes().len(),
+                    raw_lines: out_rs.lines().count(),
+                    normalized_bytes: out_rs.as_bytes().len(),
+                    normalized_lines: out_rs.lines().count(),
+                    normalization: super::parity_meta::NormalizationMeta {
+                        normalizer: super::parity_meta::NormalizerKind::NonTty,
+                        used_fallback: false,
+                        last_failed_tests_line: None,
+                        last_test_files_line: None,
+                        last_box_table_top_line: None,
+                        stages: vec![],
+                    },
                 },
             },
-        },
+        ],
     })
 }
 
 fn build_artifact_summary(compare: &ParityCompareInput) -> String {
-    let ts = &compare.meta.ts;
-    let rs = &compare.meta.rs;
-    let ts_norm_empty_raw_nonempty = ts.normalized_bytes == 0 && ts.raw_bytes > 0;
-    let rs_norm_empty_raw_nonempty = rs.normalized_bytes == 0 && rs.raw_bytes > 0;
-    [
-        "Artifact summary".to_string(),
-        format!(
-            "- ts: raw_bytes={} raw_lines={} normalized_bytes={} normalized_lines={}",
-            ts.raw_bytes, ts.raw_lines, ts.normalized_bytes, ts.normalized_lines
-        ),
-        format!(
-            "- rs: raw_bytes={} raw_lines={} normalized_bytes={} normalized_lines={}",
-            rs.raw_bytes, rs.raw_lines, rs.normalized_bytes, rs.normalized_lines
-        ),
-        format!(
-            "- normalized_empty_but_raw_nonempty: ts={} rs={}",
-            ts_norm_empty_raw_nonempty, rs_norm_empty_raw_nonempty
-        ),
-        format!(
-            "- normalizer: ts={:?} fallback={} | rs={:?} fallback={}",
-            ts.normalization.normalizer,
-            ts.normalization.used_fallback,
-            rs.normalization.normalizer,
-            rs.normalization.used_fallback
-        ),
-    ]
-    .join("\n")
+    let mut lines: Vec<String> = vec!["Artifact summary".to_string()];
+    compare.sides.iter().for_each(|side| {
+        let normalized_empty_but_raw_nonempty =
+            side.meta.normalized_bytes == 0 && side.meta.raw_bytes > 0;
+        lines.push(format!(
+            "- {}: exit={} raw_bytes={} raw_lines={} normalized_bytes={} normalized_lines={} normalizer={:?} fallback={} normalized_empty_but_raw_nonempty={}",
+            side.label.display_label(),
+            side.exit,
+            side.meta.raw_bytes,
+            side.meta.raw_lines,
+            side.meta.normalized_bytes,
+            side.meta.normalized_lines,
+            side.meta.normalization.normalizer,
+            side.meta.normalization.used_fallback,
+            normalized_empty_but_raw_nonempty
+        ));
+    });
+    lines.join("\n")
 }
 
 fn build_classification_section(out_ts: &str, out_rs: &str) -> String {
@@ -247,11 +413,11 @@ fn build_classification_section(out_ts: &str, out_rs: &str) -> String {
     .join("\n")
 }
 
-fn build_first_mismatch_section(out_ts: &str, out_rs: &str) -> String {
-    let ts_lines = out_ts.lines().collect::<Vec<_>>();
-    let rs_lines = out_rs.lines().collect::<Vec<_>>();
-    let max_len = ts_lines.len().max(rs_lines.len());
-    let first = (0..max_len).find(|&i| ts_lines.get(i) != rs_lines.get(i));
+fn build_first_mismatch_section(label_0: &str, label_1: &str, out_0: &str, out_1: &str) -> String {
+    let side_0_lines = out_0.lines().collect::<Vec<_>>();
+    let side_1_lines = out_1.lines().collect::<Vec<_>>();
+    let max_len = side_0_lines.len().max(side_1_lines.len());
+    let first = (0..max_len).find(|&i| side_0_lines.get(i) != side_1_lines.get(i));
     let Some(first) = first else {
         return String::new();
     };
@@ -262,26 +428,26 @@ fn build_first_mismatch_section(out_ts: &str, out_rs: &str) -> String {
     let mut out: Vec<String> = vec![];
     out.push(format!("First mismatch at line {}", first + 1));
     for i in start..end {
-        let ts = ts_lines.get(i).copied().unwrap_or("<missing>");
-        let rs = rs_lines.get(i).copied().unwrap_or("<missing>");
-        if ts == rs {
-            out.push(format!(" {ln:>4}  =  {ts}", ln = i + 1));
+        let side_0 = side_0_lines.get(i).copied().unwrap_or("<missing>");
+        let side_1 = side_1_lines.get(i).copied().unwrap_or("<missing>");
+        if side_0 == side_1 {
+            out.push(format!(" {ln:>4}  =  {side_0}", ln = i + 1));
             continue;
         }
-        out.push(format!(" {ln:>4} TS {ts}", ln = i + 1));
-        out.push(format!(" {ln:>4} RS {rs}", ln = i + 1));
+        out.push(format!(" {ln:>4} {label_0} {side_0}", ln = i + 1));
+        out.push(format!(" {ln:>4} {label_1} {side_1}", ln = i + 1));
         out.push(format!(
-            "      TS len={} vis={} | RS len={} vis={}",
-            ts.chars().count(),
-            strip_ansi(ts).chars().count(),
-            rs.chars().count(),
-            strip_ansi(rs).chars().count()
+            "      {label_0} len={} vis={} | {label_1} len={} vis={}",
+            side_0.chars().count(),
+            strip_ansi(side_0).chars().count(),
+            side_1.chars().count(),
+            strip_ansi(side_1).chars().count()
         ));
     }
     out.join("\n")
 }
 
-fn build_table_section(out_ts: &str, out_rs: &str) -> String {
+fn build_table_section(label_0: &str, label_1: &str, out_ts: &str, out_rs: &str) -> String {
     let ts_blocks = find_box_table_blocks(out_ts);
     let rs_blocks = find_box_table_blocks(out_rs);
     if ts_blocks.is_empty() && rs_blocks.is_empty() {
@@ -289,7 +455,7 @@ fn build_table_section(out_ts: &str, out_rs: &str) -> String {
     }
     let mut out: Vec<String> = vec![];
     out.push(format!(
-        "Box tables: ts={} rs={}",
+        "Box tables: {label_0}={} {label_1}={}",
         ts_blocks.len(),
         rs_blocks.len()
     ));
@@ -302,12 +468,12 @@ fn build_table_section(out_ts: &str, out_rs: &str) -> String {
             continue;
         }
         out.push(format!(
-            "- table[{}] rows: ts={} rs={} | blank_rows: ts={} rs={}",
-            i, summary.ts_rows, summary.rs_rows, summary.ts_blank_rows, summary.rs_blank_rows
+            "- table[{i}] rows: {label_0}={} {label_1}={} | blank_rows: {label_0}={} {label_1}={}",
+            summary.ts_rows, summary.rs_rows, summary.ts_blank_rows, summary.rs_blank_rows
         ));
         if let Some(detail) = first_box_row_cell_mismatch(ts, rs) {
             out.push(format!(
-                "  first cell mismatch: row={} col={} (ts_trim='{}' rs_trim='{}')",
+                "  first cell mismatch: row={} col={} ({label_0}_trim='{}' {label_1}_trim='{}')",
                 detail.row_index + 1,
                 detail.col_index + 1,
                 detail.ts_trim,
@@ -316,12 +482,12 @@ fn build_table_section(out_ts: &str, out_rs: &str) -> String {
         }
         if let Some(mismatch) = summary.first_aligned_mismatch {
             out.push(format!(
-                "  first aligned mismatch: ts_row={} rs_row={}",
+                "  first aligned mismatch: {label_0}_row={} {label_1}_row={}",
                 mismatch.ts_row_index + 1,
                 mismatch.rs_row_index + 1
             ));
-            out.push(format!("    TS: {}", mismatch.ts_line));
-            out.push(format!("    RS: {}", mismatch.rs_line));
+            out.push(format!("    {label_0}: {}", mismatch.ts_line));
+            out.push(format!("    {label_1}: {}", mismatch.rs_line));
         }
         if !summary.notes.is_empty() {
             out.extend(summary.notes.into_iter().take(6).map(|s| format!("  {s}")));
@@ -330,7 +496,12 @@ fn build_table_section(out_ts: &str, out_rs: &str) -> String {
     out.join("\n")
 }
 
-fn build_istanbul_table_section(out_ts: &str, out_rs: &str) -> String {
+fn build_istanbul_table_section(
+    label_0: &str,
+    label_1: &str,
+    out_ts: &str,
+    out_rs: &str,
+) -> String {
     let ts_blocks = find_istanbul_pipe_table_blocks(out_ts);
     let rs_blocks = find_istanbul_pipe_table_blocks(out_rs);
     if ts_blocks.is_empty() && rs_blocks.is_empty() {
@@ -338,7 +509,7 @@ fn build_istanbul_table_section(out_ts: &str, out_rs: &str) -> String {
     }
     let mut out: Vec<String> = vec![];
     out.push(format!(
-        "Istanbul pipe tables: ts={} rs={}",
+        "Istanbul pipe tables: {label_0}={} {label_1}={}",
         ts_blocks.len(),
         rs_blocks.len()
     ));
@@ -351,19 +522,18 @@ fn build_istanbul_table_section(out_ts: &str, out_rs: &str) -> String {
         }
         let first = find_first_line_mismatch(ts, rs);
         out.push(format!(
-            "- table[{}] lines: ts={} rs={} first_mismatch_line={}",
-            index,
+            "- table[{index}] lines: {label_0}={} {label_1}={} first_mismatch_line={}",
             ts.len(),
             rs.len(),
             first.map(|n| n + 1).unwrap_or(0)
         ));
         if let Some(first) = first {
             out.push(format!(
-                "  TS: {}",
+                "  {label_0}: {}",
                 ts.get(first).map(String::as_str).unwrap_or("<missing>")
             ));
             out.push(format!(
-                "  RS: {}",
+                "  {label_1}: {}",
                 rs.get(first).map(String::as_str).unwrap_or("<missing>")
             ));
         }
@@ -371,7 +541,7 @@ fn build_istanbul_table_section(out_ts: &str, out_rs: &str) -> String {
     out.join("\n")
 }
 
-fn build_counts_section(out_ts: &str, out_rs: &str) -> String {
+fn build_counts_section(label_0: &str, label_1: &str, out_ts: &str, out_rs: &str) -> String {
     let ts = strip_ansi(out_ts);
     let rs = strip_ansi(out_rs);
     let needles = [
@@ -385,7 +555,7 @@ fn build_counts_section(out_ts: &str, out_rs: &str) -> String {
         let c_ts = ts.matches(needle).count();
         let c_rs = rs.matches(needle).count();
         if c_ts != c_rs {
-            out.push(format!("- '{needle}': ts={c_ts} rs={c_rs}"));
+            out.push(format!("- '{needle}': {label_0}={c_ts} {label_1}={c_rs}"));
         }
     });
     if out.len() == 1 {
@@ -395,7 +565,7 @@ fn build_counts_section(out_ts: &str, out_rs: &str) -> String {
     }
 }
 
-fn build_blank_runs_section(out_ts: &str, out_rs: &str) -> String {
+fn build_blank_runs_section(label_0: &str, label_1: &str, out_ts: &str, out_rs: &str) -> String {
     let ts = strip_ansi(out_ts);
     let rs = strip_ansi(out_rs);
     let ts_stats = blank_run_stats(&ts);
@@ -406,11 +576,11 @@ fn build_blank_runs_section(out_ts: &str, out_rs: &str) -> String {
     [
         "Blank run stats (ANSI-stripped)".to_string(),
         format!(
-            "- ts: blank_lines={} runs={} max_run={}",
+            "- {label_0}: blank_lines={} runs={} max_run={}",
             ts_stats.blank_lines, ts_stats.runs, ts_stats.max_run
         ),
         format!(
-            "- rs: blank_lines={} runs={} max_run={}",
+            "- {label_1}: blank_lines={} runs={} max_run={}",
             rs_stats.blank_lines, rs_stats.runs, rs_stats.max_run
         ),
     ]
@@ -642,7 +812,7 @@ fn align_box_table_rows(ts: &BoxBlock, rs: &BoxBlock) -> Vec<String> {
                 .get(i + 1)
                 .is_some_and(|next| next == rs_norm.get(j).unwrap())
         {
-            notes.push(format!("extra blank filler row in TS at row {}", i + 1));
+            notes.push(format!("extra blank filler row in side_0 at row {}", i + 1));
             i += 1;
             continue;
         }
@@ -651,18 +821,24 @@ fn align_box_table_rows(ts: &BoxBlock, rs: &BoxBlock) -> Vec<String> {
                 .get(j + 1)
                 .is_some_and(|next| next == ts_norm.get(i).unwrap())
         {
-            notes.push(format!("extra blank filler row in RS at row {}", j + 1));
+            notes.push(format!("extra blank filler row in side_1 at row {}", j + 1));
             j += 1;
             continue;
         }
-        notes.push(format!("row mismatch TS#{} vs RS#{}", i + 1, j + 1));
+        notes.push(format!("row mismatch side_0#{} vs side_1#{}", i + 1, j + 1));
         break;
     }
     if i < ts_norm.len() && j == rs_norm.len() {
-        notes.push(format!("TS has {} extra trailing rows", ts_norm.len() - i));
+        notes.push(format!(
+            "side_0 has {} extra trailing rows",
+            ts_norm.len() - i
+        ));
     }
     if j < rs_norm.len() && i == ts_norm.len() {
-        notes.push(format!("RS has {} extra trailing rows", rs_norm.len() - j));
+        notes.push(format!(
+            "side_1 has {} extra trailing rows",
+            rs_norm.len() - j
+        ));
     }
     notes
 }

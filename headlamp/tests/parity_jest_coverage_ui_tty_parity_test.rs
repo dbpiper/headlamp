@@ -44,6 +44,7 @@ test('presentEvent a small', () => {
         120,
         &["--coverage", "utils/logging/eventPresentation.js"],
         &["--coverage", "utils/logging/eventPresentation.js"],
+        "jest",
     );
 
     let n_ts = extract_coverage_ui_block(&normalize_tty_ui(out_ts, &repo));

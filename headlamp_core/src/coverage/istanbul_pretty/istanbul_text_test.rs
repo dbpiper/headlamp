@@ -48,5 +48,3 @@ fn istanbul_text_report_truncates_uncovered_column_to_avoid_overflow() {
         "expected ellipsis truncation in uncovered column, but got:\n{report}"
     );
 }
-
-

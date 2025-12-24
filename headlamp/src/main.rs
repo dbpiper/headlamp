@@ -5,7 +5,8 @@ enum Runner {
     Jest,
     Vitest,
     Pytest,
-    Cargo,
+    CargoTest,
+    CargoNextest,
 }
 
 fn base_flag(t: &str) -> &str {
@@ -71,7 +72,14 @@ fn main() {
                 1
             }
         },
-        Runner::Cargo => match headlamp::cargo::run_cargo(&repo_root, &parsed) {
+        Runner::CargoTest => match headlamp::cargo::run_cargo_test(&repo_root, &parsed) {
+            Ok(code) => code,
+            Err(err) => {
+                eprintln!("{err}");
+                1
+            }
+        },
+        Runner::CargoNextest => match headlamp::cargo::run_cargo_nextest(&repo_root, &parsed) {
             Ok(code) => code,
             Err(err) => {
                 eprintln!("{err}");
@@ -112,7 +120,8 @@ fn parse_runner(raw: &str) -> Option<Runner> {
         "jest" => Runner::Jest,
         "vitest" => Runner::Vitest,
         "pytest" => Runner::Pytest,
-        "cargo" => Runner::Cargo,
+        "cargo-nextest" => Runner::CargoNextest,
+        "cargo-test" => Runner::CargoTest,
         _ => return None,
     })
 }
@@ -121,7 +130,7 @@ fn print_help() {
     let msg = r#"headlamp
 
 Usage:
-  headlamp [--runner=<jest|vitest|pytest|cargo>] [--coverage] [--changed[=<mode>]] [args...]
+  headlamp [--runner=<jest|vitest|pytest|cargo-nextest|cargo-test>] [--coverage] [--changed[=<mode>]] [args...]
 
 Flags:
   --runner <runner>              Select runner (default: jest)

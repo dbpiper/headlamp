@@ -2,7 +2,7 @@ use headlamp_core::format::bridge::{
     BridgeAggregated, BridgeAssertion, BridgeConsoleEntry, BridgeFileResult, BridgeJson,
 };
 use headlamp_core::format::ctx::make_ctx;
-use headlamp_core::format::vitest::render_vitest_from_jest_json;
+use headlamp_core::format::vitest::render_vitest_from_test_model;
 
 fn sample_bridge() -> BridgeJson {
     BridgeJson {
@@ -73,6 +73,6 @@ fn sample_bridge() -> BridgeJson {
 fn render_vitest_from_bridge_snapshot() {
     let repo = std::path::PathBuf::from("/repo");
     let ctx = make_ctx(&repo, Some(80), true, false, Some("vscode".to_string()));
-    let out = render_vitest_from_jest_json(&sample_bridge(), &ctx, false);
+    let out = render_vitest_from_test_model(&sample_bridge(), &ctx, false);
     insta::assert_snapshot!("render_vitest_from_bridge_snapshot", out);
 }

@@ -177,12 +177,13 @@ fn render_chunks(chunks: &[Chunk], ctx: &Ctx, only_failures: bool) -> (String, b
                 ));
 
                 let collapsed = stacks::collapse_stacks(lines);
-                let deepest = fns::deepest_project_loc(&collapsed, &ctx.project_hint)
-                    .map(|(file, line, _)| codeframe::Loc {
+                let deepest = fns::deepest_project_loc(&collapsed, &ctx.project_hint).map(
+                    |(file, line, _)| codeframe::Loc {
                         file,
                         line,
                         column: None,
-                    });
+                    },
+                );
 
                 out.push(String::new());
                 out.extend(codeframe::build_code_frame_section(
@@ -317,7 +318,7 @@ fn try_bridge_fallback(raw: &str, ctx: &Ctx, only_failures: bool) -> Option<Stri
                 .and_then(|v| serde_json::from_value::<crate::format::bridge::BridgeJson>(v).ok())
         })?;
 
-    Some(crate::format::vitest::render_vitest_from_jest_json(
+    Some(crate::format::vitest::render_vitest_from_test_model(
         &bridge_json,
         ctx,
         only_failures,

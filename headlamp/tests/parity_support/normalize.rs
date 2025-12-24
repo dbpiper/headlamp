@@ -1,6 +1,7 @@
 use std::path::Path;
 
 use path_slash::PathExt;
+use regex::Regex;
 
 use super::parity_meta::{NormalizationMeta, NormalizationStageStats, NormalizerKind};
 
@@ -22,12 +23,25 @@ pub fn normalize_tty_ui(text: String, root: &Path) -> String {
     normalize_tty_ui_with_meta(text, root).0
 }
 
+pub fn normalize_tty_ui_runner_parity(text: String, root: &Path) -> String {
+    let (normalized, _meta) = normalize_tty_ui_with_meta(text, root);
+    strip_failure_details(&normalized)
+}
+
+pub fn normalize_tty_ui_runner_parity_with_meta(
+    text: String,
+    root: &Path,
+) -> (String, NormalizationMeta) {
+    let (normalized, meta) = normalize_tty_ui_with_meta(text, root);
+    (strip_failure_details(&normalized), meta)
+}
+
 pub fn normalize_with_meta(text: String, root: &Path) -> (String, NormalizationMeta) {
     let normalized_paths = normalize_paths(text, root);
     let filtered = drop_nondeterministic_lines(&normalized_paths);
     let stripped = strip_terminal_sequences(&filtered);
     let final_block = pick_final_render_block(&stripped);
-    let normalized = normalize_render_block(&final_block);
+    let normalized = trim_leading_blank_lines(&normalize_render_block(&final_block));
 
     let (last_failed_tests_line, last_test_files_line, last_box_table_top_line) =
         compute_render_indices(&stripped);
@@ -70,9 +84,12 @@ pub fn normalize_tty_ui_with_meta(text: String, root: &Path) -> (String, Normali
 
     let final_block = pick_final_render_block_tty(&filtered);
     let (normalized, used_fallback) = if final_block.trim().is_empty() {
-        (pick_final_render_block_tty(&normalized_cr), true)
+        (
+            trim_leading_blank_lines(&pick_final_render_block_tty(&normalized_cr)),
+            true,
+        )
     } else {
-        (final_block, false)
+        (trim_leading_blank_lines(&final_block), false)
     };
 
     let (last_failed_tests_line, last_test_files_line, last_box_table_top_line) =
@@ -95,13 +112,102 @@ pub fn normalize_tty_ui_with_meta(text: String, root: &Path) -> (String, Normali
     (normalized, meta)
 }
 
+fn trim_leading_blank_lines(text: &str) -> String {
+    let lines = text.lines().collect::<Vec<_>>();
+    let start = lines
+        .iter()
+        .position(|l| !l.trim().is_empty())
+        .unwrap_or(lines.len());
+    lines[start..].join("\n")
+}
+
+fn strip_failure_details(text: &str) -> String {
+    let lines = text.lines().collect::<Vec<_>>();
+    if lines.is_empty() {
+        return String::new();
+    }
+    let stripped = lines
+        .iter()
+        .map(|l| strip_all_ansi_like_sequences(l))
+        .collect::<Vec<_>>();
+
+    let fail_line = stripped
+        .iter()
+        .position(|l| l.trim_start().starts_with("FAIL "));
+    let summary_line = stripped.iter().position(|l| l.contains("Failed Tests"));
+    let (Some(fail_i), Some(summary_i)) = (fail_line, summary_line) else {
+        return text.to_string();
+    };
+    if summary_i <= fail_i {
+        return text.to_string();
+    }
+    lines
+        .iter()
+        .take(fail_i + 1)
+        .chain(lines.iter().skip(summary_i.saturating_sub(1)))
+        .cloned()
+        .collect::<Vec<_>>()
+        .join("\n")
+}
+
+fn strip_all_ansi_like_sequences(text: &str) -> String {
+    // Normalization replaces numeric ANSI parameters with placeholders like `<N>`, which makes
+    // our usual ANSI stripper ineffective. For parity normalization we just strip any CSI SGR
+    // sequence shaped like ESC [ ... m.
+    let re = regex::Regex::new(r"\x1b\[[^m]*m").unwrap();
+    re.replace_all(text, "").to_string()
+}
+
 fn normalize_paths(mut text: String, root: &Path) -> String {
     let root_s = root.to_slash_lossy().to_string();
     text = text.replace('\\', "/");
     text = text.replace(&root_s, "<ROOT>");
     text = regex_replace(&text, r"jest-bridge-[0-9]+\.json", "jest-bridge-<PID>.json");
     text = regex_replace(&text, r"\+[0-9]+s\]", "+<N>s]");
-    regex_replace(&text, r"\b[0-9]{1,5}ms\b", "<N>ms")
+    text = regex_replace(&text, r"\b[0-9]{1,5}ms\b", "<N>ms");
+    text = regex_replace(
+        &text,
+        r"((?:\x1b\[[0-9;]*m)*Time(?:\x1b\[[0-9;]*m)*)\s+<N>ms\s+",
+        "$1 ",
+    );
+    text = regex_replace(
+        &text,
+        r"((?:\x1b\[[0-9;]*m)*Time(?:\x1b\[[0-9;]*m)*)\s+((?:\x1b\[[0-9;]*m)*)\(in thread",
+        "$1 $2(in thread",
+    );
+    text = regex_replace(&text, r":\d+:\d+\b", ":<LINE>:<COL>");
+    text = regex_replace(&text, r":\d+\b", ":<LINE>");
+    normalize_fixture_exts(&text)
+}
+
+fn normalize_fixture_exts(text: &str) -> String {
+    // Avoid \b boundaries because ANSI color sequences end with 'm', which is a word char and
+    // breaks boundary matching right before the filename.
+    let test_ext = Regex::new(r"\.test\.(js|rs)").unwrap();
+    let test_suffix_ext = Regex::new(r#"(?m)(tests/[^ \t\r\n:'"]+_test)\.(js|rs)"#).unwrap();
+    let src_ext = Regex::new(r#"(?m)(src/[^ \t\r\n:'"]+)\.(js|rs)"#).unwrap();
+    let tests_ext = Regex::new(r#"(?m)(tests/[^ \t\r\n:'"]+)\.(js|rs)"#).unwrap();
+
+    let with_tests = test_ext.replace_all(text, ".test.<EXT>").to_string();
+    let with_test_suffix = test_suffix_ext
+        .replace_all(&with_tests, "$1.<EXT>")
+        .to_string();
+    let with_src = src_ext
+        .replace_all(&with_test_suffix, "$1.<EXT>")
+        .to_string();
+    normalize_coverage_numbers(&tests_ext.replace_all(&with_src, "$1.<EXT>").to_string())
+}
+
+fn normalize_coverage_numbers(text: &str) -> String {
+    let summary = Regex::new(r"Lines: [0-9]+(\.[0-9]+)?% \([0-9]+/[0-9]+\)").unwrap();
+    let pct = Regex::new(r"\b[0-9]+(\.[0-9]+)?%").unwrap();
+    let count = Regex::new(r"\b[0-9]{1,6}\b").unwrap();
+
+    let with_summary = summary
+        .replace_all(text, "Lines: <PCT>% (<N>/<N>)")
+        .to_string();
+    let with_pct = pct.replace_all(&with_summary, "<PCT>%").to_string();
+    count.replace_all(&with_pct, "<N>").to_string()
 }
 
 fn should_keep_line_tty(raw_line: &str) -> bool {

@@ -164,7 +164,9 @@ fn consume_osc(bytes: &[u8], start: usize) -> (TokenKind, usize) {
 fn osc_kind(bytes: &[u8], start: usize, end: usize) -> TokenKind {
     let slice = bytes.get(start..end).unwrap_or(&[]);
     let is_osc8 = slice.windows(3).any(|w| w == [b']', b'8', b';']);
-    is_osc8.then_some(TokenKind::Osc8Link).unwrap_or(TokenKind::AnsiEscape)
+    is_osc8
+        .then_some(TokenKind::Osc8Link)
+        .unwrap_or(TokenKind::AnsiEscape)
 }
 
 fn scan_while(bytes: &[u8], start: usize, keep: impl Fn(u8) -> bool) -> usize {
@@ -246,7 +248,10 @@ fn classify_block(lines: &[LineNode]) -> BlockKind {
     if lines.iter().any(|l| is_box_table_line(&l.stripped_preview)) {
         return BlockKind::BoxTable;
     }
-    if lines.iter().any(|l| is_pipe_table_line(&l.stripped_preview)) {
+    if lines
+        .iter()
+        .any(|l| is_pipe_table_line(&l.stripped_preview))
+    {
         return BlockKind::PipeTable;
     }
     if lines.iter().any(|l| is_rule_line(&l.stripped_preview)) {
@@ -256,12 +261,17 @@ fn classify_block(lines: &[LineNode]) -> BlockKind {
 }
 
 fn is_box_table_line(line: &str) -> bool {
-    line.contains('┌') || line.contains('└') || line.contains('┬') || line.contains('┴') || line.contains('│')
+    line.contains('┌')
+        || line.contains('└')
+        || line.contains('┬')
+        || line.contains('┴')
+        || line.contains('│')
 }
 
 fn is_pipe_table_line(line: &str) -> bool {
     let t = line.trim();
-    t.contains("|---------|") || (t.contains('|') && t.chars().all(|c| c == '|' || c == '-' || c == ' '))
+    t.contains("|---------|")
+        || (t.contains('|') && t.chars().all(|c| c == '|' || c == '-' || c == ' '))
 }
 
 fn is_rule_line(line: &str) -> bool {
@@ -278,4 +288,3 @@ fn hash_block(kind: BlockKind, lines: &[LineNode]) -> String {
     let hex = hex::encode(h.finalize());
     hex.chars().take(12).collect()
 }
-

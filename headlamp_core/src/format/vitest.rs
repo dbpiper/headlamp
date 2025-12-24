@@ -1,5 +1,4 @@
 use crate::format::ansi;
-use crate::format::bridge::{BridgeAggregated, BridgeJson};
 use crate::format::bridge_console::parse_bridge_console;
 use crate::format::bridge_http::render_http_card;
 use crate::format::codeframe::{Loc, build_code_frame_section, find_code_frame_start};
@@ -12,11 +11,39 @@ use crate::format::fns::{
     render_run_line,
 };
 use crate::format::paths::preferred_editor_href;
+use crate::test_model::{TestRunAggregated, TestRunModel};
 use once_cell::sync::Lazy;
 use path_slash::PathExt;
 use regex::Regex;
 
 static CODE_FRAME_LINE_RE: Lazy<Regex> = Lazy::new(|| Regex::new(r"^\s*(>?\s*\d+\s*\|)").unwrap());
+
+fn filter_console_to_failed_tests(
+    file: &crate::test_model::TestSuiteResult,
+    console_entries: Vec<crate::format::console::ConsoleEntry>,
+) -> Vec<crate::format::console::ConsoleEntry> {
+    let failed_names = file
+        .test_results
+        .iter()
+        .filter(|a| a.status == "failed")
+        .map(|a| a.full_name.as_str())
+        .collect::<Vec<_>>();
+    if failed_names.is_empty() {
+        return console_entries;
+    }
+    let matches_failed = |e: &crate::format::console::ConsoleEntry| -> bool {
+        e.current_test_name
+            .as_deref()
+            .is_some_and(|n| failed_names.iter().any(|f| *f == n))
+    };
+    if !console_entries.iter().any(matches_failed) {
+        return console_entries;
+    }
+    console_entries
+        .into_iter()
+        .filter(|e| matches_failed(e))
+        .collect::<Vec<_>>()
+}
 
 fn extract_expected_received_values(messages_array: &[String]) -> (Option<String>, Option<String>) {
     let stripped = messages_array
@@ -34,7 +61,11 @@ fn extract_expected_received_values(messages_array: &[String]) -> (Option<String
     (expected, received)
 }
 
-pub fn render_vitest_from_jest_json(data: &BridgeJson, ctx: &Ctx, only_failures: bool) -> String {
+pub fn render_vitest_from_test_model(
+    data: &TestRunModel,
+    ctx: &Ctx,
+    only_failures: bool,
+) -> String {
     let mut lines: Vec<String> = vec![];
 
     if !only_failures {
@@ -64,6 +95,11 @@ pub fn render_vitest_from_jest_json(data: &BridgeJson, ctx: &Ctx, only_failures:
             failed
         };
         let (http, assertion_events, console_list) = parse_bridge_console(file.console.as_ref());
+        let console_list = if only_failures && badge_count > 0 {
+            filter_console_to_failed_tests(file, console_list)
+        } else {
+            console_list
+        };
         let mut http_sorted = http;
         http_sorted.sort_by_key(|evt| evt.timestamp_ms);
 
@@ -123,8 +159,8 @@ pub fn render_vitest_from_jest_json(data: &BridgeJson, ctx: &Ctx, only_failures:
 }
 
 fn render_inline_failed_assertion_block(
-    file: &crate::format::bridge::BridgeFileResult,
-    assertion: &crate::format::bridge::BridgeAssertion,
+    file: &crate::test_model::TestSuiteResult,
+    assertion: &crate::test_model::TestCaseResult,
     ctx: &Ctx,
 ) -> Vec<String> {
     let primary_block = if !assertion.failure_messages.is_empty() {
@@ -305,7 +341,7 @@ fn render_assertion_block(messages_array: &[String]) -> Vec<String> {
 }
 
 fn render_file_level_failure(
-    file: &crate::format::bridge::BridgeFileResult,
+    file: &crate::test_model::TestSuiteResult,
     ctx: &Ctx,
     console_list: &[crate::format::console::ConsoleEntry],
 ) -> Vec<String> {
@@ -340,8 +376,8 @@ fn render_file_level_failure(
 
 fn render_failed_assertion(
     rel: &str,
-    file: &crate::format::bridge::BridgeFileResult,
-    assertion: &crate::format::bridge::BridgeAssertion,
+    file: &crate::test_model::TestSuiteResult,
+    assertion: &crate::test_model::TestCaseResult,
     ctx: &Ctx,
     console_list: &[crate::format::console::ConsoleEntry],
     assertion_events: &[crate::format::bridge_console::AssertionEvt],
@@ -547,7 +583,7 @@ fn render_per_test_failure_details(
     out
 }
 
-fn render_footer(data: &BridgeJson, ctx: &Ctx, only_failures: bool) -> Vec<String> {
+fn render_footer(data: &TestRunModel, ctx: &Ctx, only_failures: bool) -> Vec<String> {
     let failed_count =
         if data.aggregated.num_total_tests == 0 && data.aggregated.num_failed_test_suites > 0 {
             data.aggregated.num_failed_test_suites
@@ -585,10 +621,10 @@ fn render_footer(data: &BridgeJson, ctx: &Ctx, only_failures: bool) -> Vec<Strin
 }
 
 fn vitest_footer_from_files(
-    files: &[crate::format::bridge::BridgeFileResult],
-    agg: &BridgeAggregated,
+    files: &[crate::test_model::TestSuiteResult],
+    agg: &TestRunAggregated,
 ) -> String {
-    let file_failed = |file: &crate::format::bridge::BridgeFileResult| -> bool {
+    let file_failed = |file: &crate::test_model::TestSuiteResult| -> bool {
         file.status == "failed" || file.test_results.iter().any(|a| a.status == "failed")
     };
     let failed_files = files.iter().filter(|f| file_failed(f)).count() as u64;
@@ -632,7 +668,7 @@ fn vitest_footer_from_files(
     .join("\n")
 }
 
-fn vitest_footer(agg: &BridgeAggregated, only_failures: bool) -> String {
+fn vitest_footer(agg: &TestRunAggregated, only_failures: bool) -> String {
     let _ = only_failures;
 
     let files = vec![

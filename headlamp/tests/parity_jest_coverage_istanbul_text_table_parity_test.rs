@@ -70,6 +70,7 @@ fn parity_jest_coverage_istanbul_text_table_truncation_does_not_overflow() {
         95,
         &["--coverage", "src/uncoveredLines.js"],
         &["--coverage", "src/uncoveredLines.js"],
+        "jest",
     );
 
     assert_eq!(code_ts, 0);

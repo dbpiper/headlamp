@@ -18,5 +18,3 @@ pub fn detect_terminal_size_cols_rows() -> Option<(usize, usize)> {
         .then(|| terminal_size_of(stderr).map(|(Width(w), Height(h))| (w as usize, h as usize)))
         .flatten()
 }
-
-

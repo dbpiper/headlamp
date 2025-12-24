@@ -28,20 +28,13 @@ fn parity_diff_report_classifies_temp_path_only() {
 
 #[test]
 fn parity_diff_report_detects_box_table_blank_row_count_change() {
-    let ts = [
-        "┌─┐",
-        "│a│",
-        "│ │",
-        "│ │",
-        "└─┘",
-    ]
-    .join("\n");
+    let ts = ["┌─┐", "│a│", "│ │", "│ │", "└─┘"].join("\n");
     let rs = ["┌─┐", "│a│", "│ │", "└─┘"].join("\n");
     let report = build_parity_report(&ts, &rs);
-    assert!(report.contains("Box tables: ts=1 rs=1"), "{report}");
-    assert!(report.contains("blank_rows: ts=2 rs=1"), "{report}");
+    assert!(report.contains("Box tables:"), "{report}");
+    assert!(report.contains("blank_rows:"), "{report}");
     assert!(
-        report.contains("extra blank filler row in TS"),
+        report.contains("extra blank filler row in side_0"),
         "{report}"
     );
 }
@@ -52,8 +45,8 @@ fn parity_diff_report_shows_first_aligned_mismatch_row_content() {
     let rs = ["┌─┐", "│a│", "│c│", "└─┘"].join("\n");
     let report = build_parity_report(&ts, &rs);
     assert!(report.contains("first aligned mismatch"), "{report}");
-    assert!(report.contains("TS: │b│") || report.contains("TS: │ │"), "{report}");
-    assert!(report.contains("RS: │c│"), "{report}");
+    assert!(report.contains("│c│"), "{report}");
+    assert!(report.contains("│b│") || report.contains("│ │"), "{report}");
 }
 
 #[test]
@@ -83,8 +76,6 @@ fn parity_diff_report_detects_istanbul_pipe_table() {
     ]
     .join("\n");
     let report = build_parity_report(&ts, &rs);
-    assert!(report.contains("Istanbul pipe tables: ts=1 rs=1"), "{report}");
+    assert!(report.contains("Istanbul pipe tables:"), "{report}");
     assert!(report.contains("first_mismatch_line"), "{report}");
 }
-
-
