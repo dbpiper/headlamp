@@ -1,7 +1,20 @@
 use std::collections::BTreeMap;
 use std::path::{Path, PathBuf};
 
+use crate::test_model::TestConsoleEntry;
 use crate::test_model::{TestCaseResult, TestRunAggregated, TestRunModel, TestSuiteResult};
+
+#[derive(Debug, Clone)]
+enum ParsedTestLine {
+    Completed {
+        name: String,
+        status: String,
+    },
+    Pending {
+        name: String,
+        inline_output: Option<String>,
+    },
+}
 
 #[derive(Debug, Clone)]
 struct SuiteBlock {
@@ -57,21 +70,61 @@ fn parse_suite_header_source_path(line: &str) -> Option<String> {
 fn parse_suite_block(repo_root: &Path, block: &SuiteBlock) -> TestSuiteResult {
     let mut tests: Vec<TestCaseResult> = vec![];
     let mut failures_by_name: BTreeMap<String, String> = BTreeMap::new();
+    let mut console_entries: Vec<TestConsoleEntry> = vec![];
+    let mut last_pending_test_index: Option<usize> = None;
 
     let mut line_index: usize = 0;
     while line_index < block.lines.len() {
         let line = block.lines[line_index].as_str();
-        if let Some((test_name, status)) = parse_test_line(line) {
-            tests.push(TestCaseResult {
-                title: test_name.clone(),
-                full_name: test_name,
-                status,
-                timed_out: None,
-                duration: 0,
-                location: None,
-                failure_messages: vec![],
-                failure_details: None,
-            });
+        if let Some(parsed) = parse_test_line_extended(line) {
+            match parsed {
+                ParsedTestLine::Completed { name, status } => {
+                    last_pending_test_index = None;
+                    tests.push(TestCaseResult {
+                        title: name.clone(),
+                        full_name: name,
+                        status,
+                        timed_out: None,
+                        duration: 0,
+                        location: None,
+                        failure_messages: vec![],
+                        failure_details: None,
+                    });
+                }
+                ParsedTestLine::Pending {
+                    name,
+                    inline_output,
+                } => {
+                    tests.push(TestCaseResult {
+                        title: name.clone(),
+                        full_name: name,
+                        status: "pending".to_string(),
+                        timed_out: None,
+                        duration: 0,
+                        location: None,
+                        failure_messages: vec![],
+                        failure_details: None,
+                    });
+                    last_pending_test_index = Some(tests.len().saturating_sub(1));
+                    if let Some(inline) = inline_output.as_deref().filter(|s| !s.trim().is_empty())
+                    {
+                        console_entries.push(TestConsoleEntry {
+                            message: Some(serde_json::Value::String(inline.to_string())),
+                            type_name: Some("log".to_string()),
+                            origin: Some("cargo-test".to_string()),
+                        });
+                    }
+                }
+            }
+            line_index += 1;
+            continue;
+        }
+        if let Some(status) = parse_status_only_line(line) {
+            if let Some(index) = last_pending_test_index.take() {
+                if let Some(test_case) = tests.get_mut(index) {
+                    test_case.status = status;
+                }
+            }
             line_index += 1;
             continue;
         }
@@ -81,6 +134,20 @@ fn parse_suite_block(repo_root: &Path, block: &SuiteBlock) -> TestSuiteResult {
             failures_by_name.insert(failed_name, failure_text);
             line_index += consumed;
             continue;
+        }
+        if let Some((failed_name, consumed, failure_text)) =
+            parse_panic_block(&block.lines, line_index)
+        {
+            failures_by_name.insert(failed_name, failure_text);
+            line_index += consumed;
+            continue;
+        }
+        if should_keep_as_console_line(line) {
+            console_entries.push(TestConsoleEntry {
+                message: Some(serde_json::Value::String(line.to_string())),
+                type_name: Some("log".to_string()),
+                origin: Some("cargo-test".to_string()),
+            });
         }
         line_index += 1;
     }
@@ -109,9 +176,44 @@ fn parse_suite_block(repo_root: &Path, block: &SuiteBlock) -> TestSuiteResult {
         failure_message: String::new(),
         failure_details: None,
         test_exec_error: None,
-        console: None,
+        console: (!console_entries.is_empty()).then_some(console_entries),
         test_results: tests,
     }
+}
+
+fn should_keep_as_console_line(line: &str) -> bool {
+    let trimmed = line.trim();
+    if trimmed.is_empty() {
+        return false;
+    }
+    if parse_test_line(trimmed).is_some() {
+        return false;
+    }
+    if parse_status_only_line(trimmed).is_some() {
+        return false;
+    }
+    if parse_suite_header_source_path(trimmed).is_some() {
+        return false;
+    }
+    if trimmed.starts_with("running ") {
+        return false;
+    }
+    if trimmed.starts_with("---- ") && trimmed.ends_with(" ----") {
+        return false;
+    }
+    if trimmed == "failures:" {
+        return false;
+    }
+    if trimmed.starts_with("failures:") || trimmed.starts_with("test result:") {
+        return false;
+    }
+    if trimmed.starts_with("thread '") || trimmed.contains("panicked at") {
+        return false;
+    }
+    if trimmed.starts_with("stack backtrace:") || trimmed.starts_with("note:") {
+        return false;
+    }
+    true
 }
 
 fn parse_test_line(line: &str) -> Option<(String, String)> {
@@ -126,6 +228,59 @@ fn parse_test_line(line: &str) -> Option<(String, String)> {
         _ => return None,
     };
     Some((name.trim().to_string(), status.to_string()))
+}
+
+fn parse_test_line_extended(line: &str) -> Option<ParsedTestLine> {
+    let trimmed = line.trim();
+    let rest = trimmed.strip_prefix("test ")?;
+    let (name, tail) = rest.split_once(" ... ")?;
+    let status_raw = tail.trim();
+    if let Some((_, status)) = parse_test_line(trimmed) {
+        return Some(ParsedTestLine::Completed {
+            name: name.trim().to_string(),
+            status,
+        });
+    }
+    Some(ParsedTestLine::Pending {
+        name: name.trim().to_string(),
+        inline_output: (!status_raw.is_empty()).then(|| status_raw.to_string()),
+    })
+}
+
+fn parse_status_only_line(line: &str) -> Option<String> {
+    let trimmed = line.trim();
+    let status = match trimmed {
+        "ok" => "passed",
+        "FAILED" => "failed",
+        "ignored" => "pending",
+        _ => return None,
+    };
+    Some(status.to_string())
+}
+
+fn parse_panic_block(lines: &[String], start_index: usize) -> Option<(String, usize, String)> {
+    let header = lines.get(start_index)?.trim();
+    let thread_prefix = header.strip_prefix("thread '")?;
+    let (test_name, _) = thread_prefix.split_once("' panicked at")?;
+
+    let mut collected: Vec<String> = vec![header.to_string()];
+    let mut consumed: usize = 1;
+    for line in lines.iter().skip(start_index + 1) {
+        let trimmed = line.trim();
+        if parse_status_only_line(trimmed).is_some() {
+            break;
+        }
+        if trimmed == "failures:" {
+            break;
+        }
+        if trimmed.starts_with("test result:") {
+            break;
+        }
+        collected.push(line.to_string());
+        consumed += 1;
+    }
+    let text = collected.join("\n").trim().to_string();
+    Some((test_name.trim().to_string(), consumed, text))
 }
 
 fn parse_failure_block(lines: &[String], start_index: usize) -> Option<(String, usize, String)> {

@@ -12,12 +12,22 @@ use headlamp_core::format::cargo_test::parse_cargo_test_output;
 use headlamp_core::format::ctx::make_ctx;
 use headlamp_core::format::nextest::parse_nextest_libtest_json_output;
 use headlamp_core::format::vitest::render_vitest_from_test_model;
+use headlamp_core::test_model::TestSuiteResult;
 
 use crate::cargo_select::{changed_rust_seeds, filter_rust_tests_by_seeds, list_rust_test_files};
 use crate::git::changed_files;
-use crate::run::RunError;
+use crate::run::{RunError, run_bootstrap};
+
+fn run_optional_bootstrap(repo_root: &Path, args: &ParsedArgs) -> Result<(), RunError> {
+    let Some(command) = args.bootstrap_command.as_deref() else {
+        return Ok(());
+    };
+    run_bootstrap(repo_root, command)
+}
 
 pub fn run_cargo_test(repo_root: &Path, args: &ParsedArgs) -> Result<i32, RunError> {
+    run_optional_bootstrap(repo_root, args)?;
+
     let changed = args
         .changed
         .map(|m| changed_files(repo_root, m))
@@ -55,12 +65,7 @@ pub fn run_cargo_test(repo_root: &Path, args: &ParsedArgs) -> Result<i32, RunErr
 
     let selection = derive_cargo_selection(repo_root, args, &changed);
 
-    let exit_code = run_cargo_test_and_render(
-        repo_root,
-        args,
-        selection.filter.as_deref(),
-        &selection.extra_cargo_args,
-    )?;
+    let exit_code = run_cargo_test_and_render(repo_root, args, None, &selection.extra_cargo_args)?;
 
     if args.coverage_abort_on_failure && exit_code != 0 {
         return Ok(normalize_runner_exit_code(exit_code));
@@ -74,6 +79,8 @@ pub fn run_cargo_test(repo_root: &Path, args: &ParsedArgs) -> Result<i32, RunErr
 }
 
 pub fn run_cargo_nextest(repo_root: &Path, args: &ParsedArgs) -> Result<i32, RunError> {
+    run_optional_bootstrap(repo_root, args)?;
+
     let changed = args
         .changed
         .map(|m| changed_files(repo_root, m))
@@ -117,12 +124,7 @@ pub fn run_cargo_nextest(repo_root: &Path, args: &ParsedArgs) -> Result<i32, Run
         });
     }
 
-    let exit_code = run_nextest_and_render(
-        repo_root,
-        args,
-        selection.filter.as_deref(),
-        &selection.extra_cargo_args,
-    )?;
+    let exit_code = run_nextest_and_render(repo_root, args, None, &selection.extra_cargo_args)?;
 
     if args.coverage_abort_on_failure && exit_code != 0 {
         return Ok(normalize_runner_exit_code(exit_code));
@@ -148,7 +150,10 @@ fn print_test_output(repo_root: &Path, args: &ParsedArgs, exit_code: i32, combin
         args.editor_cmd.clone(),
     );
     let rendered = parse_cargo_test_output(repo_root, combined)
-        .map(|model| render_vitest_from_test_model(&model, &ctx, args.only_failures))
+        .map(|mut model| {
+            reorder_test_results_original_style_for_cargo(&mut model.test_results);
+            render_vitest_from_test_model(&model, &ctx, args.only_failures)
+        })
         .unwrap_or_else(|| combined.to_string());
     if !rendered.trim().is_empty() {
         println!("{rendered}");
@@ -164,11 +169,38 @@ fn print_test_output_nextest(repo_root: &Path, args: &ParsedArgs, exit_code: i32
         args.editor_cmd.clone(),
     );
     let rendered = parse_nextest_libtest_json_output(repo_root, combined)
-        .map(|model| render_vitest_from_test_model(&model, &ctx, args.only_failures))
+        .map(|mut model| {
+            reorder_test_results_original_style_for_cargo(&mut model.test_results);
+            render_vitest_from_test_model(&model, &ctx, args.only_failures)
+        })
         .unwrap_or_else(|| combined.to_string());
     if !rendered.trim().is_empty() {
         println!("{rendered}");
     }
+}
+
+fn reorder_test_results_original_style_for_cargo(test_results: &mut Vec<TestSuiteResult>) {
+    let file_failed = |file: &TestSuiteResult| -> bool {
+        file.status == "failed"
+            || file
+                .test_results
+                .iter()
+                .any(|assertion| assertion.status == "failed")
+    };
+
+    if test_results.iter().all(|file| !file_failed(file)) {
+        test_results.reverse();
+        return;
+    }
+
+    test_results.sort_by(|left, right| {
+        normalize_abs_posix_for_ordering(&left.test_file_path)
+            .cmp(&normalize_abs_posix_for_ordering(&right.test_file_path))
+    });
+}
+
+fn normalize_abs_posix_for_ordering(input: &str) -> String {
+    input.replace('\\', "/")
 }
 
 fn run_nextest_and_render(
@@ -230,6 +262,11 @@ fn build_nextest_run_args(
 ) -> Vec<String> {
     let (cargo_args, test_binary_args) = split_cargo_passthrough_args(&args.runner_args);
     let mut cmd_args: Vec<String> = vec!["nextest".to_string(), "run".to_string()];
+    let (success_output, failure_output) = if args.show_logs {
+        ("immediate", "immediate")
+    } else {
+        ("never", "never")
+    };
 
     cmd_args.extend([
         "--color".to_string(),
@@ -242,9 +279,9 @@ fn build_nextest_run_args(
         "--show-progress".to_string(),
         "none".to_string(),
         "--success-output".to_string(),
-        "never".to_string(),
+        success_output.to_string(),
         "--failure-output".to_string(),
-        "never".to_string(),
+        failure_output.to_string(),
         "--cargo-quiet".to_string(),
         "--no-input-handler".to_string(),
         "--no-output-indent".to_string(),
@@ -346,6 +383,9 @@ fn build_cargo_test_args(
     if should_force_pretty_test_output(&test_binary_args) {
         normalized_test_args.extend(["--format".to_string(), "pretty".to_string()]);
     }
+    if args.show_logs && should_force_nocapture(&test_binary_args) {
+        normalized_test_args.push("--nocapture".to_string());
+    }
     if args.sequential && !test_binary_args.iter().any(|t| t == "--test-threads") {
         normalized_test_args.extend(["--test-threads".to_string(), "1".to_string()]);
     }
@@ -361,6 +401,16 @@ fn should_force_pretty_test_output(test_binary_args: &[String]) -> bool {
         token == "--format" || token.starts_with("--format=") || token == "-q" || token == "--quiet"
     });
     !overrides_format
+}
+
+fn should_force_nocapture(test_binary_args: &[String]) -> bool {
+    let overrides_capture = test_binary_args.iter().any(|token| {
+        token == "--nocapture"
+            || token == "--no-capture"
+            || token == "--capture"
+            || token == "--show-output"
+    });
+    !overrides_capture
 }
 
 fn split_cargo_passthrough_args(passthrough: &[String]) -> (Vec<String>, Vec<String>) {
@@ -441,7 +491,6 @@ fn has_cargo_llvm_cov(repo_root: &Path) -> bool {
 
 #[derive(Debug, Clone)]
 struct CargoSelection {
-    filter: Option<String>,
     extra_cargo_args: Vec<String>,
 }
 
@@ -456,7 +505,6 @@ fn derive_cargo_selection(
 
     if changed.is_empty() {
         return CargoSelection {
-            filter: None,
             extra_cargo_args: vec![],
         };
     }
@@ -464,22 +512,20 @@ fn derive_cargo_selection(
     let tests = list_rust_test_files(repo_root);
     if tests.is_empty() {
         return CargoSelection {
-            filter: None,
             extra_cargo_args: vec![],
         };
     }
 
     let seeds = changed_rust_seeds(repo_root, changed);
     let kept = filter_rust_tests_by_seeds(&tests, &seeds);
-    let filter = kept
+    let test_targets = kept
         .iter()
         .filter_map(|p| p.file_stem().and_then(|s| s.to_str()))
-        .next()
-        .map(|s| s.to_string());
+        .map(|s| s.to_string())
+        .collect::<Vec<_>>();
 
     CargoSelection {
-        filter,
-        extra_cargo_args: vec![],
+        extra_cargo_args: build_test_target_args(&test_targets),
     }
 }
 
@@ -494,43 +540,46 @@ fn derive_selection_from_selection_paths(
         .collect::<Vec<_>>();
     if abs.is_empty() {
         return CargoSelection {
-            filter: None,
             extra_cargo_args: vec![],
         };
     }
 
-    let direct_test_stem = abs
+    let direct_test_stems = abs
         .iter()
-        .find(|p| is_rust_test_file(p))
-        .and_then(|p| p.file_stem().and_then(|s| s.to_str()))
-        .map(|s| s.to_string());
-    if let Some(stem) = direct_test_stem {
+        .filter(|p| is_rust_test_file(p))
+        .filter_map(|p| p.file_stem().and_then(|s| s.to_str()))
+        .map(|s| s.to_string())
+        .collect::<Vec<_>>();
+    if !direct_test_stems.is_empty() {
         return CargoSelection {
-            filter: None,
-            extra_cargo_args: vec!["--test".to_string(), stem],
+            extra_cargo_args: build_test_target_args(&direct_test_stems),
         };
     }
 
+    let test_targets = derive_test_targets_from_seeds(repo_root, &abs);
     CargoSelection {
-        filter: derive_filter_from_seeds(repo_root, &abs),
-        extra_cargo_args: vec![],
+        extra_cargo_args: build_test_target_args(&test_targets),
     }
 }
 
-fn derive_filter_from_seeds(
+fn derive_test_targets_from_seeds(
     repo_root: &Path,
     seeds_input: &[std::path::PathBuf],
-) -> Option<String> {
+) -> Vec<String> {
     let tests = list_rust_test_files(repo_root);
     if tests.is_empty() {
-        return None;
+        return vec![];
     }
     let seeds = changed_rust_seeds(repo_root, seeds_input);
     let kept = filter_rust_tests_by_seeds(&tests, &seeds);
-    kept.iter()
+    let mut stems = kept
+        .iter()
         .filter_map(|p| p.file_stem().and_then(|s| s.to_str()))
-        .next()
         .map(|s| s.to_string())
+        .collect::<Vec<_>>();
+    stems.sort();
+    stems.dedup();
+    stems
 }
 
 fn is_rust_test_file(path: &std::path::Path) -> bool {
@@ -538,4 +587,15 @@ fn is_rust_test_file(path: &std::path::Path) -> bool {
         && path
             .components()
             .any(|c| c.as_os_str().to_string_lossy() == "tests")
+}
+
+fn build_test_target_args(test_targets: &[String]) -> Vec<String> {
+    let mut sorted = test_targets.to_vec();
+    sorted.sort();
+    sorted.dedup();
+
+    sorted
+        .into_iter()
+        .flat_map(|stem| ["--test".to_string(), stem])
+        .collect::<Vec<_>>()
 }

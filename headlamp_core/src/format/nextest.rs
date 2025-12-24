@@ -55,14 +55,21 @@ pub fn parse_nextest_libtest_json_output(
     repo_root: &Path,
     combined_output: &str,
 ) -> Option<TestRunModel> {
-    let json_lines = combined_output
-        .lines()
-        .map(str::trim)
+    let trimmed_lines = combined_output.lines().map(str::trim).collect::<Vec<_>>();
+    let json_lines = trimmed_lines
+        .iter()
+        .copied()
         .filter(|line| line.starts_with('{') && line.ends_with('}'))
         .collect::<Vec<_>>();
     if json_lines.is_empty() {
         return None;
     }
+    let loose_log_lines = trimmed_lines
+        .iter()
+        .copied()
+        .filter(|line| !(line.starts_with('{') && line.ends_with('}')))
+        .filter(|line| !line.trim().is_empty())
+        .collect::<Vec<_>>();
 
     let mut suites_by_key: BTreeMap<SuiteKey, SuiteAcc> = BTreeMap::new();
     let mut kind_by_crate_and_binary: BTreeMap<(String, String), String> = BTreeMap::new();
@@ -169,11 +176,35 @@ pub fn parse_nextest_libtest_json_output(
                                 test_case.failure_messages = vec![msg.clone()];
                             }
                         }
+                        if let Some(out) = stdout.as_deref().filter(|s| !s.trim().is_empty()) {
+                            suite.console_entries.extend(
+                                out.lines()
+                                    .map(str::trim)
+                                    .filter(|ln| !ln.is_empty())
+                                    .map(|ln| TestConsoleEntry {
+                                        message: Some(serde_json::Value::String(ln.to_string())),
+                                        type_name: Some("log".to_string()),
+                                        origin: Some("cargo-nextest".to_string()),
+                                    }),
+                            );
+                        }
                         suite.tests.insert(display_name, test_case);
                     }
                     _ => {}
                 }
             }
+        }
+    }
+
+    if !loose_log_lines.is_empty() {
+        if let Some((_key, first_suite)) = suites_by_key.iter_mut().next() {
+            first_suite
+                .console_entries
+                .extend(loose_log_lines.iter().map(|ln| TestConsoleEntry {
+                    message: Some(serde_json::Value::String((*ln).to_string())),
+                    type_name: Some("log".to_string()),
+                    origin: Some("cargo-nextest".to_string()),
+                }));
         }
     }
 

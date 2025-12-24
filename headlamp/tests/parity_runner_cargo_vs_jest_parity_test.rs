@@ -60,6 +60,174 @@ fn sum_fails() {{\n\
     );
 }
 
+fn write_dual_language_bootstrap_repo(repo: &Path, jest_node_modules: &Path) {
+    symlink_dir(jest_node_modules, &repo.join("node_modules"));
+
+    write_file(
+        &repo.join("jest.config.js"),
+        "module.exports = { testMatch: ['**/tests/**/*_test.js'] };\n",
+    );
+
+    write_file(
+        &repo.join("tests/bootstrap_test.js"),
+        "\
+const fs = require('node:fs');\n\
+\n\
+test('bootstrap_passes', () => {\n\
+  const contents = fs.readFileSync('bootstrap.txt', 'utf8');\n\
+  expect(contents.trim()).toBe('bootstrap');\n\
+});\n",
+    );
+
+    write_file(
+        &repo.join("Cargo.toml"),
+        "\
+[package]\n\
+name = \"parity_bootstrap\"\n\
+version = \"0.1.0\"\n\
+edition = \"2024\"\n\
+\n\
+[lib]\n\
+path = \"src/lib.rs\"\n\
+",
+    );
+    write_file(&repo.join("src/lib.rs"), "pub fn noop() {}\n");
+    write_file(
+        &repo.join("tests/bootstrap_test.rs"),
+        "\
+use std::fs;\n\
+\n\
+#[test]\n\
+fn bootstrap_passes() {\n\
+    let contents = fs::read_to_string(\"bootstrap.txt\").expect(\"bootstrap.txt\");\n\
+    assert_eq!(contents.trim(), \"bootstrap\");\n\
+}\n\
+",
+    );
+}
+
+fn write_dual_language_show_logs_repo(repo: &Path, jest_node_modules: &Path) {
+    symlink_dir(jest_node_modules, &repo.join("node_modules"));
+
+    write_file(
+        &repo.join("jest.config.js"),
+        "module.exports = { testMatch: ['**/tests/**/*_test.js'] };\n",
+    );
+    write_file(
+        &repo.join("tests/logs_test.js"),
+        "\
+test('pass', () => {\n\
+  console.log('log-pass');\n\
+  expect(1).toBe(1);\n\
+});\n\
+\n\
+test('fail', () => {\n\
+  console.error('err-fail');\n\
+  expect(1).toBe(2);\n\
+});\n\
+",
+    );
+
+    write_file(
+        &repo.join("Cargo.toml"),
+        "\
+[package]\n\
+name = \"parity_logs\"\n\
+version = \"0.1.0\"\n\
+edition = \"2024\"\n\
+\n\
+[lib]\n\
+path = \"src/lib.rs\"\n\
+",
+    );
+    write_file(&repo.join("src/lib.rs"), "pub fn noop() {}\n");
+    write_file(
+        &repo.join("tests/logs_test.rs"),
+        "\
+#[test]\n\
+fn pass() {\n\
+    println!(\"log-pass\");\n\
+    assert_eq!(1, 1);\n\
+}\n\
+\n\
+#[test]\n\
+fn fail() {\n\
+    eprintln!(\"err-fail\");\n\
+    assert_eq!(1, 2);\n\
+}\n\
+",
+    );
+}
+
+fn write_dual_language_changed_selection_repo(repo: &Path, jest_node_modules: &Path) {
+    symlink_dir(jest_node_modules, &repo.join("node_modules"));
+
+    write_file(
+        &repo.join("jest.config.js"),
+        "module.exports = { testMatch: ['**/tests/**/*_test.js'] };\n",
+    );
+    write_file(&repo.join("src/a.js"), "exports.a = () => 'a';\n");
+    write_file(&repo.join("src/b.js"), "exports.b = () => 'b';\n");
+    write_file(
+        &repo.join("tests/a_test.js"),
+        "const { a } = require('../src/a');\n\ntest('a_passes', () => { expect(a()).toBe('a'); });\n",
+    );
+    write_file(
+        &repo.join("tests/b_test.js"),
+        "const { b } = require('../src/b');\n\ntest('b_passes', () => { expect(b()).toBe('b'); });\n",
+    );
+
+    write_file(
+        &repo.join("Cargo.toml"),
+        "\
+[package]\n\
+name = \"parity_changed\"\n\
+version = \"0.1.0\"\n\
+edition = \"2024\"\n\
+\n\
+[lib]\n\
+path = \"src/lib.rs\"\n\
+",
+    );
+    write_file(
+        &repo.join("src/lib.rs"),
+        "\
+pub mod a;\n\
+pub mod b;\n\
+",
+    );
+    write_file(
+        &repo.join("src/a.rs"),
+        "pub fn a() -> &'static str { \"a\" }\n",
+    );
+    write_file(
+        &repo.join("src/b.rs"),
+        "pub fn b() -> &'static str { \"b\" }\n",
+    );
+    write_file(
+        &repo.join("tests/a_test.rs"),
+        "\
+use parity_changed::a;\n\
+\n\
+#[test]\n\
+fn a_passes() {\n\
+    assert_eq!(a::a(), \"a\");\n\
+}\n\
+",
+    );
+    write_file(
+        &repo.join("tests/b_test.rs"),
+        "\
+use parity_changed::b;\n\
+\n\
+#[test]\n\
+fn b_passes() {\n\
+    assert_eq!(b::b(), \"b\");\n\
+}\n\
+",
+    );
+}
+
 fn assert_headlamp_runners_tty_parity(
     repo: &Path,
     headlamp_bin: &Path,
@@ -212,5 +380,85 @@ fn parity_runner_coverage_ui_jest_suppresses_coverage_output() {
         &binaries.headlamp_bin,
         &runner_args,
         "coverage-ui=jest all three",
+    );
+}
+
+#[test]
+fn parity_runner_bootstrap_command_all_three() {
+    let binaries = runner_parity_binaries();
+    let repo = mk_temp_dir("runner-parity-bootstrap-command");
+    write_dual_language_bootstrap_repo(&repo, &binaries.jest_node_modules);
+
+    let bootstrap_args = ["--bootstrapCommand=echo bootstrap > bootstrap.txt"];
+    let runner_args: [(&str, &[&str]); 3] = [
+        ("jest", &bootstrap_args),
+        ("cargo-test", &bootstrap_args),
+        ("cargo-nextest", &bootstrap_args),
+    ];
+    assert_headlamp_runners_tty_parity(
+        &repo,
+        &binaries.headlamp_bin,
+        &runner_args,
+        "bootstrapCommand all three",
+    );
+}
+
+#[test]
+fn parity_runner_show_logs_and_only_failures_all_three() {
+    let binaries = runner_parity_binaries();
+    let repo = mk_temp_dir("runner-parity-show-logs-only-failures");
+    write_dual_language_show_logs_repo(&repo, &binaries.jest_node_modules);
+
+    let args = ["--showLogs", "--onlyFailures"];
+    let runner_args: [(&str, &[&str]); 3] = [
+        ("jest", &args),
+        ("cargo-test", &args),
+        ("cargo-nextest", &args),
+    ];
+    assert_headlamp_runners_tty_parity(
+        &repo,
+        &binaries.headlamp_bin,
+        &runner_args,
+        "showLogs+onlyFailures all three",
+    );
+}
+
+#[test]
+fn parity_runner_changed_all_selects_multiple_tests_all_three() {
+    let binaries = runner_parity_binaries();
+    let repo = mk_temp_dir("runner-parity-changed-all-multi");
+    write_dual_language_changed_selection_repo(&repo, &binaries.jest_node_modules);
+
+    parity_support::git_init(&repo);
+    parity_support::git_commit_all(&repo, "baseline");
+
+    write_file(
+        &repo.join("src/a.js"),
+        "exports.a = () => 'a'; // changed\n",
+    );
+    write_file(
+        &repo.join("src/b.js"),
+        "exports.b = () => 'b'; // changed\n",
+    );
+    write_file(
+        &repo.join("src/a.rs"),
+        "pub fn a() -> &'static str { \"a\" } // changed\n",
+    );
+    write_file(
+        &repo.join("src/b.rs"),
+        "pub fn b() -> &'static str { \"b\" } // changed\n",
+    );
+
+    let args = ["--changed=all"];
+    let runner_args: [(&str, &[&str]); 3] = [
+        ("jest", &args),
+        ("cargo-test", &args),
+        ("cargo-nextest", &args),
+    ];
+    assert_headlamp_runners_tty_parity(
+        &repo,
+        &binaries.headlamp_bin,
+        &runner_args,
+        "changed=all selects multiple tests all three",
     );
 }
