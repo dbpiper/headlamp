@@ -1,10 +1,13 @@
-name: npm
+name: release-binaries
 
 on:
   workflow_dispatch: {}
   push:
     tags:
       - "v*"
+
+permissions:
+  contents: write
 
 jobs:
   build-binaries:
@@ -54,7 +57,9 @@ jobs:
 
       - name: Install cross (linux only)
         if: runner.os == 'Linux'
-        run: cargo install cross --locked
+        uses: taiki-e/install-action@v2
+        with:
+          tool: cross
 
       - name: Build (linux via cross)
         if: runner.os == 'Linux'
@@ -64,67 +69,67 @@ jobs:
         if: runner.os != 'Linux'
         run: cargo build -p headlamp --release --target ${{ matrix.cargo_target }}
 
-      - name: Collect binary
+      - name: Package (.gz) (unix)
+        if: runner.os != 'Windows'
         shell: bash
         run: |
           set -euo pipefail
-          mkdir -p dist/${{ matrix.target_label }}
-          cp target/${{ matrix.cargo_target }}/release/${{ matrix.binary_name }} dist/${{ matrix.target_label }}/
+          src="target/${{ matrix.cargo_target }}/release/${{ matrix.binary_name }}"
+          out="dist/${{ matrix.target_label }}-${{ matrix.binary_name }}.gz"
+          mkdir -p dist
+          python3 - <<'PY'
+          import gzip
+          import os
+          import shutil
+          src = os.environ["SRC"]
+          out = os.environ["OUT"]
+          with open(src, "rb") as input_stream, gzip.open(out, "wb", compresslevel=9) as output_stream:
+              shutil.copyfileobj(input_stream, output_stream)
+          PY
+        env:
+          SRC: target/${{ matrix.cargo_target }}/release/${{ matrix.binary_name }}
+          OUT: dist/${{ matrix.target_label }}-${{ matrix.binary_name }}.gz
+
+      - name: Package (.gz) (windows)
+        if: runner.os == 'Windows'
+        shell: pwsh
+        run: |
+          $src = "target\${{ matrix.cargo_target }}\release\${{ matrix.binary_name }}"
+          $out = "dist\${{ matrix.target_label }}-${{ matrix.binary_name }}.gz"
+          New-Item -ItemType Directory -Force -Path dist | Out-Null
+          python - <<'PY'
+          import gzip
+          import os
+          import shutil
+          src = os.environ["SRC"]
+          out = os.environ["OUT"]
+          with open(src, "rb") as input_stream, gzip.open(out, "wb", compresslevel=9) as output_stream:
+              shutil.copyfileobj(input_stream, output_stream)
+          PY
+        env:
+          SRC: target/${{ matrix.cargo_target }}\release\${{ matrix.binary_name }}
+          OUT: dist\${{ matrix.target_label }}-${{ matrix.binary_name }}.gz
 
       - uses: actions/upload-artifact@v4
         with:
-          name: headlamp-bin-${{ matrix.target_label }}
-          path: dist/${{ matrix.target_label }}/
+          name: headlamp-asset-${{ matrix.target_label }}
+          path: dist/*.gz
 
-  assemble-npm:
-    name: assemble npm package
+  upload-release-assets:
+    name: upload release assets
     needs: build-binaries
     runs-on: ubuntu-latest
     steps:
-      - uses: actions/checkout@v4
-
-      - uses: actions/setup-node@v4
-        with:
-          node-version: 20
-          cache: npm
-          cache-dependency-path: headlamp/npm/headlamp/package.json
-
-      - name: Download all binaries
+      - name: Download all build artifacts
         uses: actions/download-artifact@v4
         with:
           path: artifacts
 
-      - name: Stage binaries into npm package
-        shell: bash
-        run: |
-          set -euo pipefail
-          pkg="headlamp/npm/headlamp"
-          rm -rf "$pkg/bin"
-          mkdir -p "$pkg/bin"
-
-          copy_one() {
-            local label="$1"
-            local file="$2"
-            mkdir -p "$pkg/bin/$label"
-            cp "$file" "$pkg/bin/$label/"
-            chmod 755 "$pkg/bin/$label/"* || true
-          }
-
-          copy_one "darwin-arm64"   "artifacts/headlamp-bin-darwin-arm64/headlamp"
-          copy_one "darwin-x64"     "artifacts/headlamp-bin-darwin-x64/headlamp"
-          copy_one "linux-x64-gnu"  "artifacts/headlamp-bin-linux-x64-gnu/headlamp"
-          copy_one "linux-arm64-gnu" "artifacts/headlamp-bin-linux-arm64-gnu/headlamp"
-          copy_one "linux-x64-musl" "artifacts/headlamp-bin-linux-x64-musl/headlamp"
-          copy_one "linux-arm64-musl" "artifacts/headlamp-bin-linux-arm64-musl/headlamp"
-          copy_one "win32-x64"      "artifacts/headlamp-bin-win32-x64/headlamp.exe"
-
-      - name: npm pack
-        working-directory: headlamp/npm/headlamp
-        run: npm pack
-
-      - uses: actions/upload-artifact@v4
+      - name: Upload .gz assets to GitHub Release
+        uses: softprops/action-gh-release@v2
         with:
-          name: headlamp-npm-tarball
-          path: headlamp/npm/headlamp/headlamp-*.tgz
-
+          files: artifacts/**/**/*.gz
+          fail_on_unmatched_files: true
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
 

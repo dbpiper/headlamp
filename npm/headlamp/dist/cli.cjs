@@ -43,7 +43,8 @@ function resolveBinaryPath() {
 
 function failMissingBinary(binaryPath) {
   const platformKey = resolvePlatformKey();
-  const availableHint = "This npm package is expected to include all platform binaries. If you're developing locally, run `npm run stage:local` in the package directory.";
+  const availableHint =
+    "The platform binary is missing. If this was installed from npm, re-run the install (or `npm rebuild headlamp`) so postinstall can fetch it. If you're developing locally, run `npm run stage:local` in the package directory.";
   const message = [
     `headlamp: no bundled binary for ${platformKey}`,
     `expected: ${binaryPath}`,

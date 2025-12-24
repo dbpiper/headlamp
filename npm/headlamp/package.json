@@ -1,15 +1,38 @@
 {
   "name": "headlamp",
   "version": "0.1.35",
-  "description": "Coverage-first, runner-agnostic test UX CLI for Jest (Rust binary distribution)",
+  "description": "The smart searchlight for your test suite. Fast, graph-powered selection for Jest and Cargo.",
+  "keywords": [
+    "testing",
+    "coverage",
+    "jest",
+    "vitest",
+    "cli"
+  ],
+  "homepage": "https://github.com/dbpiper/headlamp#readme",
+  "bugs": {
+    "url": "https://github.com/dbpiper/headlamp/issues"
+  },
+  "repository": {
+    "type": "git",
+    "url": "git+https://github.com/dbpiper/headlamp.git"
+  },
   "license": "MIT",
   "type": "commonjs",
+  "engines": {
+    "node": ">=18"
+  },
+  "publishConfig": {
+    "access": "public"
+  },
   "bin": {
     "headlamp": "dist/cli.cjs"
   },
   "files": [
     "dist",
-    "bin"
+    "bin",
+    "README.md",
+    "LICENSE"
   ],
   "scripts": {
     "postinstall": "node dist/postinstall.cjs",
