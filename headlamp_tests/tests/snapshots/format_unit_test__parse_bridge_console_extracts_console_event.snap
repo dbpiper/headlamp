@@ -1,0 +1,5 @@
+---
+source: headlamp_tests/tests/format_unit_test.rs
+expression: summary
+---
+error: oops

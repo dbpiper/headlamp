@@ -503,33 +503,9 @@ dependencies = [
 
 [[package]]
 name = "headlamp"
-version = "0.1.0"
+version = "0.1.35"
 dependencies = [
  "aho-corasick",
- "duct",
- "dunce",
- "git2",
- "globset",
- "headlamp_core",
- "hex",
- "ignore",
- "indexmap",
- "path-slash",
- "pathdiff",
- "regex",
- "serde",
- "serde_json",
- "sha1",
- "similar-asserts",
- "tempfile",
- "thiserror 2.0.17",
- "which",
-]
-
-[[package]]
-name = "headlamp_core"
-version = "0.1.0"
-dependencies = [
  "clap",
  "dashmap",
  "duct",
@@ -537,6 +513,7 @@ dependencies = [
  "fancy-regex",
  "git2",
  "globset",
+ "hex",
  "ignore",
  "indexmap",
  "insta",
@@ -551,10 +528,12 @@ dependencies = [
  "oxc_span",
  "oxc_syntax",
  "path-slash",
+ "pathdiff",
  "regex",
  "serde",
  "serde_json",
  "serde_yaml",
+ "sha1",
  "similar-asserts",
  "strip-ansi-escapes",
  "syn",
@@ -562,6 +541,24 @@ dependencies = [
  "terminal_size",
  "thiserror 2.0.17",
  "toml",
+ "which",
+]
+
+[[package]]
+name = "headlamp_tests"
+version = "0.0.0"
+dependencies = [
+ "git2",
+ "headlamp",
+ "hex",
+ "insta",
+ "path-slash",
+ "regex",
+ "serde",
+ "serde_json",
+ "sha1",
+ "similar-asserts",
+ "tempfile",
  "which",
 ]
 

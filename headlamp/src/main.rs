@@ -22,11 +22,11 @@ fn should_print_terminal_debug() -> bool {
 fn print_terminal_debug() {
     let stdout_is_tty = std::io::stdout().is_terminal();
     let stderr_is_tty = std::io::stderr().is_terminal();
-    let detected_size = headlamp_core::format::terminal::detect_terminal_size_cols_rows();
+    let detected_size = headlamp::format::terminal::detect_terminal_size_cols_rows();
 
     eprintln!(
         "HEADLAMP_DEBUG_TERMINAL: stdout_tty={stdout_is_tty} stderr_tty={stderr_is_tty} output_tty={} term={:?} term_program={:?} no_color={:?} force_color={:?} clicolor={:?} columns={:?} ci={:?} detected_size={:?}",
-        headlamp_core::format::terminal::is_output_terminal(),
+        headlamp::format::terminal::is_output_terminal(),
         std::env::var("TERM").ok(),
         std::env::var("TERM_PROGRAM").ok(),
         std::env::var("NO_COLOR").ok(),
@@ -49,13 +49,13 @@ fn main() {
     }
     let (runner, argv) = extract_runner(&argv0);
     let cwd = std::env::current_dir().unwrap_or_else(|_| std::path::PathBuf::from("."));
-    let repo_root = headlamp_core::config::find_repo_root(&cwd);
-    let cfg = headlamp_core::config::load_headlamp_config(&repo_root).unwrap_or_default();
-    let cfg_tokens = headlamp_core::args::config_tokens(&cfg, &argv);
-    let parsed = headlamp_core::args::derive_args(
+    let repo_root = headlamp::config::find_repo_root(&cwd);
+    let cfg = headlamp::config::load_headlamp_config(&repo_root).unwrap_or_default();
+    let cfg_tokens = headlamp::args::config_tokens(&cfg, &argv);
+    let parsed = headlamp::args::derive_args(
         &cfg_tokens,
         &argv,
-        headlamp_core::format::terminal::is_output_terminal(),
+        headlamp::format::terminal::is_output_terminal(),
     );
     if parsed.ci {
         unsafe { std::env::set_var("CI", "1") };

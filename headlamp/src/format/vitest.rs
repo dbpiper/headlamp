@@ -124,8 +124,10 @@ pub fn render_vitest_from_test_model(
                 .collect::<Vec<_>>();
             lines.extend(build_per_file_overview(&rel, &assertions));
         }
-        let has_inline_failed_assertion =
-            !only_failures && assertions_sorted.iter().any(|assertion| assertion.status == "failed");
+        let has_inline_failed_assertion = !only_failures
+            && assertions_sorted
+                .iter()
+                .any(|assertion| assertion.status == "failed");
         if !(only_failures && badge_count == 0) {
             lines.push(build_file_badge_line(&rel, badge_count));
             if badge_count > 0 && !has_inline_failed_assertion {

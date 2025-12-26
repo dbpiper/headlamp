@@ -90,12 +90,9 @@ pub fn run_streaming_capture_tail(
         let tx_out = tx.clone();
         std::thread::spawn(move || {
             let reader = BufReader::new(out);
-            reader
-                .lines()
-                .filter_map(Result::ok)
-                .for_each(|line| {
-                    let _ = tx_out.send((OutputStream::Stdout, line));
-                });
+            reader.lines().filter_map(Result::ok).for_each(|line| {
+                let _ = tx_out.send((OutputStream::Stdout, line));
+            });
         });
     }
 
@@ -103,12 +100,9 @@ pub fn run_streaming_capture_tail(
         let tx_err = tx.clone();
         std::thread::spawn(move || {
             let reader = BufReader::new(err);
-            reader
-                .lines()
-                .filter_map(Result::ok)
-                .for_each(|line| {
-                    let _ = tx_err.send((OutputStream::Stderr, line));
-                });
+            reader.lines().filter_map(Result::ok).for_each(|line| {
+                let _ = tx_err.send((OutputStream::Stderr, line));
+            });
         });
     }
 
@@ -125,5 +119,3 @@ pub fn run_streaming_capture_tail(
     let exit_code = status.code().unwrap_or(1);
     Ok((exit_code, ring))
 }
-
-

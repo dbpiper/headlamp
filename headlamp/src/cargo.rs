@@ -3,8 +3,8 @@ use std::path::Path;
 use duct::cmd as duct_cmd;
 
 use headlamp_core::args::ParsedArgs;
-use headlamp_core::config::CoverageUi;
 use headlamp_core::config::ChangedMode;
+use headlamp_core::config::CoverageUi;
 use headlamp_core::coverage::lcov::{merge_reports, read_lcov_file, resolve_lcov_paths_to_root};
 use headlamp_core::coverage::print::{
     PrintOpts, filter_report, format_compact, format_hotspots, format_summary,
@@ -53,15 +53,13 @@ fn empty_test_run_model_for_exit_code(exit_code: i32) -> TestRunModel {
 #[derive(Debug)]
 struct NextestAdapter {
     only_failures: bool,
-    show_logs: bool,
     parser: NextestStreamParser,
 }
 
 impl NextestAdapter {
-    fn new(repo_root: &Path, only_failures: bool, show_logs: bool) -> Self {
+    fn new(repo_root: &Path, only_failures: bool) -> Self {
         Self {
             only_failures,
-            show_logs,
             parser: NextestStreamParser::new(repo_root),
         }
     }
@@ -71,44 +69,21 @@ impl NextestAdapter {
         if !should_print {
             return vec![];
         }
-        let mut out = vec![StreamAction::SetProgressLabel(update.suite_path.clone())];
-        let header = format!(
-            "{} {} > {}",
-            if update.status == "failed" { "FAIL" } else { "PASS" },
-            update.suite_path,
-            update.test_name
-        );
-        out.push(StreamAction::PrintStdout(header));
-        if self.show_logs {
-            if let Some(stdout) = update.stdout.as_deref().filter(|s| !s.trim().is_empty()) {
-                out.extend(
-                    stdout
-                        .lines()
-                        .map(str::trim)
-                        .filter(|ln| !ln.is_empty())
-                        .map(|ln| StreamAction::PrintStdout(format!("  {ln}"))),
-                );
-            }
-        }
-        out
+        vec![StreamAction::SetProgressLabel(update.suite_path.clone())]
     }
 }
 
 #[derive(Debug)]
 struct CargoTestAdapter {
     only_failures: bool,
-    show_logs: bool,
     parser: CargoTestStreamParser,
-    failed_tests: std::collections::BTreeSet<String>,
 }
 
 impl CargoTestAdapter {
-    fn new(repo_root: &Path, only_failures: bool, show_logs: bool) -> Self {
+    fn new(repo_root: &Path, only_failures: bool) -> Self {
         Self {
             only_failures,
-            show_logs,
             parser: CargoTestStreamParser::new(repo_root),
-            failed_tests: std::collections::BTreeSet::new(),
         }
     }
 
@@ -119,43 +94,20 @@ impl CargoTestAdapter {
             }
             CargoTestStreamEvent::TestFinished {
                 suite_path,
-                test_name,
+                test_name: _,
                 status,
             } => {
-                if status == "failed" {
-                    self.failed_tests
-                        .insert(format!("{suite_path}::{test_name}"));
-                }
                 if self.only_failures && status != "failed" {
                     return vec![];
                 }
-                vec![
-                    StreamAction::SetProgressLabel(suite_path.clone()),
-                    StreamAction::PrintStdout(format!(
-                        "{} {} > {}",
-                        if status == "failed" { "FAIL" } else { "PASS" },
-                        suite_path,
-                        test_name
-                    )),
-                ]
+                vec![StreamAction::SetProgressLabel(suite_path)]
             }
             CargoTestStreamEvent::OutputLine {
-                suite_path,
-                test_name,
-                line,
+                suite_path: _,
+                test_name: _,
+                line: _,
             } => {
-                if !self.show_logs {
-                    return vec![];
-                }
-                if self.only_failures {
-                    let Some(test_name) = test_name else {
-                        return vec![];
-                    };
-                    if !self.failed_tests.contains(&format!("{suite_path}::{test_name}")) {
-                        return vec![];
-                    }
-                }
-                vec![StreamAction::PrintStdout(line)]
+                vec![]
             }
         }
     }
@@ -210,7 +162,10 @@ pub fn run_cargo_test(repo_root: &Path, args: &ParsedArgs) -> Result<i32, RunErr
         && selection.selected_test_count == Some(0)
         && args.changed.is_some()
     {
-        let changed_mode = args.changed.map(changed_mode_to_cli_string).unwrap_or("all");
+        let changed_mode = args
+            .changed
+            .map(changed_mode_to_cli_string)
+            .unwrap_or("all");
         println!("headlamp: selected 0 tests (changed={changed_mode})");
         let ctx = make_ctx(
             repo_root,
@@ -245,9 +200,13 @@ pub fn run_cargo_test(repo_root: &Path, args: &ParsedArgs) -> Result<i32, RunErr
     );
     let live_progress = LiveProgress::start(1, live_progress_enabled);
     let mut cmd = std::process::Command::new("cargo");
-    cmd.args(build_cargo_test_args(None, args, &selection.extra_cargo_args));
+    cmd.args(build_cargo_test_args(
+        None,
+        args,
+        &selection.extra_cargo_args,
+    ));
     cmd.current_dir(repo_root);
-    let mut adapter = CargoTestAdapter::new(repo_root, args.only_failures, args.show_logs);
+    let mut adapter = CargoTestAdapter::new(repo_root, args.only_failures);
     let (exit_code, _tail) =
         run_streaming_capture_tail(cmd, &live_progress, &mut adapter, 1024 * 1024)?;
     live_progress.increment_done(1);
@@ -293,7 +252,10 @@ pub fn run_cargo_nextest(repo_root: &Path, args: &ParsedArgs) -> Result<i32, Run
         && selection.selected_test_count == Some(0)
         && args.changed.is_some()
     {
-        let changed_mode = args.changed.map(changed_mode_to_cli_string).unwrap_or("all");
+        let changed_mode = args
+            .changed
+            .map(changed_mode_to_cli_string)
+            .unwrap_or("all");
         println!("headlamp: selected 0 tests (changed={changed_mode})");
         let ctx = make_ctx(
             repo_root,
@@ -340,10 +302,14 @@ pub fn run_cargo_nextest(repo_root: &Path, args: &ParsedArgs) -> Result<i32, Run
     );
     let live_progress = LiveProgress::start(1, live_progress_enabled);
     let mut cmd = std::process::Command::new("cargo");
-    cmd.args(build_nextest_run_args(None, args, &selection.extra_cargo_args));
+    cmd.args(build_nextest_run_args(
+        None,
+        args,
+        &selection.extra_cargo_args,
+    ));
     cmd.current_dir(repo_root);
     cmd.env("NEXTEST_EXPERIMENTAL_LIBTEST_JSON", "1");
-    let mut adapter = NextestAdapter::new(repo_root, args.only_failures, args.show_logs);
+    let mut adapter = NextestAdapter::new(repo_root, args.only_failures);
     let (exit_code, _tail) =
         run_streaming_capture_tail(cmd, &live_progress, &mut adapter, 1024 * 1024)?;
     live_progress.increment_done(1);
