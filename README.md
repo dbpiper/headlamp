@@ -1,6 +1,6 @@
 ### Headlamp
 
-Headlamp is a **Rust-powered test runner CLI** that helps you run the right tests quickly and read the results easily across **jest**, **cargo test**, and **cargo nextest**.
+Headlamp is a **Rust-powered test UX CLI**: smarter test selection, cleaner output, and a unified workflow across **jest**, **cargo test**, and **cargo nextest**.
 
 Headlamp is useful when you want a consistent way to run tests across different projects and keep feedback fast as your repo grows. It can select tests based on what changed, surface failures in a readable format, and keep common defaults (like runner args and coverage settings) in a single config file so your team doesn’t have to remember a long list of flags.
 
@@ -13,12 +13,11 @@ Headlamp is useful when you want a consistent way to run tests across different 
 
 ### Installation
 
-#### npm (recommended)
+#### npm (Node.js projects)
 
 Requirements:
 
 - Node **>= 18**
-- A GitHub Release for your version tag (see “Releases” below)
 
 Install:
 
@@ -32,10 +31,12 @@ Run:
 npx headlamp --help
 ```
 
-#### Cargo (from source)
+#### Cargo (Rust projects)
+
+Install from crates.io:
 
 ```bash
-cargo install --path headlamp
+cargo install headlamp
 ```
 
 ### Quickstart
@@ -141,12 +142,6 @@ export default {
 ### Contributing
 
 Pull requests are welcome. For large changes, open an issue first to align on direction.
-
-Local dev:
-
-```bash
-cargo test
-```
 
 ### Support
 

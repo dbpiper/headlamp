@@ -13,12 +13,11 @@ Headlamp is useful when you want a consistent way to run tests across different 
 
 ### Installation
 
-#### npm (recommended)
+#### npm (Node.js projects)
 
 Requirements:
 
 - Node **>= 18**
-- A GitHub Release for your version tag (see “Releases” below)
 
 Install:
 
@@ -32,10 +31,12 @@ Run:
 npx headlamp --help
 ```
 
-#### Cargo (from source)
+#### Cargo (Rust projects)
+
+Install from crates.io:
 
 ```bash
-cargo install --path headlamp
+cargo install headlamp
 ```
 
 ### Quickstart
@@ -141,12 +142,6 @@ export default {
 ### Contributing
 
 Pull requests are welcome. For large changes, open an issue first to align on direction.
-
-Local dev:
-
-```bash
-cargo test
-```
 
 ### Support
 
