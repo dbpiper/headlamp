@@ -10,9 +10,7 @@ repository = "https://github.com/dbpiper/headlamp"
 readme = "README.md"
 keywords = ["testing", "cli", "jest", "nextest", "vitest"]
 categories = ["development-tools::testing", "command-line-utilities"]
-exclude = [
-    "tests/**",
-]
+exclude = ["tests/**"]
 
 [dependencies]
 serde = { version = "1.0.216", features = ["derive"] }

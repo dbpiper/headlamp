@@ -1,7 +1,7 @@
 use crate::format::ansi;
 use crate::format::bridge_console::parse_bridge_console;
 use crate::format::bridge_http::render_http_card;
-use crate::format::codeframe::{Loc, build_code_frame_section, find_code_frame_start};
+use crate::format::codeframe::{build_code_frame_section, find_code_frame_start, Loc};
 use crate::format::colors;
 use crate::format::console::build_console_section;
 use crate::format::ctx::Ctx;
@@ -124,8 +124,10 @@ pub fn render_vitest_from_test_model(
                 .collect::<Vec<_>>();
             lines.extend(build_per_file_overview(&rel, &assertions));
         }
-        let has_inline_failed_assertion =
-            !only_failures && assertions_sorted.iter().any(|assertion| assertion.status == "failed");
+        let has_inline_failed_assertion = !only_failures
+            && assertions_sorted
+                .iter()
+                .any(|assertion| assertion.status == "failed");
         if !(only_failures && badge_count == 0) {
             lines.push(build_file_badge_line(&rel, badge_count));
             if badge_count > 0 && !has_inline_failed_assertion {

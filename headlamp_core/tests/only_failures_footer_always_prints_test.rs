@@ -35,5 +35,3 @@ fn only_failures_still_prints_footer_for_empty_successful_run() {
     assert!(rendered.contains("Test Files"));
     assert!(rendered.contains("Tests"));
 }
-
-

@@ -41,7 +41,10 @@ fn cargo_test_stream_parser_emits_test_finished_and_finalizes_with_failure_detai
     let model = parser.finalize().expect("model");
     assert_eq!(model.test_results.len(), 1);
     let suite = &model.test_results[0];
-    assert!(suite.test_results.iter().any(|t| t.full_name == "fail_test"));
+    assert!(suite
+        .test_results
+        .iter()
+        .any(|t| t.full_name == "fail_test"));
     let failed = suite
         .test_results
         .iter()
@@ -50,5 +53,3 @@ fn cargo_test_stream_parser_emits_test_finished_and_finalizes_with_failure_detai
     assert_eq!(failed.status, "failed");
     assert!(!failed.failure_messages.is_empty());
 }
-
-
