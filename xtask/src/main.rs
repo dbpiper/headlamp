@@ -134,9 +134,9 @@ fn resolve_latest_stable_reachable_tag() -> anyhow::Result<Option<String>> {
                     let is_tag_canonical = tag == canonical_v || tag == best_ver.to_string();
                     let is_best_canonical =
                         best_tag == &canonical_v || best_tag == &best_ver.to_string();
-                    if is_tag_canonical && !is_best_canonical {
-                        best = Some((ver, tag));
-                    } else if is_tag_canonical == is_best_canonical && tag.len() < best_tag.len() {
+                    let should_replace = (is_tag_canonical && !is_best_canonical)
+                        || (is_tag_canonical == is_best_canonical && tag.len() < best_tag.len());
+                    if should_replace {
                         best = Some((ver, tag));
                     }
                 }
