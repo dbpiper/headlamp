@@ -212,6 +212,16 @@ fn run_cargo_test_streaming(
     let live_progress = LiveProgress::start(1, mode);
     let run_start = Instant::now();
     let cmd = build_cargo_test_command(repo_root, args, extra_cargo_args);
+    headlamp_core::diagnostics_trace::maybe_write_run_trace(
+        repo_root,
+        "cargo-test",
+        args,
+        Some(run_start),
+        serde_json::json!({
+            "phase": "before_run_streaming_capture_tail",
+            "command": headlamp_core::diagnostics_trace::command_summary_json(&cmd),
+        }),
+    );
     let mut adapter = adapters::CargoTestAdapter::new(repo_root, args.only_failures);
     let (exit_code, tail) =
         run_streaming_capture_tail(cmd, &live_progress, &mut adapter, 1024 * 1024)?;
@@ -368,6 +378,16 @@ fn run_nextest_streaming(
     let live_progress = LiveProgress::start(1, mode);
     let run_start = Instant::now();
     let cmd = build_nextest_command(repo_root, args, extra_cargo_args);
+    headlamp_core::diagnostics_trace::maybe_write_run_trace(
+        repo_root,
+        "cargo-nextest",
+        args,
+        Some(run_start),
+        serde_json::json!({
+            "phase": "before_run_streaming_capture_tail",
+            "command": headlamp_core::diagnostics_trace::command_summary_json(&cmd),
+        }),
+    );
     let mut adapter = adapters::NextestAdapter::new(repo_root, args.only_failures);
     let (exit_code, tail) =
         run_streaming_capture_tail(cmd, &live_progress, &mut adapter, 1024 * 1024)?;

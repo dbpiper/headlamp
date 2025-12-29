@@ -75,6 +75,8 @@ pub fn consume_lines_capture_tail(
 ) -> RingBuffer {
     let mut ring = RingBuffer::new(ring_bytes);
     reader.lines().map_while(Result::ok).for_each(|line| {
+        // Normalize CRLF -> LF. BufRead::lines strips '\n' but keeps a trailing '\r' if present.
+        let line = line.strip_suffix('\r').unwrap_or(&line).to_string();
         ring.push_line(line.clone());
         // Once merged, stream distinction is no longer meaningful.
         progress.record_runner_stdout_line(&line);
@@ -109,6 +111,7 @@ pub fn run_streaming_capture_tail(
         std::thread::spawn(move || {
             let reader = BufReader::new(out);
             reader.lines().map_while(Result::ok).for_each(|line| {
+                let line = line.strip_suffix('\r').unwrap_or(&line).to_string();
                 let _ = tx_out.send((OutputStream::Stdout, line));
             });
         });
@@ -119,6 +122,7 @@ pub fn run_streaming_capture_tail(
         std::thread::spawn(move || {
             let reader = BufReader::new(err);
             reader.lines().map_while(Result::ok).for_each(|line| {
+                let line = line.strip_suffix('\r').unwrap_or(&line).to_string();
                 let _ = tx_err.send((OutputStream::Stderr, line));
             });
         });

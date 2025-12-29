@@ -33,6 +33,49 @@ pub struct ArgsSummary {
     pub runner_args: Vec<String>,
 }
 
+pub fn command_summary_json(cmd: &std::process::Command) -> serde_json::Value {
+    let program = cmd.get_program().to_string_lossy().to_string();
+    let args = cmd
+        .get_args()
+        .map(|a| a.to_string_lossy().to_string())
+        .collect::<Vec<_>>();
+    let cwd = cmd
+        .get_current_dir()
+        .map(|p| p.to_string_lossy().to_string());
+    let env_allowlist = cmd
+        .get_envs()
+        .filter_map(|(k, v)| {
+            let k = k.to_string_lossy().to_string();
+            let v = v
+                .map(|vv| vv.to_string_lossy().to_string())
+                .unwrap_or_default();
+            matches!(
+                k.as_str(),
+                "CI" | "TERM"
+                    | "FORCE_COLOR"
+                    | "NO_COLOR"
+                    | "CARGO_TERM_COLOR"
+                    | "RUST_BACKTRACE"
+                    | "RUST_LIB_BACKTRACE"
+                    | "CARGO_TARGET_DIR"
+                    | "PATH"
+                    | "PYTHONPATH"
+                    | "NODE_OPTIONS"
+                    | "HEADLAMP_CACHE_DIR"
+                    | "HEADLAMP_DIAGNOSTICS_DIR"
+            )
+            .then_some((k, v))
+        })
+        .collect::<std::collections::BTreeMap<_, _>>();
+
+    serde_json::json!({
+        "program": program,
+        "args": args,
+        "cwd": cwd,
+        "env_allowlist": env_allowlist,
+    })
+}
+
 fn diagnostics_dir() -> Option<PathBuf> {
     std::env::var("HEADLAMP_DIAGNOSTICS_DIR")
         .ok()
