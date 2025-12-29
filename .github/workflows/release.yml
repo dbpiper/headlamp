@@ -13,6 +13,13 @@ jobs:
   verify:
     name: verify (fmt + clippy + run)
     runs-on: ubuntu-latest
+    env:
+      CARGO_TERM_COLOR: always
+      CARGO_INCREMENTAL: 0
+      RUSTC_WRAPPER: sccache
+      RUSTFLAGS: -C link-arg=-fuse-ld=mold
+      SCCACHE_GHA_CACHE_TO: sccache-${{ github.ref_name }}
+      SCCACHE_GHA_CACHE_FROM: sccache-${{ github.ref_name }},sccache-main
     steps:
       - uses: actions/checkout@v4
         with:
@@ -22,7 +29,26 @@ jobs:
         with:
           components: rustfmt, clippy
 
-      - uses: Swatinem/rust-cache@v2
+      - name: Install system packages (sccache + mold)
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y sccache mold
+
+      - name: Configure sccache (GHA backend env)
+        uses: actions/github-script@v7
+        with:
+          script: |
+            core.exportVariable('ACTIONS_RESULTS_URL', process.env.ACTIONS_RESULTS_URL || '');
+            core.exportVariable('ACTIONS_RUNTIME_TOKEN', process.env.ACTIONS_RUNTIME_TOKEN || '');
+
+      - name: Cache cargo + sccache
+        uses: actions/cache@v4
+        with:
+          path: |
+            ~/.cargo/registry
+            ~/.cargo/git
+            ~/.cache/sccache
+          key: ${{ runner.os }}-cargo-verify-${{ hashFiles('**/Cargo.lock') }}
 
       - name: cargo fmt
         run: cargo fmt --all --check
@@ -37,6 +63,10 @@ jobs:
 
       - name: run headlamp (changed=lastRelease)
         run: cargo run -p headlamp --locked -- --runner=cargo-nextest --changed=lastRelease
+
+      - name: sccache stats
+        if: always()
+        run: sccache --show-stats || true
 
   build-binaries:
     name: build (${{ matrix.target_label }})
