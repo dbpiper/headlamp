@@ -25,7 +25,7 @@ fn read_text_file(file_path: &Path) -> String {
 fn assert_string_field(json: &Value, field_path: &[&str], expected: &str) {
     let value = field_path
         .iter()
-        .fold(Some(json), |current, key| current.and_then(|v| v.get(*key)))
+        .try_fold(json, |current, key| current.get(*key))
         .and_then(Value::as_str)
         .unwrap_or_else(|| panic!("missing string field {:?}", field_path));
     assert_eq!(value, expected);

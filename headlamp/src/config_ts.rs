@@ -43,7 +43,7 @@ fn load_module_exports(
     if let Some(hit) = cache.get(&canonical) {
         return Ok(hit.clone());
     }
-    if stack.iter().any(|p| *p == canonical) {
+    if stack.contains(&canonical) {
         return Err(HeadlampError::ConfigParse {
             path: canonical,
             message: "headlamp.config.ts: cyclic import in config evaluation".to_string(),
@@ -564,10 +564,12 @@ fn module_export_name_as_str<'a>(name: &'a ModuleExportName<'a>) -> Option<&'a s
 }
 
 fn json_number_from_f64(value: f64) -> serde_json::Value {
-    if value.is_finite() && value.fract() == 0.0 {
-        if value >= i64::MIN as f64 && value <= i64::MAX as f64 {
-            return serde_json::Value::Number(serde_json::Number::from(value as i64));
-        }
+    if value.is_finite()
+        && value.fract() == 0.0
+        && value >= i64::MIN as f64
+        && value <= i64::MAX as f64
+    {
+        return serde_json::Value::Number(serde_json::Number::from(value as i64));
     }
     serde_json::Value::Number(
         serde_json::Number::from_f64(value).unwrap_or_else(|| serde_json::Number::from(0)),

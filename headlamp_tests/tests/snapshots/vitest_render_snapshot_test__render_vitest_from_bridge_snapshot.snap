@@ -37,4 +37,4 @@ expression: out
 
 [1mTest Files[22m 1 failed[2m | [22m1 passed [2m(2)[22m
 [1mTests[22m     1 failed[2m | [22m1 passed [2m(2)[22m
-[1mTime[22m      3ms [2m(in thread 0ms, 0.00%)[22m
+[1mTime[22m      3ms

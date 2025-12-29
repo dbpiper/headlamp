@@ -100,9 +100,7 @@ impl NextestStreamParser {
                 filtered_out,
                 ..
             } => {
-                let Some(meta) = nextest else {
-                    return None;
-                };
+                let meta = nextest?;
                 let key = SuiteKey {
                     crate_name: meta.crate_name,
                     test_binary: meta.test_binary,
@@ -142,11 +140,7 @@ impl NextestStreamParser {
                 exec_time,
                 stdout,
             } => {
-                let Some(suite_key) =
-                    suite_key_from_test_name(&name, &self.kind_by_crate_and_binary)
-                else {
-                    return None;
-                };
+                let suite_key = suite_key_from_test_name(&name, &self.kind_by_crate_and_binary)?;
                 let display_name = simplify_nextest_test_name(&name);
                 let suite = self
                     .suites_by_key

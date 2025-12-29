@@ -163,7 +163,11 @@ pub(super) fn render_istanbul_text_summary(files: &[FullFileCoverage]) -> String
 }
 
 fn format_summary_line(label: &str, counts: Counts) -> String {
-    let pct = fmt_pct(counts.pct());
+    let pct = if counts.total == 0 {
+        "N/A".to_string()
+    } else {
+        fmt_pct(counts.pct())
+    };
     let label_pad = 13usize.saturating_sub(label.chars().count());
     let pct_for_label = if counts.total == 0 {
         100.0
@@ -172,7 +176,12 @@ fn format_summary_line(label: &str, counts: Counts) -> String {
     };
     let pct_for_counts = if counts.total == 0 { 0.0 } else { counts.pct() };
     let label_colored = tint_pct(pct_for_label, label);
-    let pct_colored = tint_pct(pct_for_label, &format!("{pct}%"));
+    let pct_str = if counts.total == 0 {
+        pct
+    } else {
+        format!("{pct}%")
+    };
+    let pct_colored = tint_pct(pct_for_label, &pct_str);
     let counts_colored = tint_pct(
         pct_for_counts,
         &format!("( {}/{} )", counts.covered, counts.total),
@@ -243,7 +252,11 @@ fn render_istanbul_text_row(
     };
 
     let stmts_pct = fmt_pct(stmts.pct());
-    let branches_pct = fmt_pct(branches.pct());
+    let branches_pct = if branches.total == 0 {
+        "N/A".to_string()
+    } else {
+        fmt_pct(branches.pct())
+    };
     let funcs_pct = fmt_pct(funcs.pct());
     let lines_pct = fmt_pct(lines.pct());
     let row_min = stmts

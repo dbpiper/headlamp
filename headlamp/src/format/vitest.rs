@@ -58,7 +58,21 @@ fn extract_expected_received_values(messages_array: &[String]) -> (Option<String
         line.strip_prefix("Received: ")
             .map(|v| v.trim().to_string())
     });
-    (expected, received)
+    if expected.is_some() || received.is_some() {
+        return (expected, received);
+    }
+
+    let left = stripped.iter().find_map(|line| {
+        line.trim_start()
+            .strip_prefix("left: ")
+            .map(|v| v.trim().to_string())
+    });
+    let right = stripped.iter().find_map(|line| {
+        line.trim_start()
+            .strip_prefix("right: ")
+            .map(|v| v.trim().to_string())
+    });
+    (right, left)
 }
 
 pub fn render_vitest_from_test_model(
@@ -120,7 +134,7 @@ pub fn render_vitest_from_test_model(
         if !only_failures {
             let assertions = assertions_sorted
                 .iter()
-                .map(|a| ((*a).full_name.clone(), (*a).status.clone()))
+                .map(|a| (a.full_name.clone(), a.status.clone()))
                 .collect::<Vec<_>>();
             lines.extend(build_per_file_overview(&rel, &assertions));
         }
@@ -550,6 +564,27 @@ fn render_per_test_failure_details(
     if let Some(ln) = expect_line_simple.as_ref() {
         out.push(format!("      {}", colors::failure(ln.trim_start())));
     }
+
+    if expect_line_simple.is_none() && expected.is_none() && received.is_none() {
+        let message_lines = messages_array
+            .iter()
+            .map(|ln| crate::format::stacks::strip_ansi_simple(ln))
+            .map(|ln| ln.trim_end().to_string())
+            .filter(|ln| {
+                let trimmed = ln.trim_start();
+                !(trimmed.is_empty()
+                    || crate::format::stacks::is_stack_line(trimmed)
+                    || CODE_FRAME_LINE_RE.is_match(trimmed))
+            })
+            .take(6)
+            .collect::<Vec<_>>();
+        if !message_lines.is_empty() {
+            out.push(format!("    {}", ansi::bold("Message:")));
+            message_lines
+                .iter()
+                .for_each(|ln| out.push(format!("    {}", ansi::yellow(ln))));
+        }
+    }
     out.push(String::new());
 
     if let (Some(expected), Some(received)) = (expected.as_ref(), received.as_ref()) {
@@ -660,7 +695,6 @@ fn vitest_footer_from_files(
         .run_time_ms
         .map(|ms| format!("{ms}ms"))
         .unwrap_or_default();
-    let thread = ansi::dim("(in thread 0ms, 0.00%)");
 
     [
         format!(
@@ -675,7 +709,7 @@ fn vitest_footer_from_files(
             colors::failure(&format!("{failed_tests} failed")),
             ansi::dim(&format!("({total_tests})"))
         ),
-        format!("{}      {} {}", ansi::bold("Time"), time, thread),
+        format!("{}      {}", ansi::bold("Time"), time),
     ]
     .join("\n")
 }
@@ -717,7 +751,6 @@ fn vitest_footer(agg: &TestRunAggregated, only_failures: bool) -> String {
         .run_time_ms
         .map(|ms| format!("{ms}ms"))
         .unwrap_or_default();
-    let thread = ansi::dim("(in thread 0ms, 0.00%)");
 
     [
         format!(
@@ -732,7 +765,7 @@ fn vitest_footer(agg: &TestRunAggregated, only_failures: bool) -> String {
             tests,
             ansi::dim(&format!("({})", agg.num_total_tests))
         ),
-        format!("{}      {} {}", ansi::bold("Time"), time, thread),
+        format!("{}      {}", ansi::bold("Time"), time),
     ]
     .join("\n")
 }

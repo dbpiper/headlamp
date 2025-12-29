@@ -123,15 +123,15 @@ pub fn discover_jest_list_tests_cached_with_timeout(
         return discover_jest_list_tests_with_timeout(cwd, jest_bin, jest_args, timeout);
     }
     let cache_root = crate::fast_related::default_cache_root();
-    let repo_key = sha1_12(&dunce::canonicalize(cwd).unwrap_or_else(|_| cwd.to_path_buf()));
+    let repo_key = crate::fast_related::stable_repo_key_hash_12(cwd);
     let dir = cache_root.join(repo_key);
     let file = dir.join("jest-list.json");
 
     let head = crate::fast_related::git_short_head(cwd).unwrap_or_else(|| "nohead".to_string());
+    let repo_identity = crate::fast_related::stable_repo_key_hash_12(cwd);
     let status_hash = git_test_status_hash(cwd);
     let key = format!(
-        "{head}{status_hash}::{}::{}",
-        cwd.to_string_lossy(),
+        "{head}{status_hash}::{repo_identity}::{}",
         jest_args
             .iter()
             .map(|s| s.as_str())
@@ -329,13 +329,6 @@ pub fn jest_bin(repo_root: &Path) -> PathBuf {
 fn read_json_map(path: &Path) -> Option<std::collections::BTreeMap<String, Vec<String>>> {
     let raw = std::fs::read_to_string(path).ok()?;
     serde_json::from_str::<std::collections::BTreeMap<String, Vec<String>>>(&raw).ok()
-}
-
-fn sha1_12(path: &Path) -> String {
-    let mut h = Sha1::new();
-    h.update(path.to_string_lossy().as_bytes());
-    let hex = hex::encode(h.finalize());
-    hex.chars().take(12).collect()
 }
 
 fn git_test_status_hash(cwd: &Path) -> String {

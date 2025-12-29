@@ -1,7 +1,0 @@
----
-source: headlamp_core/tests/format_unit_test.rs
-expression: "merged.join(\"\\n\")"
----
-a
-b
-c

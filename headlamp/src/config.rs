@@ -39,6 +39,16 @@ pub struct CoverageSection {
     pub abort_on_failure: Option<bool>,
     pub mode: Option<CoverageMode>,
     pub page_fit: Option<bool>,
+    pub thresholds: Option<CoverageThresholds>,
+}
+
+#[derive(Debug, Clone, Deserialize, Default, PartialEq)]
+#[serde(rename_all = "camelCase")]
+pub struct CoverageThresholds {
+    pub lines: Option<f64>,
+    pub functions: Option<f64>,
+    pub branches: Option<f64>,
+    pub statements: Option<f64>,
 }
 
 #[derive(Debug, Clone, Deserialize, Default)]

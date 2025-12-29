@@ -53,7 +53,7 @@ pub fn read_istanbul_coverage_tree(root: &Path) -> Vec<(PathBuf, CoverageReport)
         .git_global(false)
         .git_exclude(false)
         .build()
-        .filter_map(Result::ok)
+        .map_while(Result::ok)
         .filter(|dent| dent.file_type().is_some_and(|t| t.is_file()))
         .filter(|dent| {
             dent.path().file_name().and_then(|x| x.to_str()) == Some("coverage-final.json")
@@ -67,13 +67,25 @@ pub fn read_istanbul_coverage_tree(root: &Path) -> Vec<(PathBuf, CoverageReport)
 
 pub fn merge_istanbul_reports(reports: &[CoverageReport], root: &Path) -> CoverageReport {
     let mut by_file: BTreeMap<String, BTreeMap<u32, u32>> = BTreeMap::new();
+    let mut statement_hits_by_file: BTreeMap<String, BTreeMap<String, u32>> = BTreeMap::new();
     for report in reports {
         for file in &report.files {
             let abs = super::lcov::normalize_lcov_path(&file.path, root);
-            let entry = by_file.entry(abs).or_default();
+            let entry = by_file.entry(abs.clone()).or_default();
             for (ln, hit) in &file.line_hits {
                 let prev = entry.get(ln).copied().unwrap_or(0);
                 entry.insert(*ln, prev.saturating_add(*hit));
+            }
+
+            if let Some(statement_hits) = file.statement_hits.as_ref() {
+                let statement_entry = statement_hits_by_file.entry(abs.clone()).or_default();
+                for (statement_id, statement_hit_count) in statement_hits {
+                    let prev = statement_entry.get(statement_id).copied().unwrap_or(0);
+                    statement_entry.insert(
+                        statement_id.clone(),
+                        prev.saturating_add(*statement_hit_count),
+                    );
+                }
             }
         }
     }
@@ -96,12 +108,26 @@ pub fn merge_istanbul_reports(reports: &[CoverageReport], root: &Path) -> Covera
                         }
                         (covered2, total2, uncovered)
                     });
+            let (statements_total, statements_covered, statement_hits) = statement_hits_by_file
+                .remove(&path)
+                .map_or((None, None, None), |statement_hits| {
+                    let total = statement_hits.len() as u32;
+                    let covered = statement_hits.values().filter(|h| **h > 0).count() as u32;
+                    (Some(total), Some(covered), Some(statement_hits))
+                });
             FileCoverage {
                 path,
                 lines_total: total,
                 lines_covered: covered,
+                statements_total,
+                statements_covered,
+                statement_hits,
                 uncovered_lines: uncovered,
                 line_hits: hits,
+                function_hits: BTreeMap::new(),
+                function_map: BTreeMap::new(),
+                branch_hits: BTreeMap::new(),
+                branch_map: BTreeMap::new(),
             }
         })
         .collect::<Vec<_>>();
@@ -122,6 +148,15 @@ pub fn parse_istanbul_coverage_text(text: &str) -> Result<CoverageReport, String
             .unwrap_or(file_key.as_str())
             .to_string();
         let line_hits = extract_line_hits(&file_record)?;
+        let statement_hits = extract_statement_hits(&file_record);
+        let (statements_total, statements_covered) = statement_hits
+            .as_ref()
+            .map(|hits| {
+                let total = hits.len() as u32;
+                let covered = hits.values().filter(|h| **h > 0).count() as u32;
+                (Some(total), Some(covered))
+            })
+            .unwrap_or((None, None));
         let (covered, total, uncovered) =
             line_hits
                 .iter()
@@ -142,8 +177,15 @@ pub fn parse_istanbul_coverage_text(text: &str) -> Result<CoverageReport, String
             path: file_path,
             lines_total: total,
             lines_covered: covered,
+            statements_total,
+            statements_covered,
+            statement_hits,
             uncovered_lines: uncovered,
             line_hits,
+            function_hits: BTreeMap::new(),
+            function_map: BTreeMap::new(),
+            branch_hits: BTreeMap::new(),
+            branch_map: BTreeMap::new(),
         });
     }
 
@@ -184,4 +226,16 @@ fn extract_line_hits(file_record: &IstanbulFileRecord) -> Result<BTreeMap<u32, u
         hits.insert(line, prev.saturating_add(count));
     }
     Ok(hits)
+}
+
+fn extract_statement_hits(file_record: &IstanbulFileRecord) -> Option<BTreeMap<String, u32>> {
+    file_record.s.as_ref().map(|statement_hits_raw| {
+        statement_hits_raw
+            .iter()
+            .map(|(id, hit_count)| {
+                let add = (*hit_count).min(u64::from(u32::MAX)) as u32;
+                (id.clone(), add)
+            })
+            .collect::<BTreeMap<_, _>>()
+    })
 }

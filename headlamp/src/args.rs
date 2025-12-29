@@ -6,7 +6,7 @@ use globset::{Glob, GlobSet, GlobSetBuilder};
 use indexmap::IndexSet;
 use once_cell::sync::Lazy;
 
-use crate::config::{ChangedMode, CoverageMode, CoverageUi, HeadlampConfig};
+use crate::config::{ChangedMode, CoverageMode, CoverageThresholds, CoverageUi, HeadlampConfig};
 use crate::selection::dependency_language::DependencyLanguageId;
 
 static TEST_LIKE_GLOBSET: Lazy<GlobSet> = Lazy::new(|| {
@@ -70,6 +70,18 @@ struct HeadlampCli {
 
     #[arg(long = "coverage.maxHotspots")]
     coverage_max_hotspots: Option<u32>,
+
+    #[arg(long = "coverage.thresholds.lines")]
+    coverage_thresholds_lines: Option<f64>,
+
+    #[arg(long = "coverage.thresholds.functions")]
+    coverage_thresholds_functions: Option<f64>,
+
+    #[arg(long = "coverage.thresholds.branches")]
+    coverage_thresholds_branches: Option<f64>,
+
+    #[arg(long = "coverage.thresholds.statements")]
+    coverage_thresholds_statements: Option<f64>,
 
     #[arg(
         long = "coverage.pageFit",
@@ -183,7 +195,7 @@ struct HeadlampCli {
     dependency_language_alt: Option<String>,
 }
 
-#[derive(Debug, Clone, PartialEq, Eq)]
+#[derive(Debug, Clone, PartialEq)]
 pub struct ParsedArgs {
     pub runner_args: Vec<String>,
     pub selection_paths: Vec<String>,
@@ -203,6 +215,7 @@ pub struct ParsedArgs {
     pub coverage_max_files: Option<u32>,
     pub coverage_max_hotspots: Option<u32>,
     pub coverage_page_fit: bool,
+    pub coverage_thresholds: Option<CoverageThresholds>,
     pub include_globs: Vec<String>,
     pub exclude_globs: Vec<String>,
     pub editor_cmd: Option<String>,
@@ -226,15 +239,18 @@ pub enum CoverageDetail {
     Lines(u32),
 }
 
-pub const DEFAULT_INCLUDE: [&str; 4] = ["**/*.ts", "**/*.tsx", "**/*.js", "**/*.jsx"];
+pub const DEFAULT_INCLUDE: [&str; 6] = [
+    "**/*.ts", "**/*.tsx", "**/*.js", "**/*.jsx", "**/*.rs", "**/*.py",
+];
 
-pub const DEFAULT_EXCLUDE: [&str; 6] = [
+pub const DEFAULT_EXCLUDE: [&str; 7] = [
     "**/node_modules/**",
     "**/coverage/**",
     "**/dist/**",
     "**/build/**",
     "**/migrations/**",
     "**/__mocks__/**",
+    "**/tests/**",
 ];
 
 pub fn derive_args(cfg_tokens: &[String], argv: &[String], is_tty: bool) -> ParsedArgs {
@@ -272,6 +288,19 @@ pub fn derive_args(cfg_tokens: &[String], argv: &[String], is_tty: bool) -> Pars
     let exclude_globs: Vec<String> = parsed_cli.coverage_exclude;
     let editor_cmd: Option<String> = parsed_cli.coverage_editor;
     let workspace_root: Option<String> = parsed_cli.coverage_root;
+
+    let coverage_thresholds = {
+        let any = parsed_cli.coverage_thresholds_lines.is_some()
+            || parsed_cli.coverage_thresholds_functions.is_some()
+            || parsed_cli.coverage_thresholds_branches.is_some()
+            || parsed_cli.coverage_thresholds_statements.is_some();
+        any.then_some(CoverageThresholds {
+            lines: parsed_cli.coverage_thresholds_lines,
+            functions: parsed_cli.coverage_thresholds_functions,
+            branches: parsed_cli.coverage_thresholds_branches,
+            statements: parsed_cli.coverage_thresholds_statements,
+        })
+    };
 
     let mut coverage_detail: Option<CoverageDetail> = parsed_cli
         .coverage_detail
@@ -318,7 +347,6 @@ pub fn derive_args(cfg_tokens: &[String], argv: &[String], is_tty: bool) -> Pars
     for tok in passthrough {
         if tok == "--" {
             selection_specified = true;
-            runner_args.push(tok);
             continue;
         }
 
@@ -401,28 +429,6 @@ pub fn derive_args(cfg_tokens: &[String], argv: &[String], is_tty: bool) -> Pars
         coverage_mode = CoverageMode::Compact;
     }
 
-    if collect_coverage {
-        runner_args.extend(
-            [
-                "--coverage",
-                "--coverageProvider=babel",
-                "--coverageReporters=lcov",
-                "--coverageReporters=json",
-                "--coverageReporters=text-summary",
-            ]
-            .iter()
-            .map(|s| s.to_string()),
-        );
-    }
-
-    if show_logs {
-        runner_args.push("--no-silent".to_string());
-    }
-
-    if sequential && !runner_args.iter().any(|s| s == "--runInBand") {
-        runner_args.push("--runInBand".to_string());
-    }
-
     ParsedArgs {
         runner_args,
         selection_paths: selection_paths
@@ -444,6 +450,7 @@ pub fn derive_args(cfg_tokens: &[String], argv: &[String], is_tty: bool) -> Pars
         coverage_max_files,
         coverage_max_hotspots,
         coverage_page_fit,
+        coverage_thresholds,
         include_globs: include_globs_final,
         exclude_globs: exclude_globs_final,
         editor_cmd,
@@ -560,6 +567,20 @@ pub fn config_tokens(cfg: &HeadlampConfig, argv: &[String]) -> Vec<String> {
         if let Some(max_hotspots) = cfg.coverage_max_hotspots {
             tokens.push(format!("--coverage.maxHotspots={max_hotspots}"));
         }
+        if let Some(thresholds) = coverage_obj.and_then(|o| o.thresholds.as_ref()) {
+            if let Some(v) = thresholds.lines {
+                tokens.push(format!("--coverage.thresholds.lines={v}"));
+            }
+            if let Some(v) = thresholds.functions {
+                tokens.push(format!("--coverage.thresholds.functions={v}"));
+            }
+            if let Some(v) = thresholds.branches {
+                tokens.push(format!("--coverage.thresholds.branches={v}"));
+            }
+            if let Some(v) = thresholds.statements {
+                tokens.push(format!("--coverage.thresholds.statements={v}"));
+            }
+        }
         if let Some(show) = cfg.coverage_show_code {
             tokens.push(format!(
                 "--coverage.showCode={}",
@@ -633,6 +654,10 @@ fn split_headlamp_tokens(tokens: &[String]) -> (Vec<String>, Vec<String>) {
             "--coverage.compact",
             "--coverage.maxFiles",
             "--coverage.maxHotspots",
+            "--coverage.thresholds.lines",
+            "--coverage.thresholds.functions",
+            "--coverage.thresholds.branches",
+            "--coverage.thresholds.statements",
             "--coverage.pageFit",
             "--coverage.include",
             "--coverage.exclude",
@@ -665,6 +690,10 @@ fn split_headlamp_tokens(tokens: &[String]) -> (Vec<String>, Vec<String>) {
             "--coverage.mode",
             "--coverage.maxFiles",
             "--coverage.maxHotspots",
+            "--coverage.thresholds.lines",
+            "--coverage.thresholds.functions",
+            "--coverage.thresholds.branches",
+            "--coverage.thresholds.statements",
             "--coverage.pageFit",
             "--coverage.include",
             "--coverage.exclude",

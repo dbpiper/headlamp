@@ -1,7 +1,7 @@
 use std::collections::BTreeMap;
 use std::path::{Path, PathBuf};
 
-use duct::cmd as duct_cmd;
+use ignore::WalkBuilder;
 use path_slash::PathExt;
 use tempfile::NamedTempFile;
 
@@ -9,9 +9,11 @@ use headlamp_core::args::ParsedArgs;
 use headlamp_core::coverage::istanbul::{merge_istanbul_reports, read_istanbul_coverage_tree};
 use headlamp_core::coverage::istanbul_pretty::format_istanbul_pretty;
 use headlamp_core::coverage::lcov::{merge_reports, read_lcov_file, resolve_lcov_paths_to_root};
+use headlamp_core::coverage::model::{CoverageReport, apply_statement_totals_to_report};
 use headlamp_core::coverage::print::{
-    PrintOpts, filter_report, format_compact, format_hotspots, format_summary,
+    PrintOpts, filter_report, render_report_text, should_render_hotspots,
 };
+use headlamp_core::coverage::thresholds::compare_thresholds_and_print_if_needed;
 use headlamp_core::format::ctx::make_ctx;
 use headlamp_core::format::vitest::render_vitest_from_test_model;
 use headlamp_core::selection::dependency_language::DependencyLanguageId;
@@ -35,9 +37,10 @@ use crate::jest_discovery::{
     jest_bin,
 };
 use crate::jest_ownership::filter_candidates_for_project;
-use crate::live_progress::{LiveProgress, should_enable_live_progress};
+use crate::live_progress::{LiveProgress, live_progress_mode};
 use crate::parallel_stride::run_parallel_stride;
 use crate::run::{RunError, run_bootstrap};
+use crate::streaming::{OutputStream, StreamAction, StreamAdapter, run_streaming_capture_tail};
 
 const JEST_REPORTER_BYTES: &[u8] = include_bytes!("../assets/jest/reporter.cjs");
 const JEST_SETUP_BYTES: &[u8] = include_bytes!("../assets/jest/setup.cjs");
@@ -94,6 +97,8 @@ pub fn run_jest(repo_root: &Path, args: &ParsedArgs) -> Result<i32, RunError> {
         discovered_project_configs
     };
 
+    let selection_exclude_globs = exclude_globs_for_selection(&args.exclude_globs);
+
     let selection_is_tests_only = !selection_paths_abs.is_empty()
         && selection_paths_abs
             .iter()
@@ -137,7 +142,7 @@ pub fn run_jest(repo_root: &Path, args: &ParsedArgs) -> Result<i32, RunError> {
                         repo_root,
                         &production_seeds,
                         &DEFAULT_TEST_GLOBS,
-                        &args.exclude_globs,
+                        &selection_exclude_globs,
                         FAST_RELATED_TIMEOUT,
                     )
                 })
@@ -146,7 +151,7 @@ pub fn run_jest(repo_root: &Path, args: &ParsedArgs) -> Result<i32, RunError> {
                         let augmented = augment_with_http_tests(
                             repo_root,
                             &production_seeds,
-                            &args.exclude_globs,
+                            &selection_exclude_globs,
                             fast_tests,
                         );
                         if args.changed.is_some() || args.changed_depth.is_some() {
@@ -188,7 +193,7 @@ pub fn run_jest(repo_root: &Path, args: &ParsedArgs) -> Result<i32, RunError> {
                             repo_root,
                             dependency_language,
                             &production_seeds,
-                            &args.exclude_globs,
+                            &selection_exclude_globs,
                         )
                     }
                 })
@@ -205,7 +210,7 @@ pub fn run_jest(repo_root: &Path, args: &ParsedArgs) -> Result<i32, RunError> {
     let directness_rank_base = compute_directness_rank_base(
         repo_root,
         &selection_paths_abs,
-        &args.exclude_globs,
+        &selection_exclude_globs,
         args.no_cache,
     )?;
     let directness_rank = augment_rank_with_priority_paths(
@@ -243,7 +248,7 @@ pub fn run_jest(repo_root: &Path, args: &ParsedArgs) -> Result<i32, RunError> {
             .collect::<Vec<_>>()
     };
 
-    let live_progress_enabled = should_enable_live_progress(
+    let mode = live_progress_mode(
         headlamp_core::format::terminal::is_output_terminal(),
         args.ci,
     );
@@ -258,8 +263,82 @@ pub fn run_jest(repo_root: &Path, args: &ParsedArgs) -> Result<i32, RunError> {
         raw_output: String,
     }
 
+    #[derive(Debug)]
+    struct JestStreamingAdapter {
+        emit_raw_lines: bool,
+        captured_stdout: Vec<String>,
+        captured_stderr: Vec<String>,
+        extra_bridge_entries_by_test_path: BTreeMap<String, Vec<TestConsoleEntry>>,
+    }
+
+    impl JestStreamingAdapter {
+        fn new(emit_raw_lines: bool) -> Self {
+            Self {
+                emit_raw_lines,
+                captured_stdout: vec![],
+                captured_stderr: vec![],
+                extra_bridge_entries_by_test_path: BTreeMap::new(),
+            }
+        }
+
+        fn push_non_event_line(&mut self, stream: OutputStream, line: &str) {
+            match stream {
+                OutputStream::Stdout => self.captured_stdout.push(line.to_string()),
+                OutputStream::Stderr => self.captured_stderr.push(line.to_string()),
+            }
+        }
+
+        fn push_bridge_event_line(&mut self, line: &str) {
+            let Some(payload) = line.strip_prefix("[JEST-BRIDGE-EVENT] ") else {
+                return;
+            };
+            let meta = serde_json::from_str::<JestBridgeEventMeta>(payload).ok();
+            let test_path = meta
+                .as_ref()
+                .and_then(|m| m.test_path.as_deref())
+                .unwrap_or("")
+                .replace('\\', "/");
+            if test_path.trim().is_empty() {
+                return;
+            }
+            self.extra_bridge_entries_by_test_path
+                .entry(test_path)
+                .or_default()
+                .push(TestConsoleEntry {
+                    message: Some(serde_json::Value::String(format!(
+                        "[JEST-BRIDGE-EVENT] {payload}"
+                    ))),
+                    type_name: None,
+                    origin: None,
+                });
+        }
+    }
+
+    impl StreamAdapter for JestStreamingAdapter {
+        fn on_start(&mut self) -> Option<String> {
+            Some("jest".to_string())
+        }
+
+        fn on_line(&mut self, stream: OutputStream, line: &str) -> Vec<StreamAction> {
+            if line.starts_with("[JEST-BRIDGE-EVENT] ") {
+                self.push_bridge_event_line(line);
+                return vec![];
+            }
+
+            self.push_non_event_line(stream, line);
+
+            if !self.emit_raw_lines {
+                return vec![];
+            }
+            match stream {
+                OutputStream::Stdout => vec![StreamAction::PrintStdout(line.to_string())],
+                OutputStream::Stderr => vec![StreamAction::PrintStderr(line.to_string())],
+            }
+        }
+    }
+
     let stride = if args.sequential { 1 } else { 3 };
-    let live_progress = LiveProgress::start(project_configs.len(), live_progress_enabled);
+    let live_progress = LiveProgress::start(project_configs.len(), mode);
     let per_project_results = run_parallel_stride(&project_configs, stride, |cfg_path, index| {
         let cfg_token = config_token(repo_root, cfg_path);
         live_progress.set_current_label(cfg_token.clone());
@@ -328,6 +407,22 @@ pub fn run_jest(repo_root: &Path, args: &ParsedArgs) -> Result<i32, RunError> {
             cmd_args.push("--runInBand".to_string());
         }
         if args.collect_coverage {
+            if !cmd_args
+                .iter()
+                .any(|t| t == "--coverage" || t.starts_with("--coverage="))
+            {
+                cmd_args.extend(
+                    [
+                        "--coverage",
+                        "--coverageProvider=babel",
+                        "--coverageReporters=lcov",
+                        "--coverageReporters=json",
+                        "--coverageReporters=text-summary",
+                    ]
+                    .into_iter()
+                    .map(String::from),
+                );
+            }
             cmd_args.push(format!(
                 "--coverageDirectory={}",
                 coverage_dir_for_config(cfg_path)
@@ -347,29 +442,27 @@ pub fn run_jest(repo_root: &Path, args: &ParsedArgs) -> Result<i32, RunError> {
             cmd_args.extend(args.selection_paths.iter().cloned());
         }
 
-        let out = duct_cmd(&jest_bin, cmd_args)
-            .dir(repo_root)
+        let emit_raw_lines = args.ci;
+        let mut command = std::process::Command::new(&jest_bin);
+        command
+            .args(cmd_args)
+            .current_dir(repo_root)
             .env("NODE_ENV", "test")
             .env("FORCE_COLOR", "3")
-            .env("JEST_BRIDGE_OUT", out_json.to_string_lossy().to_string())
-            .stderr_capture()
-            .stdout_capture()
-            .unchecked()
-            .run()
-            .map_err(|e| RunError::Io(std::io::Error::other(e.to_string())))?;
+            .env("JEST_BRIDGE_OUT", out_json.to_string_lossy().to_string());
+        let mut adapter = JestStreamingAdapter::new(emit_raw_lines);
+        let (exit_code, _tail) =
+            run_streaming_capture_tail(command, &live_progress, &mut adapter, 1024 * 1024)?;
 
-        let exit_code = out.status.code().unwrap_or(1);
-
-        let extra_bridge_entries_by_test_path =
-            collect_bridge_entries_from_bridge_events(&out.stdout, &out.stderr);
-        let captured_stdout = split_non_event_lines(&out.stdout);
-        let captured_stderr = split_non_event_lines(&out.stderr);
-        let coverage_failure_lines = extract_coverage_failure_lines(&out.stdout, &out.stderr);
+        let captured_stdout = adapter.captured_stdout;
+        let captured_stderr = adapter.captured_stderr;
+        let extra_bridge_entries_by_test_path = adapter.extra_bridge_entries_by_test_path;
         let raw_output = format!(
             "{}\n{}",
-            String::from_utf8_lossy(&out.stdout),
-            String::from_utf8_lossy(&out.stderr)
+            captured_stdout.join("\n"),
+            captured_stderr.join("\n")
         );
+        let coverage_failure_lines = extract_coverage_failure_lines(raw_output.as_bytes(), b"");
 
         let bridge = std::fs::read_to_string(&out_json)
             .ok()
@@ -415,7 +508,7 @@ pub fn run_jest(repo_root: &Path, args: &ParsedArgs) -> Result<i32, RunError> {
         }
     }
 
-    let exit_code = exit_codes.into_iter().max().unwrap_or(1);
+    let mut exit_code = exit_codes.into_iter().max().unwrap_or(1);
 
     if let Some(merged) = merge_bridge_json(&bridges, &directness_rank) {
         let ctx = make_ctx(
@@ -472,30 +565,40 @@ pub fn run_jest(repo_root: &Path, args: &ParsedArgs) -> Result<i32, RunError> {
         let merged_json =
             (!json_reports.is_empty()).then(|| merge_istanbul_reports(&json_reports, repo_root));
 
-        let lcov_candidates = [
-            repo_root.join("coverage").join("lcov.info"),
-            repo_root.join("coverage").join("jest").join("lcov.info"),
-        ];
+        let mut lcov_candidates: Vec<PathBuf> = vec![repo_root.join("coverage").join("lcov.info")];
+        if jest_cov_dir.exists() {
+            WalkBuilder::new(&jest_cov_dir)
+                .hidden(false)
+                .git_ignore(false)
+                .git_global(false)
+                .git_exclude(false)
+                .build()
+                .map_while(Result::ok)
+                .filter(|dent| dent.file_type().is_some_and(|t| t.is_file()))
+                .filter(|dent| {
+                    dent.path().file_name().and_then(|x| x.to_str()) == Some("lcov.info")
+                })
+                .for_each(|dent| lcov_candidates.push(dent.into_path()));
+        }
+
         let reports = lcov_candidates
             .iter()
             .filter(|p| p.exists())
             .filter_map(|p| read_lcov_file(p).ok())
             .collect::<Vec<_>>();
 
-        let resolved = merged_json.or_else(|| {
-            (!reports.is_empty()).then(|| {
-                let merged = merge_reports(&reports, repo_root);
-                resolve_lcov_paths_to_root(merged, repo_root)
-            })
+        let resolved_lcov = (!reports.is_empty()).then(|| {
+            let merged = merge_reports(&reports, repo_root);
+            resolve_lcov_paths_to_root(merged, repo_root)
         });
 
-        let print_opts = PrintOpts {
-            max_files: args.coverage_max_files,
-            max_hotspots: args.coverage_max_hotspots,
-            page_fit: args.coverage_page_fit,
-            tty: headlamp_core::format::terminal::is_output_terminal(),
-            editor_cmd: args.editor_cmd.clone(),
-        };
+        let threshold_report =
+            build_jest_threshold_report(resolved_lcov.clone(), merged_json.clone());
+
+        let resolved = merged_json.or_else(|| resolved_lcov.clone());
+
+        let print_opts =
+            PrintOpts::for_run(args, headlamp_core::format::terminal::is_output_terminal());
 
         if args.coverage_ui != headlamp_core::config::CoverageUi::Jest {
             if let Some(pretty) = format_istanbul_pretty(
@@ -515,21 +618,25 @@ pub fn run_jest(repo_root: &Path, args: &ParsedArgs) -> Result<i32, RunError> {
                     &args.include_globs,
                     &args.exclude_globs,
                 );
-                println!("{}", format_summary(&filtered));
-                println!("{}", format_compact(&filtered, &print_opts, repo_root));
-                if let Some(detail) = args.coverage_detail
-                    && detail != headlamp_core::args::CoverageDetail::Auto
-                {
-                    let hs = format_hotspots(&filtered, &print_opts, repo_root);
-                    if !hs.trim().is_empty() {
-                        println!("{hs}");
-                    }
-                };
+                let include_hotspots = should_render_hotspots(args.coverage_detail);
+                println!(
+                    "{}",
+                    render_report_text(&filtered, &print_opts, repo_root, include_hotspots)
+                );
             }
         } else {
             // With --coverage-ui=jest, match TS behavior by not rendering Headlamp's coverage report.
         }
-        if exit_code != 0 {
+        let thresholds_failed = compare_thresholds_and_print_if_needed(
+            args.coverage_thresholds.as_ref(),
+            threshold_report.as_ref(),
+        );
+        if exit_code == 0 && thresholds_failed {
+            exit_code = 1;
+        } else if should_print_coverage_threshold_failure_summary(
+            exit_code,
+            &coverage_failure_lines,
+        ) {
             print_coverage_threshold_failure_summary(&coverage_failure_lines);
         }
     }
@@ -561,6 +668,40 @@ fn augment_with_http_tests(
         combined.insert(t);
     });
     combined.into_iter().collect::<Vec<_>>()
+}
+
+fn exclude_globs_for_selection(exclude_globs: &[String]) -> Vec<String> {
+    exclude_globs
+        .iter()
+        .filter(|glob| glob.as_str() != "**/tests/**")
+        .cloned()
+        .collect::<Vec<_>>()
+}
+
+pub(crate) fn build_jest_threshold_report(
+    resolved_lcov: Option<CoverageReport>,
+    merged_json: Option<CoverageReport>,
+) -> Option<CoverageReport> {
+    let statement_totals_by_path = merged_json.as_ref().map(|report| {
+        report
+            .files
+            .iter()
+            .filter_map(|file| {
+                Some((
+                    file.path.clone(),
+                    (file.statements_total?, file.statements_covered?),
+                ))
+            })
+            .collect::<std::collections::BTreeMap<_, _>>()
+    });
+
+    match (resolved_lcov, statement_totals_by_path, merged_json) {
+        (Some(lcov), Some(statement_totals_by_path), _merged_json) => Some(
+            apply_statement_totals_to_report(lcov, &statement_totals_by_path),
+        ),
+        (Some(lcov), None, _merged_json) => Some(lcov),
+        (None, _maybe_map, merged_json) => merged_json,
+    }
 }
 
 #[derive(Debug)]
@@ -986,14 +1127,6 @@ fn write_asset(path: &Path, bytes: &[u8]) -> Result<PathBuf, RunError> {
     Ok(path.to_path_buf())
 }
 
-fn split_non_event_lines(bytes: &[u8]) -> Vec<String> {
-    String::from_utf8_lossy(bytes)
-        .lines()
-        .filter(|line| !line.starts_with("[JEST-BRIDGE-EVENT] "))
-        .map(str::to_string)
-        .collect()
-}
-
 fn extract_coverage_failure_lines(stdout_bytes: &[u8], stderr_bytes: &[u8]) -> Vec<String> {
     let text = format!(
         "{}\n{}",
@@ -1050,6 +1183,13 @@ fn print_coverage_threshold_failure_summary(lines: &IndexSet<String>) {
         return;
     }
     lines.iter().for_each(|line| println!(" {line}"));
+}
+
+pub(crate) fn should_print_coverage_threshold_failure_summary(
+    exit_code: i32,
+    coverage_failure_lines: &IndexSet<String>,
+) -> bool {
+    exit_code != 0 && !coverage_failure_lines.is_empty()
 }
 
 fn looks_sparse(pretty: &str) -> bool {
@@ -1121,42 +1261,6 @@ fn split_footer(text: &str) -> (String, String) {
 struct JestBridgeEventMeta {
     #[serde(rename = "testPath")]
     test_path: Option<String>,
-}
-
-fn collect_bridge_entries_from_bridge_events(
-    stdout_bytes: &[u8],
-    stderr_bytes: &[u8],
-) -> BTreeMap<String, Vec<TestConsoleEntry>> {
-    let parse_lines = |bytes: &[u8]| -> Vec<(String, String)> {
-        String::from_utf8_lossy(bytes)
-            .lines()
-            .filter_map(|line| {
-                let idx = line.find("[JEST-BRIDGE-EVENT]")?;
-                let payload = line[idx + "[JEST-BRIDGE-EVENT]".len()..].trim();
-                let meta = serde_json::from_str::<JestBridgeEventMeta>(payload).ok()?;
-                let test_path = meta.test_path.as_deref().unwrap_or("").replace('\\', "/");
-                (!test_path.trim().is_empty()).then_some((test_path, payload.to_string()))
-            })
-            .collect()
-    };
-
-    let mut by_test_path: BTreeMap<String, Vec<TestConsoleEntry>> = BTreeMap::new();
-    for (test_path, payload) in parse_lines(stdout_bytes)
-        .into_iter()
-        .chain(parse_lines(stderr_bytes).into_iter())
-    {
-        by_test_path
-            .entry(test_path)
-            .or_default()
-            .push(TestConsoleEntry {
-                message: Some(serde_json::Value::String(format!(
-                    "[JEST-BRIDGE-EVENT] {payload}"
-                ))),
-                type_name: None,
-                origin: None,
-            });
-    }
-    by_test_path
 }
 
 fn merge_console_entries_into_bridge_json(

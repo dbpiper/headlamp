@@ -10,8 +10,15 @@ pub struct FileCoverage {
     pub path: String,
     pub lines_total: u32,
     pub lines_covered: u32,
+    pub statements_total: Option<u32>,
+    pub statements_covered: Option<u32>,
+    pub statement_hits: Option<BTreeMap<String, u32>>,
     pub uncovered_lines: Vec<u32>,
     pub line_hits: BTreeMap<u32, u32>,
+    pub function_hits: BTreeMap<String, u32>,
+    pub function_map: BTreeMap<String, (String, u32)>,
+    pub branch_hits: BTreeMap<String, Vec<u32>>,
+    pub branch_map: BTreeMap<String, u32>,
 }
 
 #[derive(Debug, Clone, Copy, PartialEq)]
@@ -53,4 +60,52 @@ impl FileCoverage {
         }
         .pct()
     }
+}
+
+pub fn apply_statement_totals_to_report(
+    report: CoverageReport,
+    statement_totals_by_path: &BTreeMap<String, (u32, u32)>,
+) -> CoverageReport {
+    let files = report
+        .files
+        .into_iter()
+        .map(
+            |file| match statement_totals_by_path.get(&file.path).copied() {
+                Some((total, covered)) => FileCoverage {
+                    statements_total: Some(total),
+                    statements_covered: Some(covered),
+                    ..file
+                },
+                None => file,
+            },
+        )
+        .collect::<Vec<_>>();
+    CoverageReport { files }
+}
+
+pub fn apply_statement_hits_to_report(
+    report: CoverageReport,
+    statement_hits_by_path: &BTreeMap<String, BTreeMap<String, u32>>,
+) -> CoverageReport {
+    let files = report
+        .files
+        .into_iter()
+        .map(
+            |file| match statement_hits_by_path.get(&file.path).cloned() {
+                Some(hits) => {
+                    let total = (hits.len() as u64).min(u64::from(u32::MAX)) as u32;
+                    let covered = (hits.values().filter(|h| **h > 0).count() as u64)
+                        .min(u64::from(u32::MAX)) as u32;
+                    FileCoverage {
+                        statements_total: Some(total),
+                        statements_covered: Some(covered),
+                        statement_hits: Some(hits),
+                        ..file
+                    }
+                }
+                None => file,
+            },
+        )
+        .collect::<Vec<_>>();
+    CoverageReport { files }
 }

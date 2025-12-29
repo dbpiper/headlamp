@@ -1,21 +1,65 @@
-use headlamp::live_progress::{render_run_frame, should_enable_live_progress};
+use headlamp::live_progress::{
+    LiveProgressMode, RenderRunFrameArgs, live_progress_mode_with_env_ci, render_run_frame,
+    render_run_frame_with_columns,
+};
 
 #[test]
 fn live_progress_render_run_frame_includes_clear_and_run_prefix() {
-    let frame = render_run_frame("jest.config.js", 2, 5, 3, 12);
-    assert!(frame.starts_with("\u{1b}[2K\rRUN "));
+    let frame = render_run_frame(
+        "jest.config.js",
+        2,
+        5,
+        3,
+        12,
+        7,
+        "stdout: Compiling headlamp v0.1.0",
+    );
+    assert!(frame.starts_with("RUN "));
     assert!(frame.contains("(2/5)"));
     assert!(frame.contains("jest.config.js"));
     assert!(frame.contains("+12s"));
+    assert!(frame.contains("Compiling"));
+    // We render activity on a second line (or wrapped line) rather than squeezing into one.
+    assert!(frame.contains('\n'));
+}
+
+#[test]
+fn live_progress_long_details_wraps_to_multiple_physical_lines() {
+    let long_label = "/Users/david/src/headlamp/headlamp_parity_tests/tests/parity_suite_test.rs";
+    let long_recent =
+        "stderr: Finished `test` profile [unoptimized + debuginfo] target(s) in 123.45s";
+
+    let frame_a = render_run_frame_with_columns(RenderRunFrameArgs {
+        current_label: long_label,
+        done_units: 0,
+        total_units: 1,
+        spinner_index: 0,
+        elapsed_seconds: 199,
+        idle_seconds: 0,
+        recent: long_recent,
+        columns: 64,
+    });
+    assert!(frame_a.starts_with("RUN ["));
+    assert!(frame_a.contains("stderr:"));
+    assert!(frame_a.contains('\n'));
 }
 
 #[test]
 fn live_progress_enable_gate_follows_tty_flag() {
-    assert!(!should_enable_live_progress(false, false));
-    assert!(should_enable_live_progress(true, false));
+    assert_eq!(
+        live_progress_mode_with_env_ci(false, false, false),
+        LiveProgressMode::Off
+    );
+    assert_eq!(
+        live_progress_mode_with_env_ci(true, false, false),
+        LiveProgressMode::Interactive
+    );
 }
 
 #[test]
 fn live_progress_disabled_in_ci_mode() {
-    assert!(!should_enable_live_progress(true, true));
+    assert_eq!(
+        live_progress_mode_with_env_ci(true, true, false),
+        LiveProgressMode::Plain
+    );
 }

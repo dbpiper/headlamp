@@ -143,7 +143,7 @@ pub fn cached_related(
         return Ok(computed_dedup);
     }
     let cache_root = default_cache_root();
-    let repo_key = sha1_12(&repo_root.to_string_lossy());
+    let repo_key = stable_repo_key_hash_12(repo_root);
     let dir = cache_root.join(repo_key);
     let file = dir.join("relevant-tests.json");
 
@@ -206,6 +206,51 @@ fn sha1_12(text: &str) -> String {
     h.update(text.as_bytes());
     let hex = hex::encode(h.finalize());
     hex.chars().take(12).collect()
+}
+
+fn stable_repo_key_input(repo_root: &Path) -> String {
+    let git_path = repo_root.join(".git");
+    let meta = std::fs::metadata(&git_path).ok();
+    if meta.as_ref().is_some_and(|m| m.is_dir()) {
+        return dunce::canonicalize(&git_path)
+            .unwrap_or(git_path)
+            .to_string_lossy()
+            .to_string();
+    }
+    if meta.as_ref().is_some_and(|m| m.is_file()) {
+        let raw = std::fs::read_to_string(&git_path).unwrap_or_default();
+        let prefix = "gitdir:";
+        let maybe_gitdir = raw
+            .lines()
+            .map(str::trim)
+            .find(|line| line.to_ascii_lowercase().starts_with(prefix))
+            .map(|line| line[prefix.len()..].trim().to_string());
+        if let Some(gitdir_text) = maybe_gitdir
+            && !gitdir_text.is_empty()
+        {
+            let gitdir_path = PathBuf::from(gitdir_text);
+            let gitdir_abs = if gitdir_path.is_absolute() {
+                gitdir_path
+            } else {
+                repo_root.join(gitdir_path)
+            };
+            let gitdir_abs = dunce::canonicalize(&gitdir_abs).unwrap_or(gitdir_abs);
+            let common = gitdir_abs
+                .parent()
+                .and_then(|p| p.parent())
+                .map(ToOwned::to_owned)
+                .unwrap_or(gitdir_abs);
+            return common.to_string_lossy().to_string();
+        }
+    }
+    dunce::canonicalize(repo_root)
+        .unwrap_or_else(|_| repo_root.to_path_buf())
+        .to_string_lossy()
+        .to_string()
+}
+
+pub fn stable_repo_key_hash_12(repo_root: &Path) -> String {
+    sha1_12(&stable_repo_key_input(repo_root))
 }
 
 pub fn git_short_head(repo_root: &Path) -> Option<String> {

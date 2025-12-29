@@ -3,20 +3,21 @@ use std::path::{Path, PathBuf};
 use crate::seed_match::SeedMatcher;
 
 pub fn list_rust_test_files(repo_root: &Path) -> Vec<PathBuf> {
-    let tests_dir = repo_root.join("tests");
-    if !tests_dir.exists() {
-        return vec![];
-    }
-    ignore::WalkBuilder::new(&tests_dir)
+    ignore::WalkBuilder::new(repo_root)
         .hidden(false)
         .git_ignore(true)
         .git_global(true)
         .git_exclude(true)
         .build()
-        .filter_map(Result::ok)
+        .map_while(Result::ok)
         .filter(|dent| dent.file_type().is_some_and(|t| t.is_file()))
         .map(|dent| dent.into_path())
-        .filter(|p| p.extension().and_then(|x| x.to_str()) == Some("rs"))
+        .filter(|p| {
+            p.extension().and_then(|x| x.to_str()) == Some("rs")
+                && p.parent()
+                    .and_then(|parent| parent.file_name())
+                    .is_some_and(|name| name.to_string_lossy() == "tests")
+        })
         .collect()
 }
 

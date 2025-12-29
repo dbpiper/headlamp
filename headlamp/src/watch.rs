@@ -88,5 +88,5 @@ fn is_ignored_path(candidate: &Path) -> bool {
     candidate
         .components()
         .filter_map(|c| c.as_os_str().to_str())
-        .any(|segment| ignored_components.iter().any(|i| segment == *i))
+        .any(|segment| ignored_components.contains(&segment))
 }

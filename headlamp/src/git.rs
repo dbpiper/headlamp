@@ -14,14 +14,25 @@ pub fn changed_files(repo_root: &Path, mode: ChangedMode) -> Result<Vec<PathBuf>
     let workdir = repo.workdir().unwrap_or(repo_root).to_path_buf();
 
     let mut out: Vec<PathBuf> = vec![];
+
+    let mut uncommitted: Vec<PathBuf> = vec![];
+    uncommitted.extend(list_staged(&repo, &workdir)?);
+    uncommitted.extend(list_unstaged_and_untracked(&repo, &workdir)?);
+
     match mode {
-        ChangedMode::Staged => out.extend(list_staged(&repo, &workdir)?),
-        ChangedMode::Unstaged => out.extend(list_unstaged_and_untracked(&repo, &workdir)?),
-        ChangedMode::All => {
-            out.extend(list_staged(&repo, &workdir)?);
-            out.extend(list_unstaged_and_untracked(&repo, &workdir)?);
+        ChangedMode::Staged | ChangedMode::Unstaged | ChangedMode::All => {
+            // If there are any uncommitted changes, always include them (staged+unstaged+untracked).
+            // If there are none, keep previous behavior: allow selection to be empty.
+            if !uncommitted.is_empty() {
+                out.extend(uncommitted);
+            }
         }
-        ChangedMode::LastCommit => out.extend(list_diff_commits(&repo, &workdir, "HEAD^", "HEAD")?),
+        ChangedMode::LastCommit => {
+            out.extend(list_diff_commits(&repo, &workdir, "HEAD^", "HEAD")?);
+            if !uncommitted.is_empty() {
+                out.extend(uncommitted);
+            }
+        }
         ChangedMode::Branch => {
             if let Some(base) = merge_base_with_default_branch(&repo) {
                 let base_spec = base.to_string();
@@ -29,8 +40,9 @@ pub fn changed_files(repo_root: &Path, mode: ChangedMode) -> Result<Vec<PathBuf>
             } else {
                 out.extend(list_diff_commits(&repo, &workdir, "HEAD^", "HEAD")?);
             }
-            out.extend(list_staged(&repo, &workdir)?);
-            out.extend(list_unstaged_and_untracked(&repo, &workdir)?);
+            if !uncommitted.is_empty() {
+                out.extend(uncommitted);
+            }
         }
     }
 

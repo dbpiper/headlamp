@@ -3,11 +3,13 @@ use std::path::Path;
 
 use globset::{Glob, GlobSet, GlobSetBuilder};
 
+use crate::coverage::model::CoverageReport;
 use crate::coverage::print::PrintOpts;
 use crate::format::ansi;
 
 use super::istanbul_text::{render_istanbul_text_report, render_istanbul_text_summary};
 use super::merge::read_and_merge_coverage_final_json;
+use super::model::FullFileCoverage;
 use super::per_file_table::render_per_file_composite_table;
 
 pub fn format_istanbul_pretty(
@@ -28,6 +30,73 @@ pub fn format_istanbul_pretty(
         exclude_globs,
         coverage_detail,
     ))
+}
+
+pub fn format_istanbul_pretty_from_lcov_report(
+    repo_root: &Path,
+    report: &CoverageReport,
+    print_opts: &PrintOpts,
+    selection_paths_abs: &[String],
+    include_globs: &[String],
+    exclude_globs: &[String],
+    coverage_detail: Option<crate::args::CoverageDetail>,
+) -> String {
+    let files = lcov_report_to_full_file_coverage(repo_root, report);
+
+    render_pretty_output(
+        &files,
+        print_opts,
+        selection_paths_abs,
+        include_globs,
+        exclude_globs,
+        coverage_detail,
+    )
+}
+
+pub(super) fn lcov_report_to_full_file_coverage(
+    repo_root: &Path,
+    report: &CoverageReport,
+) -> Vec<FullFileCoverage> {
+    report
+        .files
+        .iter()
+        .map(|file| {
+            let abs_path = file.path.replace('\\', "/");
+            let rel_path = Path::new(&abs_path)
+                .strip_prefix(repo_root)
+                .ok()
+                .and_then(|p| p.to_str())
+                .unwrap_or(abs_path.as_str())
+                .replace('\\', "/");
+
+            let statement_hits = file.statement_hits.clone().unwrap_or_else(|| {
+                file.line_hits
+                    .iter()
+                    .map(|(ln, hit)| (ln.to_string(), *hit))
+                    .collect::<std::collections::BTreeMap<_, _>>()
+            });
+            let statement_map = statement_hits
+                .keys()
+                .filter_map(|id| {
+                    let line_str = id.split_once(':').map_or(id.as_str(), |(a, _b)| a);
+                    let line = line_str.parse::<u32>().ok()?;
+                    Some((id.clone(), (line, line)))
+                })
+                .collect::<std::collections::BTreeMap<_, _>>();
+
+            FullFileCoverage {
+                abs_path,
+                rel_path,
+                statement_hits,
+                statement_map,
+                function_hits: file.function_hits.clone(),
+                function_map: file.function_map.clone(),
+                branch_hits: file.branch_hits.clone(),
+                branch_map: file.branch_map.clone(),
+                line_hits: file.line_hits.clone(),
+            }
+        })
+        .collect::<Vec<_>>()
 }
 
 fn render_pretty_output(

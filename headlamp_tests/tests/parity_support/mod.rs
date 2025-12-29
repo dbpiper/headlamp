@@ -12,6 +12,7 @@ pub mod diagnostics;
 pub mod diff_report;
 pub mod normalize;
 pub mod parity_meta;
+pub mod runner_parity;
 pub mod token_ast;
 pub use normalize::normalize;
 pub use normalize::normalize_tty_ui;
@@ -21,6 +22,14 @@ static CAPTURE_COUNTER: AtomicUsize = AtomicUsize::new(0);
 
 fn next_capture_id() -> usize {
     CAPTURE_COUNTER.fetch_add(1, Ordering::Relaxed)
+}
+
+fn sha1_12(text: &str) -> String {
+    use sha1::Digest;
+    let mut h = sha1::Sha1::new();
+    h.update(text.as_bytes());
+    let hex = hex::encode(h.finalize());
+    hex.chars().take(12).collect()
 }
 
 #[derive(Debug, Clone)]
@@ -672,6 +681,86 @@ fn npm_program() -> &'static str {
     if cfg!(windows) { "npm.cmd" } else { "npm" }
 }
 
+fn python_program() -> &'static str {
+    if cfg!(windows) {
+        "python"
+    } else {
+        "/usr/bin/python3"
+    }
+}
+
+fn ensure_pytest_bin_dir(py_deps_dir: &Path) -> Result<PathBuf, String> {
+    static INIT: OnceLock<Result<PathBuf, String>> = OnceLock::new();
+    INIT.get_or_init(|| {
+        let venv_dir = py_deps_dir.join(".venv");
+        let venv_bin_dir = venv_dir.join(if cfg!(windows) { "Scripts" } else { "bin" });
+        let pytest_bin = venv_bin_dir.join(if cfg!(windows) {
+            "pytest.exe"
+        } else {
+            "pytest"
+        });
+        let requirements = py_deps_dir.join("requirements.txt");
+        let req_hash = sha1_12(&std::fs::read_to_string(&requirements).unwrap_or_default());
+        let req_hash_file: PathBuf = venv_dir.join(".headlamp-requirements-sha1");
+        let existing_hash = std::fs::read_to_string(&req_hash_file)
+            .ok()
+            .map(|s| s.trim().to_string())
+            .filter(|s| !s.is_empty());
+        if pytest_bin.exists() && existing_hash.as_deref() == Some(req_hash.as_str()) {
+            return Ok(venv_bin_dir);
+        }
+        let _ = std::fs::remove_dir_all(&venv_dir);
+
+        let status = Command::new(python_program())
+            .current_dir(py_deps_dir)
+            .args(["-m", "venv", ".venv"])
+            .status()
+            .map_err(|e| format!("failed to create venv: {e}"))?;
+        if !status.success() {
+            return Err(format!(
+                "python -m venv failed in {} (status={:?})",
+                py_deps_dir.display(),
+                status.code()
+            ));
+        }
+
+        let python_in_venv = venv_bin_dir.join(if cfg!(windows) {
+            "python.exe"
+        } else {
+            "python"
+        });
+        let status = Command::new(python_in_venv)
+            .current_dir(py_deps_dir)
+            .args([
+                "-m",
+                "pip",
+                "install",
+                "--disable-pip-version-check",
+                "-q",
+                "-r",
+                requirements.to_string_lossy().as_ref(),
+            ])
+            .status()
+            .map_err(|e| format!("failed to install pytest deps: {e}"))?;
+        if !status.success() {
+            return Err(format!(
+                "pip install failed in {} (status={:?})",
+                py_deps_dir.display(),
+                status.code()
+            ));
+        }
+        if !pytest_bin.exists() {
+            return Err(format!(
+                "pytest not found at {} after pip install",
+                pytest_bin.display()
+            ));
+        }
+        let _ = std::fs::write(&req_hash_file, format!("{req_hash}\n"));
+        Ok(venv_bin_dir)
+    })
+    .clone()
+}
+
 fn ensure_js_deps_node_modules(js_deps_dir: &Path) -> Result<PathBuf, String> {
     static INIT: OnceLock<Result<PathBuf, String>> = OnceLock::new();
     INIT.get_or_init(|| {
@@ -745,10 +834,6 @@ fn ensure_headlamp_bin_from_target_dir() -> PathBuf {
         "headlamp"
     };
     let bin_path = target_dir.join("debug").join(exe_name);
-    if bin_path.exists() {
-        return bin_path;
-    }
-
     let status = Command::new("cargo")
         .current_dir(&workspace_root)
         .args(["build", "-q", "-p", "headlamp"])
@@ -816,6 +901,40 @@ fn build_env_map(repo: &Path, side_label: &ParitySideLabel) -> BTreeMap<String, 
                 .to_string_lossy()
                 .to_string(),
         );
+    }
+    if let Ok(existing_path) = std::env::var("PATH") {
+        let sep = if cfg!(windows) { ";" } else { ":" };
+
+        let repo_stub_bin = repo.join("bin");
+        let repo_has_stub_runners = repo_stub_bin.is_dir()
+            && (repo_stub_bin.join("cargo").exists()
+                || repo_stub_bin.join("cargo.cmd").exists()
+                || repo_stub_bin.join("pytest").exists()
+                || repo_stub_bin.join("pytest.exe").exists());
+        if repo_has_stub_runners {
+            env.insert(
+                "PATH".to_string(),
+                format!(
+                    "{}{}{}",
+                    repo_stub_bin.to_string_lossy(),
+                    sep,
+                    existing_path
+                ),
+            );
+            return env;
+        }
+
+        let py_deps_dir = PathBuf::from(env!("CARGO_MANIFEST_DIR"))
+            .join("tests")
+            .join("py_deps");
+        let py_bin = ensure_pytest_bin_dir(&py_deps_dir)
+            .unwrap_or_else(|e| panic!("failed to ensure pytest test deps: {e}"));
+        if py_bin.is_dir() {
+            env.insert(
+                "PATH".to_string(),
+                format!("{}{}{}", py_bin.to_string_lossy(), sep, existing_path),
+            );
+        }
     }
     env
 }

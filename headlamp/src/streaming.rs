@@ -66,6 +66,24 @@ fn apply_actions(progress: &LiveProgress, actions: Vec<StreamAction>) {
     });
 }
 
+#[doc(hidden)]
+pub fn consume_lines_capture_tail(
+    reader: impl BufRead,
+    progress: &LiveProgress,
+    adapter: &mut dyn StreamAdapter,
+    ring_bytes: usize,
+) -> RingBuffer {
+    let mut ring = RingBuffer::new(ring_bytes);
+    reader.lines().map_while(Result::ok).for_each(|line| {
+        ring.push_line(line.clone());
+        // Once merged, stream distinction is no longer meaningful.
+        progress.record_runner_stdout_line(&line);
+        let actions = adapter.on_line(OutputStream::Stdout, &line);
+        apply_actions(progress, actions);
+    });
+    ring
+}
+
 pub fn run_streaming_capture_tail(
     mut command: Command,
     progress: &LiveProgress,
@@ -90,7 +108,7 @@ pub fn run_streaming_capture_tail(
         let tx_out = tx.clone();
         std::thread::spawn(move || {
             let reader = BufReader::new(out);
-            reader.lines().filter_map(Result::ok).for_each(|line| {
+            reader.lines().map_while(Result::ok).for_each(|line| {
                 let _ = tx_out.send((OutputStream::Stdout, line));
             });
         });
@@ -100,7 +118,7 @@ pub fn run_streaming_capture_tail(
         let tx_err = tx.clone();
         std::thread::spawn(move || {
             let reader = BufReader::new(err);
-            reader.lines().filter_map(Result::ok).for_each(|line| {
+            reader.lines().map_while(Result::ok).for_each(|line| {
                 let _ = tx_err.send((OutputStream::Stderr, line));
             });
         });
@@ -111,6 +129,10 @@ pub fn run_streaming_capture_tail(
     let mut ring = RingBuffer::new(ring_bytes);
     rx.iter().for_each(|(stream, line)| {
         ring.push_line(line.clone());
+        match stream {
+            OutputStream::Stdout => progress.record_runner_stdout_line(&line),
+            OutputStream::Stderr => progress.record_runner_stderr_line(&line),
+        }
         let actions = adapter.on_line(stream, &line);
         apply_actions(progress, actions);
     });
@@ -118,4 +140,28 @@ pub fn run_streaming_capture_tail(
     let status = child.wait().map_err(RunError::WaitFailed)?;
     let exit_code = status.code().unwrap_or(1);
     Ok((exit_code, ring))
+}
+
+pub fn run_streaming_capture_tail_merged(
+    command: Command,
+    progress: &LiveProgress,
+    adapter: &mut dyn StreamAdapter,
+    ring_bytes: usize,
+) -> Result<(i32, RingBuffer), RunError> {
+    struct MergeStreamsAdapter<'a> {
+        inner: &'a mut dyn StreamAdapter,
+    }
+
+    impl<'a> StreamAdapter for MergeStreamsAdapter<'a> {
+        fn on_start(&mut self) -> Option<String> {
+            self.inner.on_start()
+        }
+
+        fn on_line(&mut self, _stream: OutputStream, line: &str) -> Vec<StreamAction> {
+            self.inner.on_line(OutputStream::Stdout, line)
+        }
+    }
+
+    let mut merged = MergeStreamsAdapter { inner: adapter };
+    run_streaming_capture_tail(command, progress, &mut merged, ring_bytes)
 }

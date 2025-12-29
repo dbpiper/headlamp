@@ -10,6 +10,10 @@ mod per_file_table;
 mod table;
 
 pub use api::format_istanbul_pretty;
+pub use api::format_istanbul_pretty_from_lcov_report;
 
 #[cfg(test)]
 mod istanbul_text_test;
+
+#[cfg(test)]
+mod api_lcov_test;

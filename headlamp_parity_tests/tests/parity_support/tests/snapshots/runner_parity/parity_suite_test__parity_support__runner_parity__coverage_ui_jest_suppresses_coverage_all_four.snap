@@ -1,0 +1,29 @@
+---
+source: headlamp_parity_tests/tests/parity_support/runner_parity.rs
+assertion_line: 617
+expression: canonical
+---
+[<N>;<N>;<N>;<N>;246m[97m RUN [39m[0m [2m<ROOT>[22m
+
+[35mtests/a_test.<EXT>[39m [2m(<N>)[22m
+  [<N>;<N>;<N>;<N>;94m✓[0m [2mtest_a[22m
+
+[<N>;<N>;<N>;<N>;94m[97m PASS [39m[0m [97mtests/a_test.<EXT>[39m
+[35mtests/b_test.<EXT>[39m [2m(<N>)[22m
+  [<N>;<N>;<N>;<N>;94m✓[0m [2mtest_b[22m
+
+[<N>;<N>;<N>;<N>;94m[97m PASS [39m[0m [97mtests/b_test.<EXT>[39m
+[35mtests/index_test.<EXT>[39m [2m(<N>)[22m
+  [<N>;<N>;<N>;<N>;94m✓[0m [2mtest_indirect[22m
+
+[<N>;<N>;<N>;<N>;94m[97m PASS [39m[0m [97mtests/index_test.<EXT>[39m
+[35mtests/sum_fail_test.<EXT>[39m [2m(<N>)[22m
+  [<N>;<N>;<N>;<N>;35m×[0m [97mtest_sum_fails[39m
+
+[<N>;<N>;<N>;<N>;35m[97m FAIL [39m[0m [97mtests/sum_fail_test.<EXT>[39m
+[<N>;<N>;<N>;<N>;94m[97m PASS [39m[0m [97mtests/sum_pass_test.<EXT>[39m
+[2m───────────────────────────────────────────────────────────────────────────────────────────────────────[22m [<N>;<N>;<N>;<N>;35m[97m Failed Tests <N> [39m[0m
+
+[1mTest Files[22m [<N>;<N>;<N>;<N>;35m1 failed[0m[2m | [22m[<N>;<N>;<N>;<N>;94m4 passed[0m [2m(<N>)[22m
+[1mTests[22m     [<N>;<N>;<N>;<N>;35m1 failed[0m[2m | [22m[<N>;<N>;<N>;<N>;94m4 passed[0m [2m(<N>)[22m
+[1mTime[22m <N>ms

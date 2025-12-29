@@ -3,6 +3,8 @@ use std::path::Path;
 use globset::{Glob, GlobSet, GlobSetBuilder};
 use path_slash::PathExt;
 
+use crate::args::CoverageDetail;
+use crate::args::ParsedArgs;
 use crate::coverage::model::{CoverageReport, FileCoverage};
 
 #[derive(Debug, Clone)]
@@ -102,6 +104,38 @@ pub fn format_summary(report: &CoverageReport) -> String {
         totals.lines_covered,
         totals.lines_total
     )
+}
+
+pub fn render_report_text(
+    report: &CoverageReport,
+    opts: &PrintOpts,
+    root: &Path,
+    include_hotspots: bool,
+) -> String {
+    let mut blocks = vec![format_summary(report), format_compact(report, opts, root)];
+    if include_hotspots {
+        let hs = format_hotspots(report, opts, root);
+        if !hs.trim().is_empty() {
+            blocks.push(hs);
+        }
+    }
+    blocks.join("\n")
+}
+
+impl PrintOpts {
+    pub fn for_run(args: &ParsedArgs, is_tty: bool) -> Self {
+        Self {
+            max_files: args.coverage_max_files,
+            max_hotspots: args.coverage_max_hotspots,
+            page_fit: args.coverage_page_fit,
+            tty: is_tty,
+            editor_cmd: args.editor_cmd.clone(),
+        }
+    }
+}
+
+pub fn should_render_hotspots(detail: Option<CoverageDetail>) -> bool {
+    detail.is_some_and(|d| d != CoverageDetail::Auto)
 }
 
 fn apply_max_files(mut files: Vec<FileCoverage>, max: Option<u32>) -> Vec<FileCoverage> {

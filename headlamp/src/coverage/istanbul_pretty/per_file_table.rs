@@ -83,6 +83,11 @@ pub(super) fn render_per_file_composite_table(
     let l_pct = summary.lines.pct();
     let f_pct = summary.functions.pct();
     let b_pct = summary.branches.pct();
+    let b_pct_label = if summary.branches.total == 0 {
+        "N/A".to_string()
+    } else {
+        format!("{b_pct:.1}%")
+    };
     rows.push(vec![
         cell_with(rel.clone(), Decor::ShortenPath { rel: rel.clone() }),
         cell_with("Summary", Decor::Bold),
@@ -95,7 +100,7 @@ pub(super) fn render_per_file_composite_table(
             },
         ),
         cell_with(format!("{f_pct:.1}%"), Decor::TintPct { pct: f_pct }),
-        cell_with(format!("{b_pct:.1}%"), Decor::TintPct { pct: b_pct }),
+        cell_with(b_pct_label, Decor::TintPct { pct: b_pct }),
         cell(""),
     ]);
     rows.push(vec![
@@ -105,7 +110,14 @@ pub(super) fn render_per_file_composite_table(
         cell_with(format!("{l_pct:.1}%"), Decor::Dim),
         cell_with(String::new(), Decor::Dim),
         cell_with(format!("{f_pct:.1}%"), Decor::Dim),
-        cell_with(format!("{b_pct:.1}%"), Decor::Dim),
+        cell_with(
+            if summary.branches.total == 0 {
+                "N/A".to_string()
+            } else {
+                format!("{b_pct:.1}%")
+            },
+            Decor::Dim,
+        ),
         cell(""),
     ]);
 

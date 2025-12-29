@@ -75,34 +75,50 @@ fn main() {
     }
 
     let mut run_once = || -> i32 {
+        let render_run_error = |err: headlamp::run::RunError| -> i32 {
+            let ctx = headlamp::format::ctx::make_ctx(
+                &repo_root,
+                None,
+                true,
+                parsed.show_logs,
+                parsed.editor_cmd.clone(),
+            );
+            let runner_label = match runner {
+                Runner::Jest => "jest",
+                Runner::Vitest => "vitest",
+                Runner::Pytest => "pytest",
+                Runner::CargoTest => "cargo-test",
+                Runner::CargoNextest => "cargo-nextest",
+            };
+            let suite_path = format!("headlamp/{runner_label}");
+            let model = headlamp::format::infra_failure::build_infra_failure_test_run_model(
+                suite_path.as_str(),
+                "Test suite failed to run",
+                &err.to_string(),
+            );
+            let rendered =
+                headlamp::format::vitest::render_vitest_from_test_model(&model, &ctx, true);
+            if !rendered.trim().is_empty() {
+                println!("{rendered}");
+            }
+            1
+        };
         match runner {
             Runner::Jest | Runner::Vitest => match headlamp::jest::run_jest(&repo_root, &parsed) {
                 Ok(code) => code,
-                Err(err) => {
-                    eprintln!("{err}");
-                    1
-                }
+                Err(err) => render_run_error(err),
             },
             Runner::Pytest => match headlamp::pytest::run_pytest(&repo_root, &parsed) {
                 Ok(code) => code,
-                Err(err) => {
-                    eprintln!("{err}");
-                    1
-                }
+                Err(err) => render_run_error(err),
             },
             Runner::CargoTest => match headlamp::cargo::run_cargo_test(&repo_root, &parsed) {
                 Ok(code) => code,
-                Err(err) => {
-                    eprintln!("{err}");
-                    1
-                }
+                Err(err) => render_run_error(err),
             },
             Runner::CargoNextest => match headlamp::cargo::run_cargo_nextest(&repo_root, &parsed) {
                 Ok(code) => code,
-                Err(err) => {
-                    eprintln!("{err}");
-                    1
-                }
+                Err(err) => render_run_error(err),
             },
         }
     };

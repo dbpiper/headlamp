@@ -238,6 +238,6 @@ fn double_dash_separator_forces_passthrough_even_for_headlamp_named_flags() {
     ];
     let parsed = derive_args(&config_tokens(&cfg, &argv), &argv, true);
     assert!(parsed.verbose);
-    assert!(parsed.runner_args.iter().any(|t| t == "--"));
     assert!(parsed.runner_args.iter().any(|t| t == "--verbose"));
+    assert!(!parsed.runner_args.iter().any(|t| t == "--"));
 }
