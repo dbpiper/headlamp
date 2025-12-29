@@ -1,12 +1,12 @@
 ### Headlamp
 
-Headlamp is a **Rust-powered test UX CLI**: smarter test selection, cleaner output, and a unified workflow across **jest**, **cargo test**, and **cargo nextest**.
+Headlamp is a **Rust-powered test UX CLI**: smarter test selection, cleaner output, and a unified workflow across **jest**, **cargo test**,**cargo nextest** and **pytest**.
 
 Headlamp is useful when you want a consistent way to run tests across different projects and keep feedback fast as your repo grows. It can select tests based on what changed, surface failures in a readable format, and keep common defaults (like runner args and coverage settings) in a single config file so your team doesn’t have to remember a long list of flags.
 
 ### Why Headlamp
 
-- **One CLI, many runners**: `--runner=jest|cargo-nextest|cargo-test`
+- **One CLI, many runners**: `--runner=jest|cargo-nextest|cargo-test|pytest`
 - **Selection that scales**: run what changed (`--changed`) and what’s related (dependency-graph driven)
 - **Coverage-first UX**: coverage output you can actually read
 - **Fast**: Rust core + caching
@@ -62,33 +62,14 @@ headlamp --runner=cargo-test
 
 ### CLI
 
-Current `--help` output:
+Run `headlamp --help` to see the up-to-date flags list.
 
-```text
-headlamp
+Highlights:
 
-Usage:
-  headlamp [--runner=<jest|vitest|pytest|cargo-nextest|cargo-test>] [--coverage] [--changed[=<mode>]] [args...]
-
-Flags:
-  --runner <runner>              Select runner (default: jest)
-  --coverage                     Enable coverage collection (runner-specific)
-  --coverage-ui=jest|both         Coverage output mode
-  --coverage.abortOnFailure       Exit on test failures without printing coverage
-  --watch                        Re-run on file changes (runner-agnostic polling watch)
-  --ci                           CI mode (disable interactive UI and set CI=1)
-  --verbose                      More Headlamp diagnostics
-  --no-cache                     Disable Headlamp caches (and runner caches when possible)
-  --onlyFailures                 Show only failing tests during live output
-  --showLogs                     Show full logs under failing tests
-  --sequential                   Serialize execution (maps to jest --runInBand)
-  --bootstrapCommand <cmd>       Run once before tests (npm script name or shell cmd)
-  --changed[=all|staged|unstaged|branch|lastCommit]
-  --changed.depth=<n>
-
-Notes:
-  Unknown args are forwarded to the runner.
-```
+- **runners**: `--runner=jest|pytest|cargo-nextest|cargo-test`
+- **changed selection**: `--changed=all|staged|unstaged|branch|lastCommit|lastRelease`
+  - `lastRelease` selects changes since the previous stable SemVer release tag
+- **coverage**: `--coverage` plus `--coverage-ui`, `--coverage.detail`, thresholds, etc.
 
 ### Configuration
 

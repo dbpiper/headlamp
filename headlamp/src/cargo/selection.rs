@@ -104,6 +104,7 @@ pub(super) fn changed_mode_to_cli_string(mode: ChangedMode) -> &'static str {
         ChangedMode::Unstaged => "unstaged",
         ChangedMode::Branch => "branch",
         ChangedMode::LastCommit => "lastCommit",
+        ChangedMode::LastRelease => "lastRelease",
     }
 }
 

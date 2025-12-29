@@ -48,6 +48,7 @@ pub(super) fn parse_changed_mode_string(raw: &str) -> Option<ChangedMode> {
         "unstaged" => ChangedMode::Unstaged,
         "branch" => ChangedMode::Branch,
         "lastcommit" | "last_commit" | "last-commit" => ChangedMode::LastCommit,
+        "lastrelease" | "last_release" | "last-release" => ChangedMode::LastRelease,
         "all" | "" => ChangedMode::All,
         _ => return None,
     })
@@ -60,6 +61,7 @@ pub(super) fn changed_mode_to_string(mode: ChangedMode) -> &'static str {
         ChangedMode::Unstaged => "unstaged",
         ChangedMode::Branch => "branch",
         ChangedMode::LastCommit => "lastCommit",
+        ChangedMode::LastRelease => "lastRelease",
     }
 }
 

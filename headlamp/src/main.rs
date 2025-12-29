@@ -3,7 +3,6 @@ use std::io::IsTerminal;
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 enum Runner {
     Jest,
-    Vitest,
     Pytest,
     CargoTest,
     CargoNextest,
@@ -120,7 +119,7 @@ fn run_once(
     parsed: &headlamp::args::ParsedArgs,
 ) -> i32 {
     match runner {
-        Runner::Jest | Runner::Vitest => headlamp::jest::run_jest(repo_root, parsed)
+        Runner::Jest => headlamp::jest::run_jest(repo_root, parsed)
             .unwrap_or_else(|err| render_run_error(repo_root, parsed, runner, err)),
         Runner::Pytest => headlamp::pytest::run_pytest(repo_root, parsed)
             .unwrap_or_else(|err| render_run_error(repo_root, parsed, runner, err)),
@@ -134,7 +133,6 @@ fn run_once(
 fn runner_label(runner: Runner) -> &'static str {
     match runner {
         Runner::Jest => "jest",
-        Runner::Vitest => "vitest",
         Runner::Pytest => "pytest",
         Runner::CargoTest => "cargo-test",
         Runner::CargoNextest => "cargo-nextest",
@@ -180,7 +178,12 @@ fn extract_runner(argv: &[String]) -> (Runner, Vec<String>) {
                 .map(|(_, v)| v)
                 .or_else(|| argv.get(i + 1).map(|s| s.as_str()));
             if let Some(v) = v {
-                runner = parse_runner(v);
+                runner = parse_runner(v).or_else(|| {
+                    eprintln!("headlamp: unknown runner: {v}");
+                    eprintln!();
+                    print_help();
+                    std::process::exit(2);
+                });
                 i += if tok.contains('=') { 1 } else { 2 };
                 continue;
             }
@@ -195,7 +198,6 @@ fn extract_runner(argv: &[String]) -> (Runner, Vec<String>) {
 fn parse_runner(raw: &str) -> Option<Runner> {
     Some(match raw.trim().to_ascii_lowercase().as_str() {
         "jest" => Runner::Jest,
-        "vitest" => Runner::Vitest,
         "pytest" => Runner::Pytest,
         "cargo-nextest" => Runner::CargoNextest,
         "cargo-test" => Runner::CargoTest,
@@ -204,29 +206,5 @@ fn parse_runner(raw: &str) -> Option<Runner> {
 }
 
 fn print_help() {
-    let msg = r#"headlamp
-
-Usage:
-  headlamp [--runner=<jest|vitest|pytest|cargo-nextest|cargo-test>] [--coverage] [--changed[=<mode>]] [args...]
-
-Flags:
-  --runner <runner>              Select runner (default: jest)
-  --coverage                     Enable coverage collection (runner-specific)
-  --coverage-ui=jest|both         Coverage output mode
-  --coverage.abortOnFailure       Exit on test failures without printing coverage
-  --watch                        Re-run on file changes (runner-agnostic polling watch)
-  --ci                           CI mode (disable interactive UI and set CI=1)
-  --verbose                      More Headlamp diagnostics
-  --no-cache                     Disable Headlamp caches (and runner caches when possible)
-  --onlyFailures                 Show only failing tests during live output
-  --showLogs                     Show full logs under failing tests
-  --sequential                   Serialize execution (maps to jest --runInBand)
-  --bootstrapCommand <cmd>       Run once before tests (npm script name or shell cmd)
-  --changed[=all|staged|unstaged|branch|lastCommit]
-  --changed.depth=<n>
-
-Notes:
-  Unknown args are forwarded to the runner.
-"#;
-    println!("{msg}");
+    println!("{}", headlamp::help::help_text());
 }

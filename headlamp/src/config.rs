@@ -16,6 +16,7 @@ pub enum ChangedMode {
     Unstaged,
     Branch,
     LastCommit,
+    LastRelease,
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Deserialize)]

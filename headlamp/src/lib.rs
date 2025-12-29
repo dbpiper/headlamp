@@ -31,6 +31,7 @@ mod config_ts;
 pub mod coverage;
 pub mod error;
 pub mod format;
+pub mod help;
 pub(crate) mod profile;
 pub mod project;
 pub mod selection;

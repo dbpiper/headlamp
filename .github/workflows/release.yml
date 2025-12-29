@@ -10,8 +10,37 @@ permissions:
   contents: write
 
 jobs:
+  verify:
+    name: verify (fmt + clippy + run)
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+
+      - uses: dtolnay/rust-toolchain@stable
+        with:
+          components: rustfmt, clippy
+
+      - uses: Swatinem/rust-cache@v2
+
+      - name: cargo fmt
+        run: cargo fmt --all --check
+
+      - name: cargo clippy
+        run: cargo clippy --workspace --all-targets -- -D warnings
+
+      - name: Install cargo-nextest
+        uses: taiki-e/install-action@v2
+        with:
+          tool: cargo-nextest
+
+      - name: run headlamp (changed=lastRelease)
+        run: cargo run -p headlamp --locked -- --runner=cargo-nextest --changed=lastRelease
+
   build-binaries:
     name: build (${{ matrix.target_label }})
+    needs: verify
     runs-on: ${{ matrix.runs_on }}
     strategy:
       fail-fast: false
