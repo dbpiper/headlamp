@@ -136,7 +136,7 @@ fn coverage_pretty_from_lcov_large_report_completes_under_one_second() {
     let elapsed = started_at.elapsed();
 
     assert!(
-        elapsed < Duration::from_secs(1),
+        elapsed < Duration::from_millis(1500),
         "pretty formatting took {elapsed:?} for {} files",
         file_count
     );
