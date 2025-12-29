@@ -25,6 +25,26 @@ jobs:
         with:
           fetch-depth: 0
 
+      # Parity + runner tests require JS + Python deps. These are intentionally NOT committed.
+      - uses: actions/setup-node@v4
+        with:
+          node-version: "20"
+          cache: "npm"
+          cache-dependency-path: headlamp_tests/tests/js_deps/package-lock.json
+
+      - name: Install JS deps for parity fixtures (jest)
+        working-directory: headlamp_tests/tests/js_deps
+        run: npm ci
+
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.11"
+          cache: "pip"
+          cache-dependency-path: headlamp_tests/tests/py_deps/requirements.txt
+
+      - name: Install Python deps for parity fixtures (pytest)
+        run: python3 -m pip install -r headlamp_tests/tests/py_deps/requirements.txt
+
       - uses: dtolnay/rust-toolchain@stable
         with:
           components: rustfmt, clippy

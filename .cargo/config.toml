@@ -1,2 +1,8 @@
 [alias]
+# Usage:
+#   cargo revert-release --dry-run
+#   cargo revert-release --yes
+#   cargo revert-release --tag v0.1.36 --yes
+revert-release = "run -q -p xtask -- revert-release"
+
 test-dev = "run -p headlamp -- --runner=cargo-nextest --changed=branch --coverage --onlyFailures"

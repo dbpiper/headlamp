@@ -1,3 +1,9 @@
 [workspace]
 resolver = "2"
-members = ["headlamp", "headlamp_tests", "headlamp_parity_tests", "headlamp_parity_support"]
+members = [
+  "headlamp",
+  "headlamp_tests",
+  "headlamp_parity_tests",
+  "headlamp_parity_support",
+  "xtask",
+]
