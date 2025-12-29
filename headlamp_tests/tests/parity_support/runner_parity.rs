@@ -109,7 +109,7 @@ pub fn runner_parity_headlamp_bin() -> PathBuf {
         .ok()
         .map(PathBuf::from)
         .filter(|p| p.exists())
-        .unwrap_or_else(super::ensure_headlamp_bin_from_target_dir)
+        .unwrap_or_else(|| headlamp_parity_support::binaries::runner_parity_binaries().headlamp_bin)
 }
 
 fn write_minimal_repo_files(repo: &Path, scenario: &RunnerParityScenario) {

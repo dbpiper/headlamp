@@ -581,11 +581,34 @@ dependencies = [
 ]
 
 [[package]]
+name = "headlamp_parity_support"
+version = "0.0.0"
+dependencies = [
+ "git2",
+ "headlamp",
+ "hex",
+ "indexmap",
+ "insta",
+ "os_pipe",
+ "path-slash",
+ "portable-pty",
+ "regex",
+ "serde",
+ "serde_json",
+ "sha1",
+ "similar-asserts",
+ "tempfile",
+ "wait-timeout",
+ "which",
+]
+
+[[package]]
 name = "headlamp_parity_tests"
 version = "0.0.0"
 dependencies = [
  "git2",
  "headlamp",
+ "headlamp_parity_support",
  "hex",
  "insta",
  "os_pipe",
@@ -607,6 +630,7 @@ version = "0.0.0"
 dependencies = [
  "git2",
  "headlamp",
+ "headlamp_parity_support",
  "hex",
  "insta",
  "os_pipe",

@@ -1,0 +1,25 @@
+[package]
+name = "headlamp_parity_support"
+version = "0.0.0"
+edition = "2024"
+publish = false
+
+[dependencies]
+headlamp = { path = "../headlamp" }
+os_pipe = "1.2.1"
+serde = { version = "1.0.216", features = ["derive"] }
+serde_json = "1.0.134"
+regex = "1.11.1"
+tempfile = "3.14.0"
+similar-asserts = "1.6.1"
+insta = { version = "1.42.0", features = ["filters"] }
+sha1 = "0.10.6"
+hex = "0.4.3"
+which = "7.0.1"
+path-slash = "0.2.1"
+wait-timeout = "0.2.1"
+git2 = { version = "0.20.0", default-features = false, features = ["vendored-libgit2"] }
+portable-pty = "0.9.0"
+indexmap = "2.7.0"
+
+

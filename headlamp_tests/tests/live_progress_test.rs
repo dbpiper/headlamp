@@ -63,3 +63,11 @@ fn live_progress_disabled_in_ci_mode() {
         LiveProgressMode::Plain
     );
 }
+
+#[test]
+fn live_progress_classifies_nextest_suite_json_lines() {
+    let line = r#"{"type":"suite","event":"ok","passed":1,"failed":0,"ignored":0,"measured":0,"filtered_out":0,"exec_time":0.11518151,"nextest":{"crate":"headlamp_tests","test_binary":"vitest_render_snapshot_test","kind":"test"}}"#;
+    let hint = headlamp::live_progress::classify_runner_line_for_progress(line).expect("hint");
+    assert!(hint.contains("suite ok:"));
+    assert!(hint.contains("headlamp_tests::vitest_render_snapshot_test"));
+}

@@ -5,6 +5,7 @@ fn build_cargo_llvm_cov_command_args_includes_nightly_and_branch_when_enabled() 
     let args = build_cargo_llvm_cov_command_args(
         true,
         true,
+        false,
         &["test".to_string(), "--no-report".to_string()],
     );
     assert_eq!(
@@ -24,6 +25,7 @@ fn build_cargo_llvm_cov_command_args_omits_branch_without_nightly() {
     let args = build_cargo_llvm_cov_command_args(
         true,
         false,
+        false,
         &["test".to_string(), "--no-report".to_string()],
     );
     assert_eq!(
@@ -41,6 +43,7 @@ fn build_cargo_llvm_cov_command_args_omits_branch_when_not_enabled() {
     let args = build_cargo_llvm_cov_command_args(
         false,
         true,
+        false,
         &["test".to_string(), "--no-report".to_string()],
     );
     assert_eq!(

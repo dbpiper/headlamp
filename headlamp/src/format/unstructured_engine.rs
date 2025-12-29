@@ -177,7 +177,8 @@ impl<D: UnstructuredDialect> UnstructuredStreamParser<D> {
                 lines: state.lines,
             },
         );
-        if !suite.test_results.is_empty() {
+        let has_any_tests = !suite.test_results.is_empty();
+        if has_any_tests {
             self.suites.push(suite);
         }
     }

@@ -102,3 +102,35 @@ fn cargo_test_stream_parser_captures_multiline_panic_block_with_backtrace_and_le
     assert!(message.contains("stack backtrace:"));
     assert!(message.contains("at /repo/src/lib.rs:1:1"));
 }
+
+#[test]
+fn cargo_test_stream_parser_drops_empty_suites() {
+    let repo_root = Path::new("/repo");
+    let mut parser = CargoTestStreamParser::new(repo_root);
+
+    let combined = [
+        "Running tests/empty_suite.rs (target/debug/deps/empty_suite-0000000000000000)",
+        "running 0 tests",
+        "",
+        "test result: ok. 0 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.00s",
+        "",
+        "Running tests/real_suite.rs (target/debug/deps/real_suite-0000000000000000)",
+        "running 1 test",
+        "test pass_test ... ok",
+        "",
+        "test result: ok. 1 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.00s",
+    ]
+    .join("\n");
+
+    combined.lines().for_each(|line| {
+        let _ = parser.push_line(line);
+    });
+
+    let model = parser.finalize().expect("model");
+    assert_eq!(model.test_results.len(), 1);
+    assert_eq!(model.aggregated.num_total_test_suites, 1);
+    assert_eq!(model.aggregated.num_passed_test_suites, 1);
+    assert_eq!(model.aggregated.num_total_tests, 1);
+    assert_eq!(model.aggregated.num_passed_tests, 1);
+    assert_eq!(model.aggregated.num_failed_tests, 0);
+}
