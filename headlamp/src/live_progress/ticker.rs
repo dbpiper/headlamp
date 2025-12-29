@@ -209,20 +209,22 @@ fn interactive_tick(shared: &TickerShared) {
     let done = shared.done_units.load(Ordering::SeqCst);
     let label = locked_clone(&shared.current_label).unwrap_or_default();
     let (elapsed_seconds, idle_seconds) = elapsed_and_idle_seconds(shared);
+    let columns = super::frame::terminal_columns();
     let recent = super::classify::recent_summary(
         locked_clone(&shared.last_runner_stdout_hint).flatten(),
         locked_clone(&shared.last_runner_stderr_hint).flatten(),
     );
-    let frame = super::frame::render_run_frame(
-        &label,
-        done,
-        shared.total_units.max(1),
-        shared.spinner_index.load(Ordering::SeqCst),
+    let frame = super::frame::render_run_frame_with_columns(super::frame::RenderRunFrameArgs {
+        current_label: &label,
+        done_units: done,
+        total_units: shared.total_units.max(1),
+        spinner_index: shared.spinner_index.load(Ordering::SeqCst),
         elapsed_seconds,
         idle_seconds,
-        &recent,
-    );
-    write_frame(shared, &frame);
+        recent: &recent,
+        columns,
+    });
+    write_frame(shared, &frame, columns);
 }
 
 fn plain_tick(shared: &PlainTickerShared) {
@@ -237,6 +239,7 @@ fn plain_tick(shared: &PlainTickerShared) {
         std::thread::sleep(Duration::from_secs(2));
         return;
     }
+    let columns = super::frame::terminal_columns();
     let recent = super::classify::recent_summary(
         locked_clone(&shared.shared.last_runner_stdout_hint).flatten(),
         locked_clone(&shared.shared.last_runner_stderr_hint).flatten(),
@@ -248,8 +251,9 @@ fn plain_tick(shared: &PlainTickerShared) {
         elapsed_seconds,
         idle_seconds,
         &recent,
+        columns,
     );
-    write_plain_line(shared, &line);
+    write_plain_line(shared, &line, columns);
 }
 
 fn elapsed_and_idle_seconds(shared: &TickerShared) -> (u64, u64) {
@@ -263,28 +267,29 @@ fn elapsed_and_idle_seconds(shared: &TickerShared) -> (u64, u64) {
     (elapsed_seconds, idle_seconds)
 }
 
-fn write_frame(shared: &TickerShared, frame: &str) {
+fn write_frame(shared: &TickerShared, frame: &str, columns: usize) {
     if let Ok(_guard) = shared.write_lock.lock() {
         let prev_lines = shared.last_frame_lines.load(Ordering::SeqCst);
         super::frame::clear_previous_frame(prev_lines);
         let _ = std::io::stdout().write_all(frame.as_bytes());
         let _ = std::io::stdout().flush();
-        shared
-            .last_frame_lines
-            .store(super::frame::frame_line_count(frame), Ordering::SeqCst);
+        shared.last_frame_lines.store(
+            super::frame::frame_physical_line_count(frame, columns),
+            Ordering::SeqCst,
+        );
     }
 }
 
-fn write_plain_line(shared: &PlainTickerShared, line: &str) {
+fn write_plain_line(shared: &PlainTickerShared, line: &str, columns: usize) {
     if let Ok(_guard) = shared.shared.write_lock.lock() {
         if shared.stdout_is_tty {
             let prev_lines = shared.shared.last_frame_lines.load(Ordering::SeqCst);
             super::frame::clear_previous_frame(prev_lines);
             let _ = std::io::stdout().write_all(line.as_bytes());
-            shared
-                .shared
-                .last_frame_lines
-                .store(super::frame::frame_line_count(line), Ordering::SeqCst);
+            shared.shared.last_frame_lines.store(
+                super::frame::frame_physical_line_count(line, columns),
+                Ordering::SeqCst,
+            );
         } else {
             let _ = std::io::stdout().write_all(line.as_bytes());
             let _ = std::io::stdout().write_all("\n".as_bytes());

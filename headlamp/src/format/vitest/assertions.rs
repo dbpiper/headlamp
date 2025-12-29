@@ -100,9 +100,11 @@ fn inline_synth_loc(
     let preferred_file = stack_loc
         .as_ref()
         .map(|(f, _, _)| f.as_str())
-        .and_then(|f| crate::format::failure_diagnostics::resolve_existing_path_best_effort(&ctx.cwd, f));
+        .and_then(|f| {
+            crate::format::failure_diagnostics::resolve_existing_path_best_effort(&ctx.cwd, f)
+        });
     let file_path = preferred_file.unwrap_or_else(|| file.test_file_path.clone());
-    (line > 0).then(|| Loc {
+    (line > 0).then_some(Loc {
         file: file_path,
         line,
         column,
@@ -151,22 +153,6 @@ fn render_expected_received_sections(messages_array: &[String]) -> Vec<String> {
         out.push(format!("      {}", colors::failure(&v)));
     }
     out.push(String::new());
-    out
-}
-
-fn render_expected_received_sections_compact(messages_array: &[String]) -> Vec<String> {
-    let (expected, received) = extract_expected_received_values(messages_array);
-    if expected.is_none() && received.is_none() {
-        return vec![];
-    }
-    let mut out: Vec<String> = vec![format!("    {}", ansi::bold("Expected"))];
-    if let Some(v) = expected {
-        out.push(format!("      {}", colors::success(&v)));
-    }
-    out.push(format!("    {}", ansi::bold("Received")));
-    if let Some(v) = received {
-        out.push(format!("      {}", colors::failure(&v)));
-    }
     out
 }
 
@@ -417,31 +403,22 @@ fn render_per_test_failure_details(
             .trim()
             .to_string()
     });
-    let stack_lines_simple = merged_for_stack
-        .iter()
-        .map(|ln| crate::format::stacks::strip_ansi_simple(ln))
-        .collect::<Vec<_>>();
-    let first_stack_line = stack_lines_simple
-        .iter()
-        .find(|ln| crate::format::stacks::is_stack_line(ln))
-        .map(|ln| crate::format::fns::color_stack_line(ln, &ctx.project_hint));
 
     let mut out: Vec<String> = vec![String::new()];
-    out.extend(failure_details_compact_prefix(
+    let has_pretty = expected.is_some() && received.is_some();
+    if let (Some(expected), Some(received)) = (expected.as_ref(), received.as_ref()) {
+        out.extend(render_pretty_expected_received(expected, received));
+    }
+    let stack_preview = build_stack_preview(merged_for_stack, ctx);
+    out.extend(render_message_section_like_legacy(
         messages_array,
-        &stack_lines_simple,
         expect_line_simple.as_deref(),
-        expected.as_ref(),
-        received.as_ref(),
+        has_pretty,
+        &stack_preview,
     ));
-    out.push(String::new());
-    out.extend(failure_details_expected_received_blocks(
-        expect_line.map(|s| s.as_str()),
-        expect_line_simple.as_deref(),
-        expected.as_ref(),
-        received.as_ref(),
-        first_stack_line.as_deref(),
-    ));
+    if ctx.show_stacks && stack_preview.is_empty() {
+        out.extend(render_stack_tail_like_legacy(merged_for_stack, ctx));
+    }
     out
 }
 
@@ -453,61 +430,156 @@ fn find_expect_line(messages_array: &[String]) -> Option<&String> {
     })
 }
 
-fn failure_details_compact_prefix(
-    messages_array: &[String],
-    stack_lines_simple: &[String],
-    expect_line_simple: Option<&str>,
-    _expected: Option<&String>,
-    _received: Option<&String>,
-) -> Vec<String> {
+fn render_pretty_expected_received(expected: &str, received: &str) -> Vec<String> {
     let mut out: Vec<String> = vec![];
-    out.extend(render_expected_received_sections_compact(messages_array));
-    out.extend(
-        stack_lines_simple
-            .iter()
-            .filter(|ln| crate::format::stacks::is_stack_line(ln))
-            .take(2)
-            .map(|ln| {
-                format!(
-                    "      {}",
-                    colors::failure(&format!("    {}", ln.trim_start()))
-                )
-            }),
-    );
-    expect_line_simple
-        .into_iter()
-        .for_each(|ln| out.push(format!("      {}", colors::failure(ln.trim_start()))));
-    if expect_line_simple.is_none() {
-        let message_lines = fallback_message_lines(messages_array);
-        if !message_lines.is_empty() {
-            out.push(format!("    {}", ansi::bold("Message:")));
-            message_lines
-                .iter()
-                .for_each(|ln| out.push(format!("    {}", ansi::yellow(ln))));
-        }
+    out.push(format!("    {}", ansi::bold("Expected")));
+    expected
+        .lines()
+        .for_each(|line| out.push(format!("      {}", colors::success(line))));
+    out.push(format!("    {}", ansi::bold("Received")));
+    received
+        .lines()
+        .for_each(|line| out.push(format!("      {}", colors::failure(line))));
+    out.push(String::new());
+    out
+}
+
+fn build_stack_preview(merged_for_stack: &[String], ctx: &Ctx) -> Vec<String> {
+    if !ctx.show_stacks {
+        return vec![];
     }
+    merged_for_stack
+        .iter()
+        .map(|ln| crate::format::stacks::strip_ansi_simple(ln))
+        .filter(|ln| crate::format::stacks::is_stack_line(ln))
+        .filter(|ln| ctx.project_hint.is_match(ln))
+        .take(2)
+        .map(|ln| {
+            format!(
+                "      {}",
+                crate::format::fns::color_stack_line(&ln, &ctx.project_hint)
+            )
+        })
+        .collect::<Vec<_>>()
+}
+
+fn render_message_section_like_legacy(
+    messages_array: &[String],
+    expect_line_simple: Option<&str>,
+    suppress_diff: bool,
+    stack_preview: &[String],
+) -> Vec<String> {
+    let label = if expect_line_simple.is_some() {
+        "Assertion:"
+    } else {
+        "Message:"
+    };
+    let body_lines = expect_line_simple
+        .map(|ln| vec![ln.trim_start().to_string()])
+        .unwrap_or_else(|| fallback_message_lines(messages_array));
+
+    let filtered_body = if suppress_diff {
+        body_lines
+            .into_iter()
+            .filter(|ln| {
+                let trimmed = ln.trim_start();
+                !(trimmed.starts_with("Expected:")
+                    || trimmed.starts_with("Received:")
+                    || trimmed.starts_with("Difference:")
+                    || trimmed.starts_with("- Expected")
+                    || trimmed.starts_with("+ Received"))
+            })
+            .collect::<Vec<_>>()
+    } else {
+        body_lines
+    };
+
+    if filtered_body.is_empty() && stack_preview.is_empty() {
+        return vec![];
+    }
+
+    let mut out: Vec<String> = vec![];
+    out.push(format!("    {}", ansi::bold(label)));
+    filtered_body
+        .iter()
+        .for_each(|ln| out.push(format!("    {}", ansi::yellow(ln))));
+    stack_preview.iter().for_each(|ln| out.push(ln.to_string()));
+    out.push(String::new());
+    out
+}
+
+fn render_stack_tail_like_legacy(merged_for_stack: &[String], ctx: &Ctx) -> Vec<String> {
+    if !ctx.show_stacks {
+        return vec![];
+    }
+    let only_stack = merged_for_stack
+        .iter()
+        .map(|ln| crate::format::stacks::strip_ansi_simple(ln))
+        .filter(|ln| crate::format::stacks::is_stack_line(ln))
+        .collect::<Vec<_>>();
+    let tail = only_stack
+        .into_iter()
+        .rev()
+        .take(4)
+        .collect::<Vec<_>>()
+        .into_iter()
+        .rev()
+        .collect::<Vec<_>>();
+    if tail.is_empty() {
+        return vec![];
+    }
+    let mut out: Vec<String> = vec![ansi::dim("    Stack:")];
+    tail.iter().for_each(|ln| {
+        out.push(format!(
+            "      {}",
+            crate::format::fns::color_stack_line(ln, &ctx.project_hint)
+        ));
+    });
+    out.push(String::new());
     out
 }
 
 fn fallback_message_lines(messages_array: &[String]) -> Vec<String> {
-    let lines = messages_array
+    let raw = messages_array
         .iter()
         .map(|ln| crate::format::stacks::strip_ansi_simple(ln))
         .map(|ln| ln.trim_end().to_string())
-        .map(|ln| normalize_message_line(&ln))
         .filter(|ln| {
             let trimmed = ln.trim_start();
             !(trimmed.is_empty()
                 || crate::format::stacks::is_stack_line(trimmed)
                 || super::CODE_FRAME_LINE_RE.is_match(trimmed))
         })
-        .take(6)
+        .map(|ln| normalize_message_line(&ln))
+        .filter(|ln| !ln.trim().is_empty())
+        .take(12)
         .collect::<Vec<_>>();
-    lines
+
+    let (seen, out) = raw.into_iter().fold(
+        (
+            std::collections::BTreeSet::<String>::new(),
+            Vec::<String>::new(),
+        ),
+        |(mut seen, mut out), line| {
+            if seen.contains(&line) {
+                return (seen, out);
+            }
+            seen.insert(line.clone());
+            out.push(line);
+            (seen, out)
+        },
+    );
+    let _ = seen;
+    out.into_iter().take(6).collect::<Vec<_>>()
 }
 
 fn normalize_message_line(line: &str) -> String {
     let trimmed = line.trim_start();
+    let trimmed = trimmed
+        .strip_prefix('E')
+        .and_then(|rest| rest.strip_prefix(' '))
+        .map(|rest| rest.trim_start())
+        .unwrap_or(trimmed);
     if trimmed.starts_with("thread '") && trimmed.contains("' panicked at ") {
         return String::new();
     }
@@ -523,6 +595,12 @@ fn normalize_message_line(line: &str) -> String {
     if let Some(rest) = trimmed.strip_prefix("AssertionError: ") {
         return rest.trim_start().to_string();
     }
+    if trimmed.starts_with("note: Some details are omitted") {
+        return String::new();
+    }
+    if trimmed.starts_with("note: run with `RUST_BACKTRACE=") {
+        return String::new();
+    }
     if let Some((_, rest)) = trimmed.split_once(": ")
         && trimmed
             .split_once(": ")
@@ -533,52 +611,4 @@ fn normalize_message_line(line: &str) -> String {
     trimmed.to_string()
 }
 
-fn failure_details_expected_received_blocks(
-    expect_line: Option<&str>,
-    expect_line_simple: Option<&str>,
-    expected: Option<&String>,
-    received: Option<&String>,
-    first_stack_line: Option<&str>,
-) -> Vec<String> {
-    let Some(expected) = expected else {
-        return vec![];
-    };
-    let Some(received) = received else {
-        return vec![];
-    };
-    let mut out: Vec<String> = vec![];
-    expect_line.into_iter().for_each(|line| {
-        out.push(format!("    {}", ansi::bold("Message:")));
-        out.push(format!("    {}", ansi::yellow(line.trim_start())));
-        out.push(format!("    {}", ansi::yellow("")));
-        out.push(format!(
-            "    {}",
-            ansi::yellow(&format!("Expected: {}", ansi::green(expected)))
-        ));
-        out.push(format!(
-            "    {}",
-            ansi::yellow(&format!("Received: {}", ansi::red(received)))
-        ));
-    });
-    expect_line_simple.into_iter().for_each(|simple| {
-        out.push(format!("    {}", ansi::bold("Error:")));
-        out.push(format!("    {}", ansi::yellow(&format!("Error: {simple}"))));
-        out.push(format!(
-            "    {}",
-            ansi::yellow(&format!("Expected: {expected}"))
-        ));
-        out.push(format!(
-            "    {}",
-            ansi::yellow(&format!("Received: {received}"))
-        ));
-        out.push(format!(
-            "    {}",
-            ansi::yellow(&format!("Received: {received}"))
-        ));
-        first_stack_line
-            .into_iter()
-            .for_each(|stack| out.push(format!("          {}", stack.trim_start())));
-        out.push(String::new());
-    });
-    out
-}
+// legacy-style rendering no longer uses the older compact prefix and expected/received block helpers

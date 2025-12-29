@@ -1,6 +1,6 @@
 ---
 source: headlamp_tests/tests/vitest_render_snapshot_test.rs
-assertion_line: 77
+assertion_line: 87
 expression: out
 ---
 [97m RUN [39m [2m/repo[22m
@@ -24,6 +24,9 @@ expression: out
     [1mReceived[22m
       2
 
+  HTTP:
+    GET https://api.example.test/foo [2m->[22m [33mconnection aborted[39m [2m(1s 500ms)[22m 
+
 [2m    Console errors:[22m
       [2m•[22m console error
 
@@ -37,4 +40,4 @@ expression: out
 
 [1mTest Files[22m 1 failed[2m | [22m1 passed [2m(2)[22m
 [1mTests[22m     1 failed[2m | [22m1 passed [2m(2)[22m
-[1mTime[22m      3ms
+[1mTime[22m      1s 500ms

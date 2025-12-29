@@ -1,5 +1,6 @@
 use std::path::Path;
 
+use crate::format::time::format_duration;
 use duct::cmd as duct_cmd;
 use thiserror::Error;
 
@@ -11,7 +12,7 @@ pub enum RunError {
     #[error("Error: {message}")]
     CommandFailed { message: String },
 
-    #[error("command timed out after {timeout_ms}ms: {command}")]
+    #[error("command timed out after {}: {command}", format_duration(std::time::Duration::from_millis(*timeout_ms)))]
     TimedOut { command: String, timeout_ms: u64 },
 
     #[error("failed to spawn process: {0}")]

@@ -95,5 +95,3 @@ fn renders_code_frame_when_stack_location_is_relative_to_repo_root() {
         "rendered output did not include code frame line 189.\n\nRendered:\n{plain}"
     );
 }
-
-

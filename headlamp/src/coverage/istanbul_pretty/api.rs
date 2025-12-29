@@ -23,7 +23,7 @@ pub fn format_istanbul_pretty(
 ) -> Option<String> {
     let merged = read_and_merge_coverage_final_json(coverage_root, repo_root)?;
     Some(render_pretty_output(
-        &merged,
+        merged,
         print_opts,
         selection_paths_abs,
         include_globs,
@@ -34,7 +34,7 @@ pub fn format_istanbul_pretty(
 
 pub fn format_istanbul_pretty_from_lcov_report(
     repo_root: &Path,
-    report: &CoverageReport,
+    report: CoverageReport,
     print_opts: &PrintOpts,
     selection_paths_abs: &[String],
     include_globs: &[String],
@@ -44,7 +44,7 @@ pub fn format_istanbul_pretty_from_lcov_report(
     let files = lcov_report_to_full_file_coverage(repo_root, report);
 
     render_pretty_output(
-        &files,
+        files,
         print_opts,
         selection_paths_abs,
         include_globs,
@@ -55,11 +55,11 @@ pub fn format_istanbul_pretty_from_lcov_report(
 
 pub(super) fn lcov_report_to_full_file_coverage(
     repo_root: &Path,
-    report: &CoverageReport,
+    report: CoverageReport,
 ) -> Vec<FullFileCoverage> {
     report
         .files
-        .iter()
+        .into_iter()
         .map(|file| {
             let abs_path = file.path.replace('\\', "/");
             let rel_path = Path::new(&abs_path)
@@ -69,38 +69,27 @@ pub(super) fn lcov_report_to_full_file_coverage(
                 .unwrap_or(abs_path.as_str())
                 .replace('\\', "/");
 
-            let statement_hits = file.statement_hits.clone().unwrap_or_else(|| {
-                file.line_hits
-                    .iter()
-                    .map(|(ln, hit)| (ln.to_string(), *hit))
-                    .collect::<std::collections::BTreeMap<_, _>>()
-            });
-            let statement_map = statement_hits
-                .keys()
-                .filter_map(|id| {
-                    let line_str = id.split_once(':').map_or(id.as_str(), |(a, _b)| a);
-                    let line = line_str.parse::<u32>().ok()?;
-                    Some((id.clone(), (line, line)))
-                })
-                .collect::<std::collections::BTreeMap<_, _>>();
+            // LCOV doesn't have Istanbul statement ranges; keep this empty and fall back to parsing
+            // statement IDs (or line hits) when computing hotspots.
+            let statement_map = std::collections::BTreeMap::new();
 
             FullFileCoverage {
                 abs_path,
                 rel_path,
-                statement_hits,
+                statement_hits: file.statement_hits.unwrap_or_default(),
                 statement_map,
-                function_hits: file.function_hits.clone(),
-                function_map: file.function_map.clone(),
-                branch_hits: file.branch_hits.clone(),
-                branch_map: file.branch_map.clone(),
-                line_hits: file.line_hits.clone(),
+                function_hits: file.function_hits,
+                function_map: file.function_map,
+                branch_hits: file.branch_hits,
+                branch_map: file.branch_map,
+                line_hits: file.line_hits,
             }
         })
         .collect::<Vec<_>>()
 }
 
 fn render_pretty_output(
-    files: &[super::model::FullFileCoverage],
+    mut files: Vec<super::model::FullFileCoverage>,
     print_opts: &PrintOpts,
     selection_paths_abs: &[String],
     include_globs: &[String],
@@ -122,40 +111,34 @@ fn render_pretty_output(
         rows_avail.saturating_add(8)
     } as usize;
 
-    let mut sorted = files.to_vec();
-    sorted.sort_by(|a, b| a.rel_path.cmp(&b.rel_path));
+    files.sort_by(|a, b| a.rel_path.cmp(&b.rel_path));
 
     let selection_set: BTreeSet<String> = selection_paths_abs
         .iter()
         .map(|p| p.replace('\\', "/"))
         .collect();
     if !selection_set.is_empty() {
-        sorted = sorted
-            .into_iter()
-            .filter(|file| selection_set.contains(&file.abs_path))
-            .collect::<Vec<_>>();
+        files.retain(|file| selection_set.contains(&file.abs_path));
     }
     let include_set = build_globset(include_globs);
     let exclude_set = build_globset(exclude_globs);
-    sorted = sorted
-        .into_iter()
-        .filter(|file| {
-            let rel = file.rel_path.replace('\\', "/");
-            let included = include_set.as_ref().is_none()
-                || include_set.as_ref().is_some_and(|s| s.is_match(&rel));
-            let excluded = exclude_set.as_ref().is_some_and(|s| s.is_match(&rel));
-            included && !excluded
-        })
-        .collect::<Vec<_>>();
+    files.retain(|file| {
+        let included = include_set.as_ref().is_none()
+            || include_set
+                .as_ref()
+                .is_some_and(|s| s.is_match(&file.rel_path));
+        let excluded = exclude_set
+            .as_ref()
+            .is_some_and(|s| s.is_match(&file.rel_path));
+        included && !excluded
+    });
 
-    let files_for_text = sorted.clone();
-
-    let mut out: Vec<String> = sorted
-        .into_iter()
+    let mut out: Vec<String> = files
+        .iter()
         .rev()
         .flat_map(|file| {
             render_per_file_composite_table(
-                &file,
+                file,
                 per_file_rows,
                 total_width,
                 print_opts.max_hotspots,
@@ -168,13 +151,13 @@ fn render_pretty_output(
 
     // Istanbul's text reporter uses a stable layout even on wide terminals; cap width for parity.
     let istanbul_width = total_width.min(60);
-    out.push(render_istanbul_text_report(&files_for_text, istanbul_width));
+    out.push(render_istanbul_text_report(&files, istanbul_width));
     out.push(String::new());
-    out.push(render_istanbul_text_summary(&files_for_text));
+    out.push(render_istanbul_text_summary(&files));
     if let Some(detail) = coverage_detail
         && detail != crate::args::CoverageDetail::Auto
     {
-        let detail_blocks = render_detail_blocks(&files_for_text, print_opts);
+        let detail_blocks = render_detail_blocks(&files, print_opts);
         if !detail_blocks.is_empty() {
             out.push(detail_blocks);
         }
@@ -217,7 +200,7 @@ fn render_detail_blocks(
     files: &[super::model::FullFileCoverage],
     print_opts: &PrintOpts,
 ) -> String {
-    let mut files_sorted = files.to_vec();
+    let mut files_sorted = files.iter().collect::<Vec<_>>();
     files_sorted.sort_by(|a, b| {
         let a_pct = super::analysis::file_summary(a).lines.pct();
         let b_pct = super::analysis::file_summary(b).lines.pct();
@@ -229,7 +212,7 @@ fn render_detail_blocks(
     let joiner = "\n\n";
     files_sorted
         .into_iter()
-        .filter_map(|file| render_detail_block(&file, print_opts))
+        .filter_map(|file| render_detail_block(file, print_opts))
         .collect::<Vec<_>>()
         .join(joiner)
 }

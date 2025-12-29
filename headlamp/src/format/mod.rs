@@ -16,5 +16,6 @@ pub mod paths;
 pub mod raw_jest;
 pub mod stacks;
 pub mod terminal;
+pub mod time;
 pub mod unstructured_engine;
 pub mod vitest;

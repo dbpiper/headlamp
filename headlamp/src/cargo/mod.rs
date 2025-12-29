@@ -71,7 +71,12 @@ pub fn run_cargo_test(repo_root: &Path, args: &ParsedArgs) -> Result<i32, RunErr
         return Ok(0);
     }
     if let Some(exit_code) = maybe_run_cargo_test_with_llvm_cov(repo_root, args, &selection)? {
-        return llvm_cov::finish_coverage_after_test_run(repo_root, args, exit_code);
+        return llvm_cov::finish_coverage_after_test_run(
+            repo_root,
+            args,
+            exit_code,
+            &selection.extra_cargo_args,
+        );
     }
     let run = run_cargo_test_streaming(repo_root, args, &selection.extra_cargo_args)?;
     print_runner_tail_if_failed_without_tests(run.exit_code, &run.model, &run.tail);
@@ -203,7 +208,12 @@ pub fn run_cargo_nextest(repo_root: &Path, args: &ParsedArgs) -> Result<i32, Run
     }
     ensure_cargo_nextest_is_available(repo_root)?;
     if let Some(exit_code) = maybe_run_nextest_with_llvm_cov(repo_root, args, &selection)? {
-        return llvm_cov::finish_coverage_after_test_run(repo_root, args, exit_code);
+        return llvm_cov::finish_coverage_after_test_run(
+            repo_root,
+            args,
+            exit_code,
+            &selection.extra_cargo_args,
+        );
     }
     let run = run_nextest_streaming(repo_root, args, &selection.extra_cargo_args)?;
     print_runner_tail_if_failed_without_tests(run.exit_code, &run.model, &run.tail);

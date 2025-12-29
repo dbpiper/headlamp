@@ -189,7 +189,11 @@ fn is_project_stack_frame(line: &str) -> bool {
 
 fn normalize_time_line(raw: &str) -> String {
     if raw.starts_with("Time      ") {
-        return "Time      0ms (in thread 0ms, 0.00%)".to_string();
+        let formatted_duration = headlamp::format::time::format_duration_at_least(
+            std::time::Duration::ZERO,
+            headlamp::format::time::TimeUnit::Millisecond,
+        );
+        return format!("Time      {formatted_duration}");
     }
     raw.to_string()
 }

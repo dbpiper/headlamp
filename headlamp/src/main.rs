@@ -55,15 +55,18 @@ fn main() {
     validate_watch_ci(&parsed);
     maybe_print_verbose_startup(runner, &repo_root, &parsed);
     let mut run_once_closure = || run_once(runner, &repo_root, &parsed);
-    let code = if parsed
-        .watch { {
+    let code = if parsed.watch {
+        {
             headlamp::watch::run_polling_watch_loop(
                 &repo_root,
                 std::time::Duration::from_millis(800),
                 parsed.verbose,
                 &mut run_once_closure,
             )
-        } } else { run_once_closure() };
+        }
+    } else {
+        run_once_closure()
+    };
     std::process::exit(code);
 }
 

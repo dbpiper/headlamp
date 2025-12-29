@@ -271,11 +271,7 @@ struct FixtureSpecOptions<'a> {
     stdout_piped: bool,
 }
 
-fn ts_fixture_spec(
-    opts: FixtureSpecOptions<'_>,
-    ts_cli: &Path,
-    ts_args: &[&str],
-) -> ParityRunSpec {
+fn ts_fixture_spec(opts: FixtureSpecOptions<'_>, ts_cli: &Path, ts_args: &[&str]) -> ParityRunSpec {
     let FixtureSpecOptions {
         repo,
         runner,

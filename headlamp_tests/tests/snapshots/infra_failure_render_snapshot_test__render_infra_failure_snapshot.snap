@@ -14,12 +14,10 @@ expression: out
 × [97m[97mheadlamp/infra > Test suite failed to run[39m  [2m(]8;;vscode://file//repo/src/main.rs:1main.rs:1]8;;)[22m[39m
 
 
-          at run_jest (/repo/src/jest.rs:10:3)
-          at main (/repo/src/main.rs:1:1)
     [1mMessage:[22m
     [33mmissing runner: jest (expected /repo/node_modules/.bin/jest)[39m
-    [33m    at run_jest (/repo/src/jest.rs:10:3)[39m
-    [33m    at main (/repo/src/main.rs:1:1)[39m
+          at run_jest ([36m/repo/src/jest.rs[39m[2m:[22m[97m10:3[39m)
+          at main ([36m/repo/src/main.rs[39m[2m:[22m[97m1:1[39m)
 
 ────────────────────────────────────────────────────────────────────────────────
 
@@ -27,4 +25,4 @@ expression: out
 
 [1mTest Files[22m 1 failed [2m(1)[22m
 [1mTests[22m     1 failed [2m(1)[22m
-[1mTime[22m      0ms
+[1mTime[22m      <1ns

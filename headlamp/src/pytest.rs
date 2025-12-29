@@ -7,7 +7,6 @@ use headlamp_core::coverage::istanbul_pretty::format_istanbul_pretty_from_lcov_r
 use headlamp_core::coverage::lcov::read_repo_lcov_filtered;
 use headlamp_core::coverage::model::apply_statement_totals_to_report;
 use headlamp_core::coverage::print::PrintOpts;
-use headlamp_core::coverage::thresholds::compare_thresholds_and_print_if_needed;
 use headlamp_core::format::ctx::make_ctx;
 use headlamp_core::format::vitest::render_vitest_from_test_model;
 use headlamp_core::test_model::{
@@ -71,6 +70,7 @@ fn build_pytest_cmd_args(args: &ParsedArgs, selected: &[String]) -> Vec<String> 
     let mut cmd_args: Vec<String> = vec![
         "-p".to_string(),
         "headlamp_pytest_plugin".to_string(),
+        "--tb=long".to_string(),
         "--no-header".to_string(),
         "--no-summary".to_string(),
         "-q".to_string(),
@@ -146,9 +146,15 @@ fn maybe_collect_pytest_coverage(
     let filtered = augment_with_coveragepy_statement_totals(repo_root, filtered);
     let print_opts =
         PrintOpts::for_run(args, headlamp_core::format::terminal::is_output_terminal());
+    let threshold_failure_lines = args.coverage_thresholds.as_ref().map(|thresholds| {
+        headlamp_core::coverage::thresholds::threshold_failure_lines(
+            thresholds,
+            headlamp_core::coverage::thresholds::compute_totals_from_report(&filtered),
+        )
+    });
     let pretty = format_istanbul_pretty_from_lcov_report(
         repo_root,
-        &filtered,
+        filtered,
         &print_opts,
         &[],
         &args.include_globs,
@@ -158,8 +164,13 @@ fn maybe_collect_pytest_coverage(
     if args.coverage_ui != headlamp_core::config::CoverageUi::Jest {
         println!("{pretty}");
     }
-    let thresholds_failed =
-        compare_thresholds_and_print_if_needed(args.coverage_thresholds.as_ref(), Some(&filtered));
+    let thresholds_failed = threshold_failure_lines.is_some_and(|lines| {
+        if lines.is_empty() {
+            return false;
+        }
+        headlamp_core::coverage::thresholds::print_threshold_failure_summary(&lines);
+        true
+    });
     Ok(if exit_code == 0 && thresholds_failed {
         1
     } else {
@@ -379,19 +390,33 @@ pub(crate) fn infer_test_location_from_pytest_longrepr(
     nodeid_file: &str,
     longrepr: &str,
 ) -> Option<TestLocation> {
-    static PY_FILE_LINE_RE: Lazy<Regex> = Lazy::new(|| {
-        Regex::new(r#"^\s*File\s+"([^"]+)",\s+line\s+(\d+)(?:,|$)"#).unwrap()
-    });
+    static PY_FILE_LINE_RE: Lazy<Regex> =
+        Lazy::new(|| Regex::new(r#"^\s*File\s+"([^"]+)",\s+line\s+(\d+)(?:,|$)"#).unwrap());
+    static PY_PATH_COLON_LINE_RE: Lazy<Regex> =
+        Lazy::new(|| Regex::new(r#"^\s*([^:\s]+):(\d+):\s*"#).unwrap());
     let needle = nodeid_file.replace('\\', "/");
     longrepr.lines().find_map(|line| {
-        let caps = PY_FILE_LINE_RE.captures(line)?;
-        let file = caps.get(1)?.as_str().replace('\\', "/");
-        let line_number = caps.get(2)?.as_str().parse::<i64>().ok()?;
-        let matches_file = file.ends_with(&needle) || needle.ends_with(&file);
-        (matches_file && line_number > 0).then_some(TestLocation {
-            line: line_number,
-            column: 1,
-        })
+        PY_FILE_LINE_RE
+            .captures(line)
+            .and_then(|caps| {
+                let file = caps.get(1)?.as_str().replace('\\', "/");
+                let line_number = caps.get(2)?.as_str().parse::<i64>().ok()?;
+                let matches_file = file.ends_with(&needle) || needle.ends_with(&file);
+                (matches_file && line_number > 0).then_some(TestLocation {
+                    line: line_number,
+                    column: 1,
+                })
+            })
+            .or_else(|| {
+                let caps = PY_PATH_COLON_LINE_RE.captures(line)?;
+                let file = caps.get(1)?.as_str().replace('\\', "/");
+                let line_number = caps.get(2)?.as_str().parse::<i64>().ok()?;
+                let matches_file = file.ends_with(&needle) || needle.ends_with(&file);
+                (matches_file && line_number > 0).then_some(TestLocation {
+                    line: line_number,
+                    column: 1,
+                })
+            })
     })
 }
 

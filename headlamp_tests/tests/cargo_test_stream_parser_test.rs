@@ -1,7 +1,7 @@
 use std::path::Path;
 
-use headlamp::format::cargo_test::{CargoTestStreamEvent, CargoTestStreamParser};
 use headlamp::format::cargo_test::parse_cargo_test_output;
+use headlamp::format::cargo_test::{CargoTestStreamEvent, CargoTestStreamParser};
 
 #[test]
 fn cargo_test_stream_parser_emits_test_finished_and_finalizes_with_failure_details() {
@@ -198,7 +198,10 @@ fn cargo_test_parser_resolves_suite_paths_in_workspace_members_and_sets_location
         .iter()
         .find(|t| t.status == "failed")
         .expect("failed test present");
-    let loc = failed.location.as_ref().expect("location should be inferred");
+    let loc = failed
+        .location
+        .as_ref()
+        .expect("location should be inferred");
     assert_eq!(loc.line, 12);
     assert_eq!(loc.column, 3);
 }

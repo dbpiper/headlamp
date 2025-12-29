@@ -85,27 +85,25 @@ pub fn apply_statement_totals_to_report(
 
 pub fn apply_statement_hits_to_report(
     report: CoverageReport,
-    statement_hits_by_path: &BTreeMap<String, BTreeMap<String, u32>>,
+    mut statement_hits_by_path: BTreeMap<String, BTreeMap<String, u32>>,
 ) -> CoverageReport {
     let files = report
         .files
         .into_iter()
-        .map(
-            |file| match statement_hits_by_path.get(&file.path).cloned() {
-                Some(hits) => {
-                    let total = (hits.len() as u64).min(u64::from(u32::MAX)) as u32;
-                    let covered = (hits.values().filter(|h| **h > 0).count() as u64)
-                        .min(u64::from(u32::MAX)) as u32;
-                    FileCoverage {
-                        statements_total: Some(total),
-                        statements_covered: Some(covered),
-                        statement_hits: Some(hits),
-                        ..file
-                    }
+        .map(|file| match statement_hits_by_path.remove(&file.path) {
+            Some(hits) => {
+                let total = (hits.len() as u64).min(u64::from(u32::MAX)) as u32;
+                let covered = (hits.values().filter(|h| **h > 0).count() as u64)
+                    .min(u64::from(u32::MAX)) as u32;
+                FileCoverage {
+                    statements_total: Some(total),
+                    statements_covered: Some(covered),
+                    statement_hits: Some(hits),
+                    ..file
                 }
-                None => file,
-            },
-        )
+            }
+            None => file,
+        })
         .collect::<Vec<_>>();
     CoverageReport { files }
 }

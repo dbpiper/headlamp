@@ -23,7 +23,7 @@ DA:11,1
 end_of_record
 ";
     let report = parse_lcov_text(input);
-    let files = lcov_report_to_full_file_coverage(Path::new("/repo"), &report);
+    let files = lcov_report_to_full_file_coverage(Path::new("/repo"), report);
     assert_eq!(files.len(), 1);
     let file = &files[0];
 
@@ -73,7 +73,7 @@ fn lcov_to_full_file_coverage_uses_statement_hits_when_present() {
             branch_map: BTreeMap::new(),
         }],
     };
-    let files = lcov_report_to_full_file_coverage(Path::new("/repo"), &report);
+    let files = lcov_report_to_full_file_coverage(Path::new("/repo"), report);
     assert_eq!(files.len(), 1);
     let file = &files[0];
 

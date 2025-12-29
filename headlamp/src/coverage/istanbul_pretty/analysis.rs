@@ -1,12 +1,58 @@
-use std::collections::BTreeSet;
-
 use super::model::{
     Counts, FileSummary, FullFileCoverage, MissedBranch, MissedFunction, UncoveredRange,
 };
 
+fn format_coverage_function_name(raw: &str) -> String {
+    fn strip_bracketed_disambiguators(text: &str) -> String {
+        let mut out = String::with_capacity(text.len());
+        let mut skipping = false;
+        for character in text.chars() {
+            if skipping {
+                if character == ']' {
+                    skipping = false;
+                }
+                continue;
+            }
+            if character == '[' {
+                skipping = true;
+                continue;
+            }
+            out.push(character);
+        }
+        out
+    }
+
+    fn keep_last_segments(demangled: &str, keep: usize) -> String {
+        let segments = demangled.split("::").collect::<Vec<_>>();
+        let tail = segments
+            .len()
+            .saturating_sub(keep.max(1))
+            .min(segments.len());
+        segments[tail..].join("::")
+    }
+
+    if !raw.starts_with("_R") {
+        return raw.to_string();
+    }
+
+    let demangled = rustc_demangle::demangle(raw).to_string();
+    if demangled == raw {
+        return raw.to_string();
+    }
+    let demangled = strip_bracketed_disambiguators(&demangled);
+    keep_last_segments(&demangled, 3)
+}
+
 pub(super) fn file_summary(file: &FullFileCoverage) -> FileSummary {
-    let statement_total = file.statement_hits.len() as u32;
-    let statement_covered = file.statement_hits.values().filter(|v| **v > 0).count() as u32;
+    let (statement_total, statement_covered) = if file.statement_hits.is_empty() {
+        let total = file.line_hits.len() as u32;
+        let covered = file.line_hits.values().filter(|v| **v > 0).count() as u32;
+        (total, covered)
+    } else {
+        let total = file.statement_hits.len() as u32;
+        let covered = file.statement_hits.values().filter(|v| **v > 0).count() as u32;
+        (total, covered)
+    };
 
     let function_total = file.function_hits.len() as u32;
     let function_covered = file.function_hits.values().filter(|v| **v > 0).count() as u32;
@@ -43,19 +89,22 @@ pub(super) fn file_summary(file: &FullFileCoverage) -> FileSummary {
 }
 
 pub(super) fn compute_uncovered_blocks(file: &FullFileCoverage) -> Vec<UncoveredRange> {
-    let missed_lines: BTreeSet<u32> = file
-        .statement_hits
-        .iter()
-        .filter(|(_id, hit)| **hit == 0)
-        .filter_map(|(id, _)| file.statement_map.get(id).copied())
-        .flat_map(|(start, end)| {
-            let from = start.max(1);
-            let to = end.max(from);
-            (from..=to).collect::<Vec<_>>()
-        })
-        .collect();
+    let mut lines = if file.statement_hits.is_empty() {
+        file.line_hits
+            .iter()
+            .filter_map(|(line, hit)| (*hit == 0).then_some(*line))
+            .collect::<Vec<_>>()
+    } else {
+        file.statement_hits
+            .iter()
+            .filter(|(_id, hit)| **hit == 0)
+            .filter_map(|(id, _)| statement_line_range_for_id(file, id))
+            .flat_map(|(start, end)| (start..=end).collect::<Vec<_>>())
+            .collect::<Vec<_>>()
+    };
+    lines.sort_unstable();
+    lines.dedup();
 
-    let lines = missed_lines.into_iter().collect::<Vec<_>>();
     let mut ranges: Vec<UncoveredRange> = vec![];
     let mut index = 0usize;
     while index < lines.len() {
@@ -76,6 +125,17 @@ pub(super) fn compute_uncovered_blocks(file: &FullFileCoverage) -> Vec<Uncovered
     ranges
 }
 
+fn statement_line_range_for_id(file: &FullFileCoverage, id: &str) -> Option<(u32, u32)> {
+    if let Some((start, end)) = file.statement_map.get(id).copied() {
+        let from = start.max(1);
+        let to = end.max(from);
+        return Some((from, to));
+    }
+    let (line_str, _rest) = id.split_once(':').unwrap_or((id, ""));
+    let line = line_str.parse::<u32>().ok()?;
+    (line > 0).then_some((line, line))
+}
+
 pub(super) fn missed_functions(file: &FullFileCoverage) -> Vec<MissedFunction> {
     let mut out: Vec<MissedFunction> = file
         .function_hits
@@ -87,7 +147,10 @@ pub(super) fn missed_functions(file: &FullFileCoverage) -> Vec<MissedFunction> {
                 .get(id)
                 .cloned()
                 .unwrap_or_else(|| ("(anonymous)".to_string(), 0));
-            MissedFunction { name, line }
+            MissedFunction {
+                name: format_coverage_function_name(&name),
+                line,
+            }
         })
         .collect();
     out.sort_by(|a, b| a.line.cmp(&b.line));

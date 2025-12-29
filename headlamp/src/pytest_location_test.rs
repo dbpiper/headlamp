@@ -8,10 +8,8 @@ fn infers_test_location_from_pytest_longrepr_when_frame_matches_nodeid_file() {
     assert 1 == 2
 E   AssertionError: assert 1 == 2
 "#;
-    let loc = infer_test_location_from_pytest_longrepr(nodeid_file, longrepr)
-        .expect("location inferred");
+    let loc =
+        infer_test_location_from_pytest_longrepr(nodeid_file, longrepr).expect("location inferred");
     assert_eq!(loc.line, 12);
     assert_eq!(loc.column, 1);
 }
-
-

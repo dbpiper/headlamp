@@ -56,13 +56,16 @@ pub(super) fn finish_coverage_after_test_run(
     repo_root: &Path,
     args: &ParsedArgs,
     exit_code: i32,
+    _extra_cargo_args: &[String],
 ) -> Result<i32, RunError> {
     if args.coverage_abort_on_failure && exit_code != 0 {
         return Ok(normalize_runner_exit_code(exit_code));
     }
     {
         let _span = profile::span("cargo llvm-cov report (lcov+json)");
-        run_cargo_llvm_cov_report(repo_root)?;
+        let report_scope_args = extract_llvm_cov_report_scope_args(&args.runner_args);
+        run_cargo_llvm_cov_report_lcov(repo_root, &report_scope_args)?;
+        run_cargo_llvm_cov_report_json(repo_root, &report_scope_args)?;
     }
     if args.coverage_ui != CoverageUi::Jest {
         let thresholds_failed = coverage::print_lcov(repo_root, args);
@@ -202,69 +205,130 @@ pub(super) fn run_cargo_llvm_cov_nextest_and_render(
     Ok(exit_code)
 }
 
-fn run_cargo_llvm_cov_report(repo_root: &Path) -> Result<(), RunError> {
+fn extract_llvm_cov_report_scope_args(runner_args: &[String]) -> Vec<String> {
+    fn is_value_flag_needing_arg(flag: &str) -> bool {
+        matches!(
+            flag,
+            "-p" | "--package" | "--exclude" | "--features" | "--target" | "--manifest-path"
+        )
+    }
+
+    let mut out: Vec<String> = vec![];
+    let mut iter = runner_args.iter().peekable();
+    while let Some(token) = iter.next() {
+        if token == "--" {
+            break;
+        }
+        if token == "--workspace"
+            || token == "--all-features"
+            || token == "--no-default-features"
+            || token == "--release"
+        {
+            out.push(token.clone());
+            continue;
+        }
+        if is_value_flag_needing_arg(token) {
+            if let Some(value) = iter.next() {
+                out.push(token.clone());
+                out.push(value.clone());
+            }
+            continue;
+        }
+        if token.starts_with("--package=")
+            || token.starts_with("--exclude=")
+            || token.starts_with("--features=")
+            || token.starts_with("--target=")
+            || token.starts_with("--manifest-path=")
+        {
+            out.push(token.clone());
+            continue;
+        }
+    }
+    out
+}
+
+fn run_cargo_llvm_cov_report_lcov(
+    repo_root: &Path,
+    report_scope_args: &[String],
+) -> Result<(), RunError> {
     let cargo_target_dir = headlamp_cargo_target_dir_for_duct(repo_root);
     let use_nightly = can_use_nightly(repo_root);
     let enable_branch_coverage = use_nightly;
-    let lcov_args = build_cargo_llvm_cov_command_args(
+    let mut subcommand_args: Vec<String> = vec![
+        "report".to_string(),
+        "--lcov".to_string(),
+        "--output-path".to_string(),
+        "coverage/lcov.info".to_string(),
+        "--color".to_string(),
+        "never".to_string(),
+    ];
+    subcommand_args.extend(report_scope_args.iter().cloned());
+    let args = build_cargo_llvm_cov_command_args(
         enable_branch_coverage,
         use_nightly,
         false,
-        &[
-            "report".to_string(),
-            "--lcov".to_string(),
-            "--output-path".to_string(),
-            "coverage/lcov.info".to_string(),
-            "--color".to_string(),
-            "never".to_string(),
-        ],
+        &subcommand_args,
     );
-    let out = duct_cmd("cargo", lcov_args)
+    let out = duct_cmd("cargo", args)
         .dir(repo_root)
-        .env("CARGO_TARGET_DIR", cargo_target_dir.clone())
+        .env("CARGO_TARGET_DIR", cargo_target_dir)
         .stderr_to_stdout()
         .stdout_capture()
         .unchecked()
         .run()
         .map_err(|e| RunError::Io(std::io::Error::other(e.to_string())))?;
-    if !out.status.success() {
+    if out.status.success() {
+        Ok(())
+    } else {
         Err(RunError::CommandFailed {
             message: format!(
-                "cargo llvm-cov report failed (exit={})",
-                out.status.code().unwrap_or(1)
+                "cargo llvm-cov report failed (exit={}):\n{}",
+                out.status.code().unwrap_or(1),
+                String::from_utf8_lossy(&out.stdout)
             ),
         })
+    }
+}
+
+fn run_cargo_llvm_cov_report_json(
+    repo_root: &Path,
+    report_scope_args: &[String],
+) -> Result<(), RunError> {
+    let cargo_target_dir = headlamp_cargo_target_dir_for_duct(repo_root);
+    let use_nightly = can_use_nightly(repo_root);
+    let enable_branch_coverage = use_nightly;
+    let mut subcommand_args: Vec<String> = vec![
+        "report".to_string(),
+        "--json".to_string(),
+        "--output-path".to_string(),
+        "coverage/coverage.json".to_string(),
+        "--color".to_string(),
+        "never".to_string(),
+    ];
+    subcommand_args.extend(report_scope_args.iter().cloned());
+    let args = build_cargo_llvm_cov_command_args(
+        enable_branch_coverage,
+        use_nightly,
+        false,
+        &subcommand_args,
+    );
+    let out = duct_cmd("cargo", args)
+        .dir(repo_root)
+        .env("CARGO_TARGET_DIR", cargo_target_dir)
+        .stderr_to_stdout()
+        .stdout_capture()
+        .unchecked()
+        .run()
+        .map_err(|e| RunError::Io(std::io::Error::other(e.to_string())))?;
+    if out.status.success() {
+        Ok(())
     } else {
-        let json_args = build_cargo_llvm_cov_command_args(
-            enable_branch_coverage,
-            use_nightly,
-            false,
-            &[
-                "report".to_string(),
-                "--json".to_string(),
-                "--output-path".to_string(),
-                "coverage/coverage.json".to_string(),
-                "--color".to_string(),
-                "never".to_string(),
-            ],
-        );
-        let json_out = duct_cmd("cargo", json_args)
-            .dir(repo_root)
-            .env("CARGO_TARGET_DIR", cargo_target_dir)
-            .stderr_to_stdout()
-            .stdout_capture()
-            .unchecked()
-            .run()
-            .map_err(|e| RunError::Io(std::io::Error::other(e.to_string())))?;
-        if json_out.status.success() {
-            Ok(())
-        } else {
-            Err(RunError::CommandFailed {
-                message: format!(
-                    "cargo llvm-cov report --json failed (exit={})",
-                    json_out.status.code().unwrap_or(1)
-                ),
-            })
-        }
+        Err(RunError::CommandFailed {
+            message: format!(
+                "cargo llvm-cov report --json failed (exit={}):\n{}",
+                out.status.code().unwrap_or(1),
+                String::from_utf8_lossy(&out.stdout)
+            ),
+        })
     }
 }

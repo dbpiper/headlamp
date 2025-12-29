@@ -1,6 +1,6 @@
 use headlamp::live_progress::{
-    LiveProgressMode, RenderRunFrameArgs, live_progress_mode_with_env_ci, render_run_frame,
-    render_run_frame_with_columns,
+    LiveProgressMode, RenderRunFrameArgs, frame_physical_line_count,
+    live_progress_mode_with_env_ci, render_run_frame, render_run_frame_with_columns,
 };
 
 #[test]
@@ -42,6 +42,14 @@ fn live_progress_long_details_wraps_to_multiple_physical_lines() {
     assert!(frame_a.starts_with("RUN ["));
     assert!(frame_a.contains("stderr:"));
     assert!(frame_a.contains('\n'));
+}
+
+#[test]
+fn live_progress_frame_physical_line_count_counts_wrapped_lines_even_without_newlines() {
+    let columns = 20;
+    let long_single_line = "x".repeat(60);
+    assert!(!long_single_line.contains('\n'));
+    assert_eq!(frame_physical_line_count(&long_single_line, columns), 3);
 }
 
 #[test]

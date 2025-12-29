@@ -23,6 +23,7 @@ expression: out
       2
     [1mReceived[22m
       1
+
     [1mMessage:[22m
     [33massertion `left == right` failed[39m
     [33mleft: 1[39m

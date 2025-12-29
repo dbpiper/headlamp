@@ -1,6 +1,6 @@
 ---
 source: headlamp_parity_tests/tests/parity_support/runner_parity.rs
-assertion_line: 617
+assertion_line: 32
 expression: canonical
 ---
 [<N>;<N>;<N>;<N>;246m[97m RUN [39m[0m [2m<ROOT>[22m
@@ -26,4 +26,4 @@ expression: canonical
 
 [1mTest Files[22m [<N>;<N>;<N>;<N>;35m1 failed[0m[2m | [22m[<N>;<N>;<N>;<N>;94m4 passed[0m [2m(<N>)[22m
 [1mTests[22m     [<N>;<N>;<N>;<N>;35m1 failed[0m[2m | [22m[<N>;<N>;<N>;<N>;94m4 passed[0m [2m(<N>)[22m
-[1mTime[22m <N>ms
+[1mTime[22m      <DURATION>

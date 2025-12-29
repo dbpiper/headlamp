@@ -1,5 +1,6 @@
 use crate::format::ansi;
 use crate::format::bridge_console::{AssertionEvt, HttpEvent};
+use crate::format::time::format_duration;
 
 const METHODS: [&str; 7] = ["GET", "POST", "PUT", "PATCH", "DELETE", "HEAD", "OPTIONS"];
 
@@ -125,12 +126,14 @@ fn render_transport_http_card(
         nearest_abort.url.as_deref(),
         nearest_abort.route.as_deref(),
     );
-    let ms = nearest_abort
+    let duration = nearest_abort
         .duration_ms
-        .map(|n| format!(" {}", ansi::dim(&format!("({n}ms)"))))
+        .and_then(|n| u64::try_from(n).ok())
+        .map(|ms| format_duration(std::time::Duration::from_millis(ms)))
+        .map(|formatted| format!(" {}", ansi::dim(&format!("({formatted})"))))
         .unwrap_or_default();
     let header = format!(
-        "  HTTP:\n    {where_text} {} {}{ms} \n",
+        "  HTTP:\n    {where_text} {} {}{duration} \n",
         ansi::dim("->"),
         ansi::yellow("connection aborted")
     );
@@ -149,7 +152,9 @@ fn render_http_header_and_expectations(relevant: &HttpEvent, corr: &AssertionEvt
         .unwrap_or_else(|| "?".to_string());
     let duration = relevant
         .duration_ms
-        .map(|n| format!(" {} ", ansi::dim(&format!("({n}ms)"))))
+        .and_then(|n| u64::try_from(n).ok())
+        .map(|ms| format_duration(std::time::Duration::from_millis(ms)))
+        .map(|formatted| format!(" {} ", ansi::dim(&format!("({formatted})"))))
         .unwrap_or_else(|| " ".to_string());
     let content_type = relevant
         .content_type

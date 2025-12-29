@@ -3,7 +3,9 @@ mod frame;
 mod ticker;
 
 pub use classify::classify_runner_line_for_progress;
-pub use frame::{RenderRunFrameArgs, render_run_frame, render_run_frame_with_columns};
+pub use frame::{
+    RenderRunFrameArgs, frame_physical_line_count, render_run_frame, render_run_frame_with_columns,
+};
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum LiveProgressMode {

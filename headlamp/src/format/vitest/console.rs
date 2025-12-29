@@ -54,5 +54,31 @@ pub(super) fn extract_expected_received_values(
             .strip_prefix("right: ")
             .map(|v| v.trim().to_string())
     });
-    (right, left)
+    if left.is_some() || right.is_some() {
+        return (right, left);
+    }
+
+    extract_pytest_expected_received(&stripped)
+}
+
+fn extract_pytest_expected_received(lines: &[String]) -> (Option<String>, Option<String>) {
+    let candidates = lines
+        .iter()
+        .map(|ln| ln.trim_start())
+        .map(|ln| ln.strip_prefix("E ").unwrap_or(ln))
+        .collect::<Vec<_>>();
+
+    // Pytest (simple) assertion introspection for constants usually has a line like:
+    // "assert 1 == 2"
+    let eq = candidates.iter().find_map(|ln| {
+        let t = ln.trim();
+        t.strip_prefix("assert ")
+            .and_then(|rest| rest.split_once(" == "))
+            .map(|(l, r)| (l.trim().to_string(), r.trim().to_string()))
+    });
+    let Some((left, right)) = eq else {
+        return (None, None);
+    };
+    // Standardize with Rust mapping: Expected=right, Received=left
+    (Some(right), Some(left))
 }

@@ -15,7 +15,8 @@ pub fn run_cmd_tty(mut cmd: Command, columns: usize) -> (i32, String) {
     let shell_cmd = build_tty_shell_command(&cmd, columns);
     let script = build_script_command(&cmd, &tty_capture_path, shell_cmd);
     let Some((code, stderr_text)) = run_script_capture_stderr(script, tty_timeout()) else {
-        return run_cmd_tty_portable_pty(&cmd, columns, tty_timeout()).unwrap_or((1, String::new()));
+        return run_cmd_tty_portable_pty(&cmd, columns, tty_timeout())
+            .unwrap_or((1, String::new()));
     };
     let combined = sanitize_tty_output(format!("{}{}", read_lossy(&tty_capture_path), stderr_text));
     let _ = std::fs::remove_file(&tty_capture_path);
@@ -31,7 +32,8 @@ pub fn run_cmd_tty_stdout_piped(mut cmd: Command, columns: usize) -> (i32, Strin
     let shell_cmd = build_tty_shell_command_stdout_redirect(&cmd, columns, &stdout_capture_path);
     let script = build_script_command(&cmd, &tty_capture_path, shell_cmd);
     let Some((code, stderr_text)) = run_script_capture_stderr(script, tty_timeout()) else {
-        return run_cmd_tty_portable_pty(&cmd, columns, tty_timeout()).unwrap_or((1, String::new()));
+        return run_cmd_tty_portable_pty(&cmd, columns, tty_timeout())
+            .unwrap_or((1, String::new()));
     };
     let combined = sanitize_tty_output(format!(
         "{}{}{}",

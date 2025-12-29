@@ -61,6 +61,18 @@ fn jest_list_tests_times_out() {
 }
 
 #[test]
+fn run_error_timed_out_formats_duration_prettily() {
+    let err = RunError::TimedOut {
+        command: "sleep forever".to_string(),
+        timeout_ms: 1500,
+    };
+    let rendered = err.to_string();
+    assert!(rendered.contains("command timed out after"));
+    assert!(rendered.contains("1s 500ms"));
+    assert!(!rendered.contains("1500ms"));
+}
+
+#[test]
 fn jest_list_tests_timeout_falls_back_to_rg_when_related_paths_exist() {
     #[cfg(not(unix))]
     {

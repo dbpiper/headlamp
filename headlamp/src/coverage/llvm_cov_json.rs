@@ -1,7 +1,7 @@
 use std::collections::BTreeMap;
 use std::path::Path;
 
-use serde_json::Value;
+use serde::Deserialize;
 
 pub fn read_repo_llvm_cov_json_statement_hits(
     repo_root: &Path,
@@ -15,37 +15,35 @@ pub fn parse_llvm_cov_json_statement_hits(
     text: &str,
     repo_root: &Path,
 ) -> Result<BTreeMap<String, BTreeMap<String, u32>>, String> {
-    let root: Value = serde_json::from_str(text).map_err(|e| e.to_string())?;
-    let data = root
-        .get("data")
-        .and_then(Value::as_array)
-        .ok_or_else(|| "missing data array".to_string())?;
+    #[derive(Debug, Deserialize)]
+    struct Root {
+        data: Vec<Datum>,
+    }
+
+    #[derive(Debug, Deserialize)]
+    struct Datum {
+        files: Vec<FileRecord>,
+    }
+
+    #[derive(Debug, Deserialize)]
+    struct FileRecord {
+        filename: String,
+        segments: Vec<(u64, u64, u64, bool, bool, bool)>,
+    }
+
+    let root: Root = serde_json::from_str(text).map_err(|e| e.to_string())?;
 
     let mut unit_hits_by_path: BTreeMap<String, BTreeMap<(u32, u32), u32>> = BTreeMap::new();
 
-    data.iter()
-        .flat_map(|datum| {
-            datum
-                .get("files")
-                .and_then(Value::as_array)
-                .into_iter()
-                .flatten()
-        })
-        .filter_map(|file| {
-            let filename = file.get("filename").and_then(Value::as_str)?;
-            let normalized = crate::coverage::lcov::normalize_lcov_path(filename, repo_root);
-            let segments = file.get("segments").and_then(Value::as_array)?;
-            Some((normalized, segments))
-        })
-        .for_each(|(path, segments)| {
+    root.data
+        .into_iter()
+        .flat_map(|datum| datum.files.into_iter())
+        .for_each(|file| {
+            let path = crate::coverage::lcov::normalize_lcov_path(&file.filename, repo_root);
             let entry = unit_hits_by_path.entry(path).or_default();
-            segments
-                .iter()
-                .filter_map(|segment| {
-                    segment
-                        .as_array()
-                        .and_then(|v| parse_region_entry_unit(v.as_slice()))
-                })
+            file.segments
+                .into_iter()
+                .filter_map(parse_region_entry_unit)
                 .for_each(|((line, col), hit_count)| {
                     let prev = entry.get(&(line, col)).copied().unwrap_or(0);
                     entry.insert((line, col), prev.max(hit_count));
@@ -64,13 +62,10 @@ pub fn parse_llvm_cov_json_statement_hits(
         .collect::<BTreeMap<_, _>>())
 }
 
-fn parse_region_entry_unit(segment: &[Value]) -> Option<((u32, u32), u32)> {
-    let line = segment.first().and_then(Value::as_u64)?;
-    let col = segment.get(1).and_then(Value::as_u64)?;
-    let hit_count = segment.get(2).and_then(Value::as_u64)?;
-    let has_count = segment.get(3).and_then(Value::as_bool)?;
-    let is_region_entry = segment.get(4).and_then(Value::as_bool)?;
-    let is_gap_region = segment.get(5).and_then(Value::as_bool)?;
+fn parse_region_entry_unit(
+    segment: (u64, u64, u64, bool, bool, bool),
+) -> Option<((u32, u32), u32)> {
+    let (line, col, hit_count, has_count, is_region_entry, is_gap_region) = segment;
     let line_u32 = line.min(u64::from(u32::MAX)) as u32;
     let col_u32 = col.min(u64::from(u32::MAX)) as u32;
     let hit_u32 = hit_count.min(u64::from(u32::MAX)) as u32;

@@ -566,6 +566,7 @@ dependencies = [
  "path-slash",
  "pathdiff",
  "regex",
+ "rustc-demangle",
  "serde",
  "serde_json",
  "serde_yaml",
@@ -577,6 +578,7 @@ dependencies = [
  "terminal_size",
  "thiserror 2.0.17",
  "toml",
+ "unicode-width",
  "wait-timeout",
  "which",
 ]
@@ -1483,6 +1485,12 @@ name = "regex-syntax"
 version = "0.8.8"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "7a2d987857b319362043e95f5353c0535c1f58eec5336fdfcf626430af7def58"
+
+[[package]]
+name = "rustc-demangle"
+version = "0.1.26"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "56f7d92ca342cea22a06f2121d944b4fd82af56988c270852495420f961d4ace"
 
 [[package]]
 name = "rustc-hash"

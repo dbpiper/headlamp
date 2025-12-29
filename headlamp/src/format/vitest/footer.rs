@@ -2,6 +2,8 @@ use crate::format::ansi;
 use crate::format::colors;
 use crate::format::ctx::Ctx;
 use crate::format::fns::draw_rule;
+use crate::format::stacks;
+use crate::format::time::format_duration;
 use crate::test_model::{TestRunAggregated, TestRunModel};
 
 pub(super) fn render_footer(
@@ -11,12 +13,12 @@ pub(super) fn render_footer(
     only_failures: bool,
 ) -> Vec<String> {
     let filtered_agg = aggregated_from_suites(suites, data.aggregated.run_time_ms, data.start_time);
-    let failed_count = if filtered_agg.num_total_tests == 0 && filtered_agg.num_failed_test_suites > 0
-    {
-        filtered_agg.num_failed_test_suites
-    } else {
-        filtered_agg.num_failed_tests
-    };
+    let failed_count =
+        if filtered_agg.num_total_tests == 0 && filtered_agg.num_failed_test_suites > 0 {
+            filtered_agg.num_failed_test_suites
+        } else {
+            filtered_agg.num_failed_tests
+        };
     let timed_out_count = filtered_agg.num_timed_out_tests.unwrap_or(0);
     let footer = vitest_footer(&filtered_agg, only_failures);
 
@@ -57,9 +59,14 @@ fn aggregated_from_suites(
             let next_passed = passed.saturating_add((test.status == "passed") as u64);
             let next_pending = pending.saturating_add((test.status == "pending") as u64);
             let next_todo = todo.saturating_add((test.status == "todo") as u64);
-            let next_timed_out =
-                timed_out.saturating_add((test.timed_out.unwrap_or(false)) as u64);
-            (next_failed, next_passed, next_pending, next_todo, next_timed_out)
+            let next_timed_out = timed_out.saturating_add((test.timed_out.unwrap_or(false)) as u64);
+            (
+                next_failed,
+                next_passed,
+                next_pending,
+                next_todo,
+                next_timed_out,
+            )
         });
     let total_tests = suites
         .iter()
@@ -67,7 +74,9 @@ fn aggregated_from_suites(
         .sum::<u64>();
     let failed_suites = suites
         .iter()
-        .filter(|suite| suite.status == "failed" || suite.test_results.iter().any(|t| t.status == "failed"))
+        .filter(|suite| {
+            suite.status == "failed" || suite.test_results.iter().any(|t| t.status == "failed")
+        })
         .count() as u64;
     let total_suites = suites.len() as u64;
     let passed_suites = total_suites.saturating_sub(failed_suites);
@@ -128,10 +137,10 @@ fn vitest_footer(agg: &TestRunAggregated, only_failures: bool) -> String {
 
     let time = agg
         .run_time_ms
-        .map(|ms| format!("{ms}ms"))
+        .map(|ms| format_duration(std::time::Duration::from_millis(ms)))
         .unwrap_or_default();
 
-    [
+    let footer = [
         format!(
             "{} {} {}",
             ansi::bold("Test Files"),
@@ -146,5 +155,28 @@ fn vitest_footer(agg: &TestRunAggregated, only_failures: bool) -> String {
         ),
         format!("{}      {}", ansi::bold("Time"), time),
     ]
-    .join("\n")
+    .join("\n");
+
+    drop_blank_line_before_time_line(&footer)
+}
+
+fn drop_blank_line_before_time_line(text: &str) -> String {
+    let lines = text.lines().collect::<Vec<_>>();
+    let kept = lines
+        .iter()
+        .enumerate()
+        .filter_map(|(index, line)| {
+            if !line.trim().is_empty() {
+                return Some(*line);
+            }
+            let Some(next_line) = lines.get(index + 1) else {
+                return Some(*line);
+            };
+            let next_is_time_line = stacks::strip_ansi_simple(next_line)
+                .trim_start()
+                .starts_with("Time ");
+            (!next_is_time_line).then_some(*line)
+        })
+        .collect::<Vec<_>>();
+    kept.join("\n")
 }

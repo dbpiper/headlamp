@@ -2,7 +2,9 @@ use std::collections::BTreeMap;
 use std::path::{Path, PathBuf};
 
 use crate::test_model::TestConsoleEntry;
-use crate::test_model::{TestCaseResult, TestLocation, TestRunAggregated, TestRunModel, TestSuiteResult};
+use crate::test_model::{
+    TestCaseResult, TestLocation, TestRunAggregated, TestRunModel, TestSuiteResult,
+};
 
 #[derive(Debug, Clone)]
 pub enum UnstructuredStreamEvent {
@@ -365,7 +367,11 @@ fn absolutize_repo_relative(repo_root: &Path, repo_relative: &str) -> String {
     .unwrap_or_else(|| joined.to_string_lossy().to_string())
 }
 
-fn apply_failure_locations(repo_root: &Path, suite_source_path: &str, tests: &mut [TestCaseResult]) {
+fn apply_failure_locations(
+    repo_root: &Path,
+    suite_source_path: &str,
+    tests: &mut [TestCaseResult],
+) {
     let suite_abs = absolutize_repo_relative(repo_root, suite_source_path);
     let suite_file_name = Path::new(&suite_abs)
         .file_name()
@@ -390,7 +396,7 @@ fn apply_failure_locations(repo_root: &Path, suite_source_path: &str, tests: &mu
                     &file,
                 )
                 .map(|resolved| (resolved, line_number, col_number))
-                .or_else(|| Some((file, line_number, col_number)))
+                .or(Some((file, line_number, col_number)))
             })
             .and_then(|(resolved_file, line_number, col_number)| {
                 let matches_suite = Path::new(&resolved_file)

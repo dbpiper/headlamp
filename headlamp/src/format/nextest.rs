@@ -4,7 +4,8 @@ use std::path::{Path, PathBuf};
 use serde::Deserialize;
 
 use crate::test_model::{
-    TestCaseResult, TestConsoleEntry, TestLocation, TestRunAggregated, TestRunModel, TestSuiteResult,
+    TestCaseResult, TestConsoleEntry, TestLocation, TestRunAggregated, TestRunModel,
+    TestSuiteResult,
 };
 
 type SuiteCounts = (

@@ -58,21 +58,56 @@ pub fn normalize_with_meta(text: String, root: &Path) -> (String, NormalizationM
     (normalized, meta)
 }
 
+#[derive(Clone, Copy)]
+struct DropLiveProgressState {
+    is_dropping: bool,
+}
+
+fn normalize_crlf_and_carriage_returns(text: &str) -> String {
+    text.replace("\u{1b}[2K\r", "\n")
+        .replace("\r\n", "\n")
+        .replace('\r', "\n")
+}
+
+fn normalize_tty_line(raw_line: &str, state: &mut DropLiveProgressState) -> Option<String> {
+    let without_profile = filters::strip_headlamp_profile_suffix(raw_line);
+    let stripped = headlamp::format::stacks::strip_ansi_simple(without_profile);
+    let trimmed = stripped.trim_start();
+
+    if trimmed.starts_with("RUN (+") {
+        state.is_dropping = true;
+        return None;
+    }
+
+    if state.is_dropping {
+        let is_stable_header = trimmed.starts_with("RUN ")
+            && !trimmed.starts_with("RUN (+")
+            && !trimmed.starts_with("RUN [");
+        let is_stable_status = trimmed.starts_with("FAIL ") || trimmed.starts_with("PASS ");
+        if !is_stable_header && !is_stable_status {
+            return None;
+        }
+        state.is_dropping = false;
+    }
+
+    filters::should_keep_line_tty(raw_line).then(|| normalize_time_line_tty(without_profile))
+}
+
 pub fn normalize_tty_ui_with_meta(text: String, root: &Path) -> (String, NormalizationMeta) {
     let normalized_paths = paths::normalize_paths(text, root);
     let no_osc8 = filters::strip_osc8_sequences(&normalized_paths);
-    let normalized_cr = no_osc8
-        .replace("\u{1b}[2K\r", "\n")
-        .replace("\r\n", "\n")
-        .replace('\r', "\n");
-    let filtered = normalized_cr
+    let normalized_cr = normalize_crlf_and_carriage_returns(&no_osc8);
+
+    let filtered_lines = normalized_cr
         .lines()
-        .filter_map(|raw_line| {
-            let without_profile = filters::strip_headlamp_profile_suffix(raw_line);
-            filters::should_keep_line_tty(raw_line).then(|| without_profile.to_string())
-        })
-        .collect::<Vec<_>>()
-        .join("\n");
+        .scan(
+            DropLiveProgressState { is_dropping: false },
+            |state, raw_line| Some(normalize_tty_line(raw_line, state)),
+        )
+        .flatten()
+        .collect::<Vec<_>>();
+
+    let filtered = filtered_lines.join("\n");
     let filtered = filters::drop_box_table_interior_blank_lines(&filtered);
 
     let final_block = tty_blocks::pick_final_render_block_tty(&filtered);
@@ -105,4 +140,21 @@ pub fn normalize_tty_ui_with_meta(text: String, root: &Path) -> (String, Normali
         stages,
     };
     (normalized, meta)
+}
+
+fn normalize_time_line_tty(raw: &str) -> String {
+    let stripped = headlamp::format::stacks::strip_ansi_simple(raw);
+    if !stripped.trim_start().starts_with("Time ") {
+        return raw.to_string();
+    }
+    let leading_ws = raw
+        .chars()
+        .take_while(|c| c.is_whitespace())
+        .collect::<String>();
+    let bold_time = headlamp::format::ansi::bold("Time");
+    if raw.contains(&bold_time) {
+        format!("{leading_ws}{bold_time}      <DURATION>")
+    } else {
+        format!("{leading_ws}Time      <DURATION>")
+    }
 }

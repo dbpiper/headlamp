@@ -1,5 +1,7 @@
 use std::time::Instant;
 
+use crate::format::time::format_duration;
+
 pub fn enabled() -> bool {
     matches!(
         std::env::var("HEADLAMP_PROFILE").ok().as_deref(),
@@ -23,8 +25,15 @@ impl ProfileSpan {
 
 impl Drop for ProfileSpan {
     fn drop(&mut self) {
-        let ms = self.start.elapsed().as_millis();
-        eprintln!("[headlamp-profile] {name} took {ms}ms", name = self.name);
+        if !enabled() {
+            return;
+        }
+        let elapsed = self.start.elapsed();
+        let pretty_elapsed = format_duration(elapsed);
+        eprintln!(
+            "[headlamp-profile] {name} took {pretty_elapsed}",
+            name = self.name
+        );
     }
 }
 

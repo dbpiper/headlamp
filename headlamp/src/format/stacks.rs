@@ -9,6 +9,7 @@ pub fn strip_ansi_simple(text: &str) -> String {
 
 pub fn is_stack_line(line: &str) -> bool {
     static JS_STACK_RE: Lazy<Regex> = Lazy::new(|| Regex::new(r"\s+at\s+").unwrap());
+    static JS_STACK_RE_BOL: Lazy<Regex> = Lazy::new(|| Regex::new(r"^at\s+").unwrap());
     static PY_TRACE_RE: Lazy<Regex> =
         Lazy::new(|| Regex::new(r#"^\s*File\s+"[^"]+",\s+line\s+\d+(,|$)"#).unwrap());
     static PY_TRACE_HEADER_RE: Lazy<Regex> =
@@ -18,6 +19,7 @@ pub fn is_stack_line(line: &str) -> bool {
     static RUST_BACKTRACE_FRAME_RE: Lazy<Regex> = Lazy::new(|| Regex::new(r"^\s*\d+:\s+").unwrap());
 
     JS_STACK_RE.is_match(line)
+        || JS_STACK_RE_BOL.is_match(line)
         || PY_TRACE_HEADER_RE.is_match(line)
         || PY_TRACE_RE.is_match(line)
         || RUST_BACKTRACE_HEADER_RE.is_match(line)

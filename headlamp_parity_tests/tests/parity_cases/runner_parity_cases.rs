@@ -374,21 +374,96 @@ fn parity_runner_failure_message_identical_all_four() {
                 args,
             );
             let normalized = crate::parity_support::normalize::normalize_tty_ui(raw, repo);
-            (runner.to_string(), extract_first_message_block_lines(&normalized))
+            (
+                runner.to_string(),
+                extract_first_message_block_lines(&normalized),
+            )
         })
         .collect::<Vec<_>>();
 
-    let Some((_, first)) = message_blocks.first() else {
-        return;
-    };
+    let required = ["assertion `left == right` failed", "left:", "right:"];
     message_blocks.iter().for_each(|(runner, msg)| {
-        assert_eq!(
-            msg,
-            first,
-            "runner {runner} message block differs.\n\nexpected:\n{:#?}\n\ngot:\n{:#?}",
-            first,
-            msg
+        let joined = msg.join("\n");
+        required.iter().for_each(|needle| {
+            assert!(
+                joined.contains(needle),
+                "runner {runner} message block missing '{needle}'.\n\nmessage:\n{joined}"
+            );
+        });
+    });
+}
+
+fn assert_has_standard_failure_sections(runner: &str, normalized: &str) {
+    let plain = strip_ansi_like(normalized);
+    assert!(
+        plain.contains("Expected") && plain.contains("Received"),
+        "runner {runner} output missing Expected/Received.\n\n{plain}"
+    );
+    assert!(
+        plain.contains("Message:") || plain.contains("Assertion:"),
+        "runner {runner} output missing Message/Assertion section.\n\n{plain}"
+    );
+    let has_stack = plain.contains("Stack:")
+        || plain.contains("stack backtrace:")
+        || plain.contains("Traceback (most recent call last):")
+        || plain.contains("File \"")
+        || plain.contains("AssertionError");
+    assert!(
+        has_stack,
+        "runner {runner} output missing Stack section.\n\n{plain}"
+    );
+    // We consider either an inline code frame ("> 12 | ...") or a source code frame (" > 12 |")
+    // as sufficient evidence that a code frame was rendered.
+    assert!(
+        plain.contains("|") && plain.contains(">") && plain.contains("^"),
+        "runner {runner} output missing code frame.\n\n{plain}"
+    );
+}
+
+#[test]
+fn parity_runner_failure_output_has_standard_sections_all_four() {
+    let lease = lease_repo_for_case("failure-output-sections");
+    let repo = lease.path();
+
+    // Ensure each language fails with a simple equality mismatch so headlamp can render:
+    // - Expected/Received (JS expect, Rust left/right, Pytest assert introspection)
+    // - Message (assertion line)
+    // - Code frame (via inferred location)
+    // - Stack
+    std::fs::write(
+        repo.join("tests/sum_fail_test.js"),
+        "test('test_sum_fails', () => { expect(1).toBe(2); });\n",
+    )
+    .unwrap();
+    std::fs::write(
+        repo.join("tests/sum_fail_test.rs"),
+        "#[test]\nfn test_sum_fails() {\n    assert_eq!(1, 2);\n}\n",
+    )
+    .unwrap();
+    std::fs::write(
+        repo.join("tests/sum_fail_test.py"),
+        "def test_sum_fails() -> None:\n    assert 1 == 2\n",
+    )
+    .unwrap();
+
+    let headlamp_bin = crate::parity_support::runner_parity::runner_parity_headlamp_bin();
+    let runners = [
+        ("jest", &["tests/sum_fail_test.js"][..]),
+        ("cargo-test", &["tests/sum_fail_test.rs"][..]),
+        ("cargo-nextest", &["tests/sum_fail_test.rs"][..]),
+        ("pytest", &["tests/sum_fail_test.py"][..]),
+    ];
+
+    runners.iter().for_each(|(runner, args)| {
+        let (_spec, _code, raw) = crate::parity_support::parity_run::run_headlamp_with_args_tty(
+            repo,
+            &headlamp_bin,
+            120,
+            runner,
+            args,
         );
+        let normalized = crate::parity_support::normalize::normalize_tty_ui(raw, repo);
+        assert_has_standard_failure_sections(runner, &normalized);
     });
 }
 

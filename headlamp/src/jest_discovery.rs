@@ -148,22 +148,29 @@ pub fn discover_jest_list_tests_cached_with_timeout(
     };
 
     let listed = match discover_jest_list_tests_with_timeout(cwd, jest_bin, jest_args, timeout) {
-        Ok(v) => v,
-        Err(RunError::TimedOut { .. }) => vec![],
-        Err(e) => return Err(e),
-    };
+        Ok(v) => Ok(v),
+        Err(RunError::TimedOut { .. }) => {
+            // Don't silently treat a timeout as "no tests" and definitely don't cache it.
+            // Under load, a single transient timeout would otherwise produce non-deterministic
+            // results (and can poison the cache). Retry once to keep behavior stable.
+            discover_jest_list_tests_with_timeout(cwd, jest_bin, jest_args, timeout)
+        }
+        Err(e) => Err(e),
+    }?;
 
     let mut uniq = listed;
     uniq.sort();
     uniq.dedup();
-    bag.insert(key, uniq.clone());
-    if std::fs::create_dir_all(&dir).is_ok() {
-        let _ = std::fs::remove_file(&file);
-        if let Ok(mut tmp) = NamedTempFile::new_in(&dir) {
-            use std::io::Write;
-            let _ = serde_json::to_writer(&mut tmp, &bag);
-            let _ = tmp.flush();
-            let _ = tmp.persist(&file);
+    if !uniq.is_empty() {
+        bag.insert(key, uniq.clone());
+        if std::fs::create_dir_all(&dir).is_ok() {
+            let _ = std::fs::remove_file(&file);
+            if let Ok(mut tmp) = NamedTempFile::new_in(&dir) {
+                use std::io::Write;
+                let _ = serde_json::to_writer(&mut tmp, &bag);
+                let _ = tmp.flush();
+                let _ = tmp.persist(&file);
+            }
         }
     }
 
