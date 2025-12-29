@@ -11,21 +11,21 @@ pub fn run_cmd_tty(mut cmd: Command, columns: usize) -> (i32, String) {
     let _timing = crate::timing::TimingGuard::start("tty_run");
     apply_tty_env(&mut cmd, true);
 
+    // Prefer the portable PTY implementation for stability across platforms/CI images.
+    // (Different `script(1)` implementations and PTY behaviors can subtly change runner output.)
+    let portable = run_cmd_tty_portable_pty(&cmd, columns, tty_timeout());
+    if let Some((code, out)) = portable {
+        return (code, sanitize_tty_output(out));
+    }
+
     let tty_capture_path = capture_path("tty-capture");
     let shell_cmd = build_tty_shell_command(&cmd, columns);
     let script = build_script_command(&cmd, &tty_capture_path, shell_cmd);
     let Some((code, stderr_text)) = run_script_capture_stderr(script, tty_timeout()) else {
-        return run_cmd_tty_portable_pty(&cmd, columns, tty_timeout())
-            .unwrap_or((1, String::new()));
+        // `portable_pty` was already attempted above; if we get here and `script` failed to run,
+        // we have no other fallback.
+        return (1, String::new());
     };
-    // If `script` itself failed due to unsupported flags/options, fall back to the portable PTY.
-    // (This avoids hard failures across differing `script(1)` implementations.)
-    if code != 0
-        && stderr_text.contains("script:")
-        && (stderr_text.contains("illegal option") || stderr_text.contains("invalid option"))
-    {
-        return run_cmd_tty_portable_pty(&cmd, columns, tty_timeout()).unwrap_or((1, stderr_text));
-    }
     let combined = sanitize_tty_output(format!("{}{}", read_lossy(&tty_capture_path), stderr_text));
     let _ = std::fs::remove_file(&tty_capture_path);
     (code, combined)
