@@ -2,6 +2,7 @@ use std::collections::BTreeMap;
 use std::fs;
 use std::path::{Path, PathBuf};
 
+use headlamp_tests::guards::workspace_scan::list_workspace_rust_files;
 use proc_macro2::Span;
 use syn::spanned::Spanned;
 use syn::visit::Visit;
@@ -90,44 +91,6 @@ impl<'a, 'ast> Visit<'ast> for FileFunctionCollector<'a> {
     }
 }
 
-fn should_skip_directory_name(dir_name: &str) -> bool {
-    matches!(
-        dir_name,
-        "target" | "npm" | "coverage" | "node_modules" | ".git"
-    )
-}
-
-fn list_rust_source_files_under(root: &Path) -> Vec<PathBuf> {
-    walkdir::WalkDir::new(root)
-        .into_iter()
-        .filter_entry(|entry| {
-            entry
-                .file_name()
-                .to_str()
-                .map(should_skip_directory_name)
-                .map(|skip| !skip)
-                .unwrap_or(true)
-        })
-        .filter_map(|entry| entry.ok())
-        .filter(|entry| entry.file_type().is_file())
-        .map(|entry| entry.into_path())
-        .filter(|path| path.extension().and_then(|e| e.to_str()) == Some("rs"))
-        .collect()
-}
-
-fn workspace_root() -> PathBuf {
-    PathBuf::from(env!("CARGO_MANIFEST_DIR"))
-        .parent()
-        .expect("headlamp_tests should be nested under workspace root")
-        .to_path_buf()
-}
-
-fn is_workspace_rust_file(path: &Path) -> bool {
-    let path_string = path.to_string_lossy();
-    (path_string.contains("/src/") || path_string.contains("/tests/"))
-        && path.extension().and_then(|e| e.to_str()) == Some("rs")
-}
-
 fn read_file_to_string(path: &Path) -> String {
     fs::read_to_string(path).unwrap_or_else(|err| panic!("failed reading {path:?}: {err}"))
 }
@@ -189,15 +152,8 @@ fn collect_functions_in_file(file_path: &Path) -> Vec<FunctionLocation> {
     visitor.functions_by_label.into_values().collect()
 }
 
-fn find_function_length_violations(
-    workspace_root: &Path,
-    cfg: GuardConfig,
-) -> Vec<FunctionLocation> {
-    let candidate_files = list_rust_source_files_under(workspace_root)
-        .into_iter()
-        .filter(|path| is_workspace_rust_file(path))
-        .collect::<Vec<_>>();
-
+fn find_function_length_violations(cfg: GuardConfig) -> Vec<FunctionLocation> {
+    let candidate_files = list_workspace_rust_files();
     let mut all_functions = candidate_files
         .iter()
         .flat_map(|file_path| collect_functions_in_file(file_path))
@@ -231,8 +187,7 @@ fn format_violation(location: &FunctionLocation) -> String {
 #[test]
 fn rust_functions_do_not_exceed_max_physical_lines() {
     let cfg = GuardConfig { max_body_lines: 70 };
-    let root = workspace_root();
-    let violations = find_function_length_violations(&root, cfg);
+    let violations = find_function_length_violations(cfg);
     let rendered = violations.iter().map(format_violation).collect::<Vec<_>>();
     assert!(
         rendered.is_empty(),

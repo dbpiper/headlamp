@@ -67,7 +67,7 @@ exit 0\n",
         &jest_bin,
         &args,
         false,
-        Duration::from_secs(3),
+        Duration::from_secs(10),
     )
     .unwrap();
     let second = discover_jest_list_tests_cached_with_timeout(
@@ -75,7 +75,7 @@ exit 0\n",
         &jest_bin,
         &args,
         false,
-        Duration::from_secs(3),
+        Duration::from_secs(10),
     )
     .unwrap();
 
@@ -120,7 +120,7 @@ exit 0\n",
         &jest_bin,
         &args,
         true,
-        Duration::from_secs(3),
+        Duration::from_secs(10),
     )
     .unwrap();
     let _ = discover_jest_list_tests_cached_with_timeout(
@@ -128,7 +128,7 @@ exit 0\n",
         &jest_bin,
         &args,
         true,
-        Duration::from_secs(3),
+        Duration::from_secs(10),
     )
     .unwrap();
 

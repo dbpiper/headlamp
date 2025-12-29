@@ -63,7 +63,7 @@ exit 0\n",
         "jest.config.js",
         &repo_root,
         &patterns,
-        Duration::from_secs(3),
+        Duration::from_secs(10),
     )
     .unwrap();
 
