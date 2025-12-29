@@ -577,6 +577,7 @@ dependencies = [
  "terminal_size",
  "thiserror 2.0.17",
  "toml",
+ "wait-timeout",
  "which",
 ]
 
@@ -635,12 +636,15 @@ dependencies = [
  "insta",
  "os_pipe",
  "path-slash",
+ "proc-macro2",
  "regex",
  "serde",
  "serde_json",
  "sha1",
  "similar-asserts",
+ "syn",
  "tempfile",
+ "walkdir",
  "which",
 ]
 

@@ -60,17 +60,41 @@ pub(super) fn build_llvm_cov_nextest_run_args(
         .any(|t| t == "--color" || t.starts_with("--color="));
     let translated = translate_libtest_args_to_nextest(&test_binary_args);
 
-    let (success_output, failure_output) = if args.show_logs {
+    let (success_output, failure_output) = nextest_output_modes(args.show_logs);
+    let is_interactive = is_interactive_nextest_progress(args);
+
+    let mut cmd_args: Vec<String> = vec!["nextest".to_string()];
+    extend_llvm_cov_report_mode_args(&mut cmd_args, write_lcov_report_to_file);
+    cmd_args.extend(extra_cargo_args.iter().cloned());
+    cmd_args.extend(nextest_options);
+    extend_nextest_common_args(
+        &mut cmd_args,
+        has_user_color,
+        is_interactive,
+        success_output,
+        failure_output,
+    );
+    extend_nextest_test_threads(&mut cmd_args, args, &translated, has_user_test_threads);
+    extend_nextest_filter_and_passthrough(&mut cmd_args, translated);
+    cmd_args
+}
+
+fn nextest_output_modes(show_logs: bool) -> (&'static str, &'static str) {
+    if show_logs {
         ("immediate", "immediate")
     } else {
         ("never", "never")
-    };
-    let is_interactive = crate::live_progress::live_progress_mode(
+    }
+}
+
+fn is_interactive_nextest_progress(args: &ParsedArgs) -> bool {
+    crate::live_progress::live_progress_mode(
         headlamp_core::format::terminal::is_output_terminal(),
         args.ci,
-    ) == crate::live_progress::LiveProgressMode::Interactive;
+    ) == crate::live_progress::LiveProgressMode::Interactive
+}
 
-    let mut cmd_args: Vec<String> = vec!["nextest".to_string()];
+fn extend_llvm_cov_report_mode_args(cmd_args: &mut Vec<String>, write_lcov_report_to_file: bool) {
     if write_lcov_report_to_file {
         cmd_args.extend([
             "--lcov".to_string(),
@@ -80,9 +104,15 @@ pub(super) fn build_llvm_cov_nextest_run_args(
     } else {
         cmd_args.push("--no-report".to_string());
     }
-    cmd_args.extend(extra_cargo_args.iter().cloned());
-    cmd_args.extend(nextest_options);
+}
 
+fn extend_nextest_common_args(
+    cmd_args: &mut Vec<String>,
+    has_user_color: bool,
+    is_interactive: bool,
+    success_output: &str,
+    failure_output: &str,
+) {
     if !has_user_color {
         cmd_args.extend(["--color".to_string(), "never".to_string()]);
     }
@@ -106,13 +136,25 @@ pub(super) fn build_llvm_cov_nextest_run_args(
     if !is_interactive {
         cmd_args.push("--cargo-quiet".to_string());
     }
+}
 
+fn extend_nextest_test_threads(
+    cmd_args: &mut Vec<String>,
+    args: &ParsedArgs,
+    translated: &NextestArgTranslation,
+    has_user_test_threads: bool,
+) {
     if args.sequential && translated.test_threads.is_none() && !has_user_test_threads {
         cmd_args.extend(["--test-threads".to_string(), "1".to_string()]);
     } else if let Some(n) = translated.test_threads.as_ref() {
         cmd_args.extend(["--test-threads".to_string(), n.to_string()]);
     }
+}
 
+fn extend_nextest_filter_and_passthrough(
+    cmd_args: &mut Vec<String>,
+    translated: NextestArgTranslation,
+) {
     if let Some(user_filter) = translated.filter.as_deref() {
         cmd_args.push(user_filter.to_string());
     }
@@ -120,7 +162,6 @@ pub(super) fn build_llvm_cov_nextest_run_args(
         cmd_args.push("--".to_string());
         cmd_args.extend(translated.passthrough);
     }
-    cmd_args
 }
 
 pub(super) fn build_nextest_run_args(

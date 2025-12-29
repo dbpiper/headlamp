@@ -1,21 +1,62 @@
 use std::process::Command;
 use std::time::Duration;
 
+use portable_pty::{Child as PtyChild, CommandBuilder, PtySize, native_pty_system};
+
+struct PtyExitResult {
+    code: i32,
+    timed_out: bool,
+}
+
+fn spawn_read_to_string_thread(
+    mut reader: Box<dyn std::io::Read + Send>,
+) -> std::thread::JoinHandle<String> {
+    std::thread::spawn(move || {
+        let mut output_bytes: Vec<u8> = Vec::new();
+        let mut buf = [0u8; 16 * 1024];
+        loop {
+            match reader.read(&mut buf) {
+                Ok(0) => return String::from_utf8_lossy(&output_bytes).to_string(),
+                Ok(n) => output_bytes.extend_from_slice(&buf[..n]),
+                Err(e) if e.kind() == std::io::ErrorKind::Interrupted => {}
+                Err(_) => return String::from_utf8_lossy(&output_bytes).to_string(),
+            }
+        }
+    })
+}
+
+fn wait_for_exit_code(child: &mut dyn PtyChild, timeout: Duration) -> PtyExitResult {
+    let start = std::time::Instant::now();
+    loop {
+        if start.elapsed() > timeout {
+            let _ = child.kill();
+            let _ = child.wait();
+            return PtyExitResult {
+                code: 124,
+                timed_out: true,
+            };
+        }
+        if let Some(status) = child.try_wait().ok().flatten() {
+            return PtyExitResult {
+                code: status.exit_code() as i32,
+                timed_out: false,
+            };
+        }
+        std::thread::sleep(Duration::from_millis(10));
+    }
+}
+
 pub(crate) fn run_cmd_tty_portable_pty(
     cmd: &Command,
     columns: usize,
     timeout: Duration,
 ) -> Option<(i32, String)> {
-    use portable_pty::{CommandBuilder, PtySize, native_pty_system};
-    use std::io::Read;
-
     let program = cmd.get_program().to_string_lossy().to_string();
     if program.trim().is_empty() {
         return None;
     }
 
-    let pty_system = native_pty_system();
-    let pair = pty_system
+    let pair = native_pty_system()
         .openpty(PtySize {
             rows: 40,
             cols: columns as u16,
@@ -43,31 +84,17 @@ pub(crate) fn run_cmd_tty_portable_pty(
     let mut child = pair.slave.spawn_command(builder).ok()?;
     drop(pair.slave);
 
-    let mut output = String::new();
-    let mut reader = pair.master.try_clone_reader().ok()?;
-    let mut buf: Vec<u8> = vec![];
+    let reader = pair.master.try_clone_reader().ok()?;
+    drop(pair.master);
 
-    let start = std::time::Instant::now();
-    loop {
-        if start.elapsed() > timeout {
-            let _ = child.kill();
-            let _ = child.wait();
-            output.push_str(&format!(
-                "[headlamp_parity_support] timeout after {}s (killed)\n",
-                timeout.as_secs()
-            ));
-            return Some((124, output));
-        }
-        buf.clear();
-        let n = reader.read_to_end(&mut buf).unwrap_or(0);
-        if n > 0 {
-            output.push_str(&String::from_utf8_lossy(&buf));
-        }
-        let status = child.try_wait().ok().flatten();
-        if let Some(status) = status {
-            let code = status.exit_code() as i32;
-            return Some((code, output));
-        }
-        std::thread::sleep(Duration::from_millis(10));
+    let output_handle = spawn_read_to_string_thread(reader);
+    let exit = wait_for_exit_code(&mut *child, timeout);
+    let mut output = output_handle.join().unwrap_or_default();
+    if exit.timed_out {
+        output.push_str(&format!(
+            "[headlamp_parity_support] timeout after {}s (killed)\n",
+            timeout.as_secs()
+        ));
     }
+    Some((exit.code, output))
 }

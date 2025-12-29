@@ -6,6 +6,12 @@ use crate::git::{git_commit_all, git_init};
 
 use super::jest_bin::ensure_repo_local_jest_bin;
 
+#[derive(Debug, Clone, Copy)]
+struct WriteSpec {
+    rel_path: &'static str,
+    contents: &'static str,
+}
+
 pub fn shared_real_runner_repo() -> PathBuf {
     static REPO: OnceLock<PathBuf> = OnceLock::new();
     REPO.get_or_init(|| {
@@ -117,38 +123,40 @@ pub fn write_real_runner_repo(repo: &Path) {
 }
 
 fn write_js_runner_files(repo: &Path) {
-    // JS (Jest)
-    write_file(&repo.join("src/sum.js"), "exports.sum = (a,b) => a + b;\n");
-    let _ = std::fs::remove_file(repo.join("tests/sum_test.js"));
-    let _ = std::fs::remove_file(repo.join("tests/sum_test_test.js"));
-    write_file(
-        &repo.join("legacy/sum_test_js.txt"),
-        "\
-const { sum } = require('../src/sum');\n\
-\n\
-test('sum_passes', () => { expect(sum(1, 2)).toBe(3); });\n\
-\n\
-test('sum_fails', () => {\n\
-  console.log('log-pass');\n\
-  console.error('err-fail');\n\
-  expect(sum(1, 2)).toBe(4);\n\
-});\n\
-",
-    );
-    write_file(
-        &repo.join("jest.config.js"),
-        "module.exports = { testMatch: ['**/tests/**/*_test.js'] };\n",
-    );
-    write_file(
-        &repo.join("tests/sum_pass_test.js"),
-        r#"const { sum } = require('../src/sum');
+    remove_files_if_present(repo, &["tests/sum_test.js", "tests/sum_test_test.js"]);
+    write_specs(repo, JS_RUNNER_FILES);
+    crate::fs::write_jest_config(repo, "**/tests/**/*_test.js");
+    ensure_repo_local_jest_bin(repo);
+}
+
+const JS_RUNNER_FILES: &[WriteSpec] = &[
+    WriteSpec {
+        rel_path: "src/sum.js",
+        contents: "exports.sum = (a,b) => a + b;\n",
+    },
+    WriteSpec {
+        rel_path: "legacy/sum_test_js.txt",
+        contents: r#"const { sum } = require('../src/sum');
+
+test('sum_passes', () => { expect(sum(1, 2)).toBe(3); });
+
+test('sum_fails', () => {
+  console.log('log-pass');
+  console.error('err-fail');
+  expect(sum(1, 2)).toBe(4);
+});
+"#,
+    },
+    WriteSpec {
+        rel_path: "tests/sum_pass_test.js",
+        contents: r#"const { sum } = require('../src/sum');
 
 test('test_sum_passes', () => { expect(sum(1, 2)).toBe(3); });
 "#,
-    );
-    write_file(
-        &repo.join("tests/sum_fail_test.js"),
-        r#"const { sum } = require('../src/sum');
+    },
+    WriteSpec {
+        rel_path: "tests/sum_fail_test.js",
+        contents: r#"const { sum } = require('../src/sum');
 
 test('test_sum_fails', () => {
   console.log('log-pass');
@@ -156,44 +164,65 @@ test('test_sum_fails', () => {
   expect(sum(1, 2)).toBe(4);
 });
 "#,
-    );
-    write_file(&repo.join("src/a.js"), "exports.a = () => 1;\n");
-    write_file(&repo.join("src/b.js"), "exports.b = () => 2;\n");
-    write_file(
-        &repo.join("tests/a_test.js"),
-        r#"const { a } = require('../src/a');
+    },
+    WriteSpec {
+        rel_path: "src/a.js",
+        contents: "exports.a = () => 1;\n",
+    },
+    WriteSpec {
+        rel_path: "src/b.js",
+        contents: "exports.b = () => 2;\n",
+    },
+    WriteSpec {
+        rel_path: "tests/a_test.js",
+        contents: r#"const { a } = require('../src/a');
 
 test('test_a', () => { expect(a()).toBe(1); });
 "#,
-    );
-    write_file(
-        &repo.join("tests/b_test.js"),
-        r#"const { b } = require('../src/b');
+    },
+    WriteSpec {
+        rel_path: "tests/b_test.js",
+        contents: r#"const { b } = require('../src/b');
 
 test('test_b', () => { expect(b()).toBe(2); });
 "#,
-    );
-    write_file(
-        &repo.join("src/very_unique_name_for_parity_123.js"),
-        "module.exports = () => 123;\n",
-    );
-    write_file(
-        &repo.join("src/index.js"),
-        "const impl = require('./very_unique_name_for_parity_123');\nmodule.exports = () => impl();\n",
-    );
-    write_file(
-        &repo.join("tests/index_test.js"),
-        r#"const run = require('../src/index');
+    },
+    WriteSpec {
+        rel_path: "src/very_unique_name_for_parity_123.js",
+        contents: "module.exports = () => 123;\n",
+    },
+    WriteSpec {
+        rel_path: "src/index.js",
+        contents: "const impl = require('./very_unique_name_for_parity_123');\nmodule.exports = () => impl();\n",
+    },
+    WriteSpec {
+        rel_path: "tests/index_test.js",
+        contents: r#"const run = require('../src/index');
 
 test('test_indirect', () => { expect(run()).toBe(123); });
 "#,
-    );
+    },
+];
 
-    ensure_repo_local_jest_bin(repo);
+fn write_specs(repo: &Path, specs: &[WriteSpec]) {
+    specs.iter().for_each(|spec| {
+        write_file(&repo.join(spec.rel_path), spec.contents);
+    });
+}
+
+fn remove_files_if_present(repo: &Path, rel_paths: &[&str]) {
+    rel_paths.iter().for_each(|rel_path| {
+        let _ = std::fs::remove_file(repo.join(rel_path));
+    });
 }
 
 fn write_rust_runner_files(repo: &Path) {
-    // Rust (cargo test / cargo nextest / cargo llvm-cov)
+    write_rust_manifest(repo);
+    write_rust_library_sources(repo);
+    write_rust_tests(repo);
+}
+
+fn write_rust_manifest(repo: &Path) {
     write_file(
         &repo.join("Cargo.toml"),
         "\
@@ -208,6 +237,9 @@ path = \"src/lib.rs\"\n\
 [workspace]\n\
 ",
     );
+}
+
+fn write_rust_library_sources(repo: &Path) {
     write_file(
         &repo.join("src/lib.rs"),
         "\
@@ -240,6 +272,14 @@ pub mod index;\n\
         &repo.join("src/index.rs"),
         "#[inline(never)]\npub fn run() -> i32 { crate::very_unique_name_for_parity_123::impl_() }\n",
     );
+}
+
+fn write_rust_tests(repo: &Path) {
+    write_rust_legacy_test(repo);
+    write_rust_suite_tests(repo);
+}
+
+fn write_rust_legacy_test(repo: &Path) {
     write_file(
         &repo.join("legacy/sum_test_rs.txt"),
         "\
@@ -258,6 +298,14 @@ fn sum_fails() {\n\
 }\n\
 ",
     );
+}
+
+fn write_rust_suite_tests(repo: &Path) {
+    write_rust_sum_suite_tests(repo);
+    write_rust_other_suite_tests(repo);
+}
+
+fn write_rust_sum_suite_tests(repo: &Path) {
     write_file(
         &repo.join("tests/sum_pass_test.rs"),
         "\
@@ -282,6 +330,9 @@ fn test_sum_fails() {\n\
 }\n\
 ",
     );
+}
+
+fn write_rust_other_suite_tests(repo: &Path) {
     write_file(
         &repo.join("tests/a_test.rs"),
         "\
@@ -320,8 +371,16 @@ fn test_indirect() {\n\
 }
 
 fn write_python_runner_files(repo: &Path) {
-    // Python (pytest / pytest-cov)
+    write_python_manifest(repo);
+    write_python_sources(repo);
+    write_python_tests(repo);
+}
+
+fn write_python_manifest(repo: &Path) {
     write_file(&repo.join("pyproject.toml"), "[tool.pytest.ini_options]\n");
+}
+
+fn write_python_sources(repo: &Path) {
     write_file(
         &repo.join("src/sum.py"),
         "def sum_two(a: int, b: int) -> int:\n    return a + b\n",
@@ -336,6 +395,14 @@ fn write_python_runner_files(repo: &Path) {
         &repo.join("src/index.py"),
         "from very_unique_name_for_parity_123 import impl_\n\ndef run() -> int:\n    return impl_()\n",
     );
+}
+
+fn write_python_tests(repo: &Path) {
+    write_python_legacy_test(repo);
+    write_python_suite_tests(repo);
+}
+
+fn write_python_legacy_test(repo: &Path) {
     write_file(
         &repo.join("legacy/sum_test_py.txt"),
         r#"import sys
@@ -352,6 +419,9 @@ def test_sum_fails() -> None:
     assert sum_two(1, 2) == 4
 "#,
     );
+}
+
+fn write_python_suite_tests(repo: &Path) {
     write_file(
         &repo.join("tests/sum_pass_test.py"),
         r#"from sum import sum_two

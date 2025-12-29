@@ -13,7 +13,47 @@ pub fn render_http_card(
     http_sorted: &[HttpEvent],
 ) -> Vec<String> {
     let per_test_http = http_in_same_test(http_sorted, file_test_path_abs, assertion_full_name);
-    let corresponding = assertion_events
+    let corresponding = find_corresponding_assertion_event(
+        assertion_events,
+        file_test_path_abs,
+        assertion_full_name,
+        assertion_title,
+    );
+
+    let transport = is_transport_card(&corresponding, &per_test_http);
+    if !is_http_relevant(
+        rel_path,
+        assertion_full_name,
+        &corresponding,
+        per_test_http.len(),
+        transport,
+    ) {
+        return vec![];
+    }
+    if transport {
+        return render_transport_http_card(&corresponding, &per_test_http);
+    }
+
+    let corr = infer_missing_http_numbers(&corresponding, assertion_failure_text);
+    let Some(relevant) = pick_relevant_http(
+        &corr,
+        http_sorted,
+        file_test_path_abs,
+        assertion_full_name,
+        assertion_full_name,
+    ) else {
+        return vec![];
+    };
+    render_status_http_card(&relevant, &corr)
+}
+
+fn find_corresponding_assertion_event(
+    assertion_events: &[AssertionEvt],
+    file_test_path_abs: &str,
+    assertion_full_name: &str,
+    assertion_title: &str,
+) -> AssertionEvt {
+    assertion_events
         .iter()
         .find(|evt| {
             same_test_ctx(
@@ -35,27 +75,20 @@ pub fn render_http_card(
             current_test_name: Some(assertion_title.to_string()),
             expected_preview: None,
             actual_preview: None,
-        });
+        })
+}
 
+fn is_transport_card(corresponding: &AssertionEvt, per_test_http: &[HttpEvent]) -> bool {
     let has_abort = per_test_http
         .iter()
         .any(|evt| evt.kind.as_deref() == Some("abort"));
-    let transport = is_transport_error(corresponding.message.as_deref()) || has_abort;
-    let http_likely = is_http_relevant(
-        rel_path,
-        assertion_full_name,
-        &corresponding,
-        per_test_http.len(),
-        transport,
-    );
-    if !http_likely {
-        return vec![];
-    }
+    is_transport_error(corresponding.message.as_deref()) || has_abort
+}
 
-    if transport {
-        return render_transport_http_card(&corresponding, &per_test_http);
-    }
-
+fn infer_missing_http_numbers(
+    corresponding: &AssertionEvt,
+    assertion_failure_text: &str,
+) -> AssertionEvt {
     let mut corr = corresponding.clone();
     if !is_http_status_number(corr.expected_number)
         && !is_http_status_number(corr.received_number)
@@ -65,22 +98,14 @@ pub fn render_http_card(
         corr.expected_number = expected_number.or(corr.expected_number);
         corr.received_number = received_number.or(corr.received_number);
     };
+    corr
+}
 
-    let relevant = pick_relevant_http(
-        &corr,
-        http_sorted,
-        file_test_path_abs,
-        assertion_full_name,
-        assertion_full_name,
-    );
-    let Some(relevant) = relevant else {
-        return vec![];
-    };
-
-    vec![render_http_header_and_expectations(&relevant, &corr)]
-        .into_iter()
-        .chain([String::from("\n")])
-        .collect()
+fn render_status_http_card(relevant: &HttpEvent, corr: &AssertionEvt) -> Vec<String> {
+    vec![
+        render_http_header_and_expectations(relevant, corr),
+        String::from("\n"),
+    ]
 }
 
 fn render_transport_http_card(

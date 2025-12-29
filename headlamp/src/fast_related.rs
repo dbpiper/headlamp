@@ -10,6 +10,7 @@ use which::which;
 
 use git2::Repository;
 
+use crate::process::CapturedProcessOutput;
 use crate::process::run_command_capture_with_timeout;
 use crate::run::RunError;
 
@@ -20,15 +21,98 @@ pub const DEFAULT_TEST_GLOBS: [&str; 2] = [
 
 pub const FAST_RELATED_TIMEOUT: Duration = Duration::from_millis(1500);
 
-#[allow(dead_code)]
-fn build_globset(globs: &[&str]) -> globset::GlobSet {
-    let mut b = globset::GlobSetBuilder::new();
-    for g in globs {
-        if let Ok(glob) = globset::Glob::new(g) {
-            b.add(glob);
-        }
+fn rg_program() -> Option<PathBuf> {
+    which("rg").ok()
+}
+
+fn rg_related_args(
+    repo_root: &Path,
+    test_globs: &[&str],
+    exclude_globs: &[String],
+    seed_terms: &[String],
+) -> Vec<String> {
+    let mut args: Vec<String> = vec![
+        "--no-messages".to_string(),
+        "--line-number".to_string(),
+        "--color".to_string(),
+        "never".to_string(),
+        "--files-with-matches".to_string(),
+        "-S".to_string(),
+        "-F".to_string(),
+        "--no-ignore".to_string(),
+    ];
+
+    test_globs.iter().for_each(|glob| {
+        args.push("-g".to_string());
+        args.push((*glob).to_string());
+    });
+    exclude_globs.iter().for_each(|exclude| {
+        args.push("-g".to_string());
+        args.push(format!("!{exclude}"));
+    });
+    seed_terms.iter().for_each(|seed| {
+        args.push("-e".to_string());
+        args.push(seed.clone());
+    });
+    args.push(repo_root.to_string_lossy().to_string());
+    args
+}
+
+fn display_command(program: &Path, args: &[String]) -> String {
+    format!(
+        "{} {}",
+        program.to_string_lossy(),
+        args.iter()
+            .map(|s| s.as_str())
+            .collect::<Vec<_>>()
+            .join(" ")
+    )
+}
+
+fn run_rg_related(
+    rg: &Path,
+    repo_root: &Path,
+    args: &[String],
+    timeout: Duration,
+) -> Result<Option<CapturedProcessOutput>, RunError> {
+    let display = display_command(rg, args);
+    let mut command = Command::new(rg);
+    command
+        .args(args)
+        .current_dir(repo_root)
+        .env("CI", "1")
+        .env("NODE_ENV", "test");
+    match run_command_capture_with_timeout(command, display, timeout) {
+        Ok(v) => Ok(Some(v)),
+        Err(RunError::TimedOut { .. }) => Ok(None),
+        Err(e) => Err(RunError::Io(std::io::Error::other(e.to_string()))),
     }
-    b.build().unwrap_or_else(|_| globset::GlobSet::empty())
+}
+
+fn abs_posix_existing_paths_from_rg_stdout(repo_root: &Path, stdout: &[u8]) -> Vec<String> {
+    let text = String::from_utf8_lossy(stdout);
+    let uniq = text
+        .lines()
+        .map(str::trim)
+        .filter(|line| !line.is_empty())
+        .filter_map(|line| abs_posix_existing_path(repo_root, line))
+        .fold(IndexSet::<String>::new(), |mut acc, path| {
+            acc.insert(path);
+            acc
+        });
+    let mut out = uniq.into_iter().collect::<Vec<_>>();
+    out.sort();
+    out
+}
+
+fn abs_posix_existing_path(repo_root: &Path, line: &str) -> Option<String> {
+    let path = Path::new(line);
+    let abs = if path.is_absolute() {
+        path.to_path_buf()
+    } else {
+        repo_root.join(path)
+    };
+    abs.exists().then_some(abs.to_slash_lossy().to_string())
 }
 
 pub fn find_related_tests_fast(
@@ -42,7 +126,7 @@ pub fn find_related_tests_fast(
         return Ok(vec![]);
     }
 
-    let Ok(rg) = which("rg") else {
+    let Some(rg) = rg_program() else {
         return Ok(vec![]);
     };
 
@@ -51,76 +135,17 @@ pub fn find_related_tests_fast(
         return Ok(vec![]);
     }
 
-    // Mirror headlamp-original: `rg --no-messages --line-number --color never --files-with-matches -S -F --no-ignore ...`
-    let mut args: Vec<String> = vec![
-        "--no-messages".to_string(),
-        "--line-number".to_string(),
-        "--color".to_string(),
-        "never".to_string(),
-        "--files-with-matches".to_string(),
-        "-S".to_string(), // smart-case
-        "-F".to_string(), // fixed-strings
-        "--no-ignore".to_string(),
-    ];
-
-    for glob in test_globs {
-        args.push("-g".to_string());
-        args.push(glob.to_string());
-    }
-    for exclude in exclude_globs {
-        args.push("-g".to_string());
-        args.push(format!("!{exclude}"));
-    }
-    for seed in &seed_terms {
-        args.push("-e".to_string());
-        args.push(seed.clone());
-    }
-    args.push(repo_root.to_string_lossy().to_string());
-
-    let display_command = format!(
-        "{} {}",
-        rg.to_string_lossy(),
-        args.iter()
-            .map(|s| s.as_str())
-            .collect::<Vec<_>>()
-            .join(" ")
-    );
-    let mut command = Command::new(&rg);
-    command
-        .args(&args)
-        .current_dir(repo_root)
-        .env("CI", "1")
-        .env("NODE_ENV", "test");
-    let out = match run_command_capture_with_timeout(command, display_command, timeout) {
-        Ok(v) => v,
-        Err(RunError::TimedOut { .. }) => return Ok(vec![]),
-        Err(e) => {
-            return Err(RunError::Io(std::io::Error::other(e.to_string())));
-        }
+    let args = rg_related_args(repo_root, test_globs, exclude_globs, &seed_terms);
+    let Some(out) = run_rg_related(&rg, repo_root, &args, timeout)? else {
+        return Ok(vec![]);
     };
     if !out.status.success() && out.status.code() != Some(1) {
         return Ok(vec![]);
     }
-
-    let text = String::from_utf8_lossy(&out.stdout);
-
-    let mut uniq: IndexSet<String> = IndexSet::new();
-    for line in text.lines().map(str::trim).filter(|l| !l.is_empty()) {
-        let p = Path::new(line);
-        let abs = if p.is_absolute() {
-            p.to_path_buf()
-        } else {
-            repo_root.join(p)
-        };
-        let abs_posix = abs.to_slash_lossy().to_string();
-        if abs.exists() {
-            uniq.insert(abs_posix);
-        }
-    }
-
-    let mut out = uniq.into_iter().collect::<Vec<_>>();
-    out.sort();
-    Ok(out)
+    Ok(abs_posix_existing_paths_from_rg_stdout(
+        repo_root,
+        &out.stdout,
+    ))
 }
 
 pub fn cached_related(

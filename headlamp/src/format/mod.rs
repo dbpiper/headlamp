@@ -8,6 +8,7 @@ pub mod colors;
 pub mod console;
 pub mod ctx;
 pub mod details;
+pub mod failure_diagnostics;
 pub mod fns;
 pub mod infra_failure;
 pub mod nextest;

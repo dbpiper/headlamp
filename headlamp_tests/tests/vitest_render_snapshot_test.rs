@@ -76,3 +76,31 @@ fn render_vitest_from_bridge_snapshot() {
     let out = render_vitest_from_test_model(&sample_bridge(), &ctx, false);
     insta::assert_snapshot!("render_vitest_from_bridge_snapshot", out);
 }
+
+#[test]
+fn render_vitest_ignores_empty_test_suites() {
+    let repo = std::path::PathBuf::from("/repo");
+    let ctx = make_ctx(&repo, Some(80), true, false, Some("vscode".to_string()));
+
+    let mut bridge = sample_bridge();
+    bridge.test_results.push(BridgeFileResult {
+        test_file_path: "/repo/tests/empty.test.js".to_string(),
+        status: "passed".to_string(),
+        timed_out: None,
+        failure_message: "".to_string(),
+        failure_details: None,
+        test_exec_error: None,
+        console: None,
+        test_results: vec![],
+    });
+    bridge.aggregated.num_total_test_suites = 3;
+
+    let out = render_vitest_from_test_model(&bridge, &ctx, false);
+    let simple = headlamp::format::stacks::strip_ansi_simple(&out);
+    assert!(!simple.contains("empty.test.js"));
+    let test_files_line = simple
+        .lines()
+        .find(|line| line.trim_start().starts_with("Test Files"))
+        .expect("missing Test Files footer line");
+    assert!(test_files_line.contains("(2)"));
+ }

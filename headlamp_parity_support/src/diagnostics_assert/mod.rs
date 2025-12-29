@@ -138,126 +138,29 @@ pub fn assert_parity_with_diagnostics(
     compare: &ParityCompareInput,
     _run_group: Option<&ParityRunGroup>,
 ) {
-    if compare.sides.len() < 2 {
-        return;
-    }
-
-    let all_exits_equal = compare
-        .sides
-        .first()
-        .map(|first| compare.sides.iter().all(|side| side.exit == first.exit))
-        .unwrap_or(true);
-    let all_normalized_equal = compare
-        .sides
-        .first()
-        .map(|first| {
-            compare
-                .sides
-                .iter()
-                .all(|side| side.normalized == first.normalized)
-        })
-        .unwrap_or(true);
-    if all_exits_equal && all_normalized_equal {
+    if compare.sides.len() < 2 || parity_matches(compare) {
         return;
     }
 
     let safe = safe_case(case);
-    let repo_key = repo.file_name().unwrap_or_default();
-    let dump_dir = std::env::temp_dir()
-        .join("headlamp-parity-dumps")
-        .join(repo_key);
+    let dump_dir = dump_dir_for_repo(repo);
     let _ = std::fs::create_dir_all(&dump_dir);
 
     let report_path = dump_dir.join(format!("{safe}--report.txt"));
     let analysis_path = dump_dir.join(format!("{safe}--analysis.json"));
     let meta_path = dump_dir.join(format!("{safe}--meta.json"));
 
-    let side_dump_paths = compare
-        .sides
-        .iter()
-        .map(|side| {
-            let side_key = side.label.file_safe_label();
-            let normalized = dump_dir.join(format!("{safe}--{side_key}--normalized.txt"));
-            let raw = dump_dir.join(format!("{safe}--{side_key}--raw.txt"));
-            let tokens = dump_dir.join(format!("{safe}--{side_key}--tokens.json"));
-            let ast = dump_dir.join(format!("{safe}--{side_key}--ast.json"));
-            (normalized, raw, tokens, ast)
-        })
-        .collect::<Vec<_>>();
-
-    compare.sides.iter().zip(side_dump_paths.iter()).for_each(
-        |(side, (normalized_path, raw_path, tokens_path, ast_path))| {
-            let _ = std::fs::write(normalized_path, &side.normalized);
-            let _ = std::fs::write(raw_path, &side.raw);
-
-            let raw_tokens = crate::token_ast::build_token_stream(&side.raw);
-            let norm_tokens = crate::token_ast::build_token_stream(&side.normalized);
-            let doc_ast = crate::token_ast::build_document_ast(&side.normalized);
-
-            let _ = std::fs::File::create(tokens_path)
-                .ok()
-                .and_then(|mut file| {
-                    serde_json::to_writer_pretty(&mut file, &(raw_tokens, norm_tokens)).ok()
-                });
-            let _ = std::fs::File::create(ast_path)
-                .ok()
-                .and_then(|mut file| serde_json::to_writer_pretty(&mut file, &doc_ast).ok());
-        },
+    let side_dump_paths = build_side_dump_paths(&dump_dir, &safe, compare);
+    write_side_dumps(compare, &side_dump_paths);
+    let diff_paths = write_diffs(compare, &dump_dir, &safe);
+    let artifacts = build_artifacts(
+        compare,
+        &side_dump_paths,
+        diff_paths,
+        &report_path,
+        &meta_path,
+        &analysis_path,
     );
-
-    let pivot_index = crate::cluster::pick_pivot_index(compare);
-    let clusters = crate::cluster::cluster_indices_by_normalized(compare);
-
-    let diff_paths = clusters
-        .iter()
-        .filter(|cluster| !cluster.member_indices.contains(&pivot_index))
-        .filter_map(|cluster| {
-            cluster.member_indices.iter().copied().min_by(|&a, &b| {
-                compare.sides[a]
-                    .label
-                    .display_label()
-                    .cmp(&compare.sides[b].label.display_label())
-            })
-        })
-        .map(|other_index| {
-            let pivot_key = compare.sides[pivot_index].label.file_safe_label();
-            let other_key = compare.sides[other_index].label.file_safe_label();
-            let diff_path =
-                dump_dir.join(format!("{safe}--diff--{pivot_key}--vs--{other_key}.txt"));
-            let diff = similar_asserts::SimpleDiff::from_str(
-                &compare.sides[pivot_index].normalized,
-                &compare.sides[other_index].normalized,
-                &compare.sides[pivot_index].label.display_label(),
-                &compare.sides[other_index].label.display_label(),
-            )
-            .to_string();
-            let _ = std::fs::write(&diff_path, &diff);
-            diff_path.to_string_lossy().to_string()
-        })
-        .collect::<Vec<_>>();
-
-    let artifacts = crate::diagnostics::ArtifactPaths {
-        sides: compare
-            .sides
-            .iter()
-            .zip(side_dump_paths.iter())
-            .map(
-                |(side, (normalized, raw, tokens, ast))| crate::diagnostics::SideArtifactPaths {
-                    label: side.label.clone(),
-                    normalized: normalized.to_string_lossy().to_string(),
-                    raw: raw.to_string_lossy().to_string(),
-                    tokens: tokens.to_string_lossy().to_string(),
-                    ast: ast.to_string_lossy().to_string(),
-                },
-            )
-            .collect(),
-        diffs: diff_paths,
-        report: report_path.to_string_lossy().to_string(),
-        meta: meta_path.to_string_lossy().to_string(),
-        analysis: analysis_path.to_string_lossy().to_string(),
-        reruns_dir: String::new(),
-    };
-
     let bundle = crate::diagnostics::build_bundle(repo, case, artifacts, compare, &[]);
     if let Ok(mut file) = std::fs::File::create(&analysis_path) {
         let _ = serde_json::to_writer_pretty(&mut file, &bundle);
@@ -275,6 +178,149 @@ pub fn assert_parity_with_diagnostics(
         analysis_path.display(),
         truncate_report_for_panic(&report)
     );
+}
+
+#[derive(Debug, Clone)]
+struct SideDumpPaths {
+    normalized: std::path::PathBuf,
+    raw: std::path::PathBuf,
+    tokens: std::path::PathBuf,
+    ast: std::path::PathBuf,
+}
+
+fn parity_matches(compare: &ParityCompareInput) -> bool {
+    let Some(first) = compare.sides.first() else {
+        return true;
+    };
+    let all_exits_equal = compare.sides.iter().all(|side| side.exit == first.exit);
+    let all_normalized_equal = compare
+        .sides
+        .iter()
+        .all(|side| side.normalized == first.normalized);
+    all_exits_equal && all_normalized_equal
+}
+
+fn dump_dir_for_repo(repo: &Path) -> std::path::PathBuf {
+    let repo_key = repo.file_name().unwrap_or_default();
+    std::env::temp_dir()
+        .join("headlamp-parity-dumps")
+        .join(repo_key)
+}
+
+fn build_side_dump_paths(
+    dump_dir: &Path,
+    safe: &str,
+    compare: &ParityCompareInput,
+) -> Vec<SideDumpPaths> {
+    compare
+        .sides
+        .iter()
+        .map(|side| {
+            let side_key = side.label.file_safe_label();
+            SideDumpPaths {
+                normalized: dump_dir.join(format!("{safe}--{side_key}--normalized.txt")),
+                raw: dump_dir.join(format!("{safe}--{side_key}--raw.txt")),
+                tokens: dump_dir.join(format!("{safe}--{side_key}--tokens.json")),
+                ast: dump_dir.join(format!("{safe}--{side_key}--ast.json")),
+            }
+        })
+        .collect::<Vec<_>>()
+}
+
+fn write_side_dumps(compare: &ParityCompareInput, side_dump_paths: &[SideDumpPaths]) {
+    compare
+        .sides
+        .iter()
+        .zip(side_dump_paths.iter())
+        .for_each(|(side, paths)| write_side_dump(side, paths));
+}
+
+fn write_side_dump(side: &crate::parity_meta::ParityCompareSideInput, paths: &SideDumpPaths) {
+    let _ = std::fs::write(&paths.normalized, &side.normalized);
+    let _ = std::fs::write(&paths.raw, &side.raw);
+    let raw_tokens = crate::token_ast::build_token_stream(&side.raw);
+    let norm_tokens = crate::token_ast::build_token_stream(&side.normalized);
+    let doc_ast = crate::token_ast::build_document_ast(&side.normalized);
+    let _ = std::fs::File::create(&paths.tokens)
+        .ok()
+        .and_then(|mut file| {
+            serde_json::to_writer_pretty(&mut file, &(raw_tokens, norm_tokens)).ok()
+        });
+    let _ = std::fs::File::create(&paths.ast)
+        .ok()
+        .and_then(|mut file| serde_json::to_writer_pretty(&mut file, &doc_ast).ok());
+}
+
+fn write_diffs(compare: &ParityCompareInput, dump_dir: &Path, safe: &str) -> Vec<String> {
+    let pivot_index = crate::cluster::pick_pivot_index(compare);
+    crate::cluster::cluster_indices_by_normalized(compare)
+        .iter()
+        .filter(|cluster| !cluster.member_indices.contains(&pivot_index))
+        .filter_map(|cluster| pick_min_label_index(compare, cluster))
+        .map(|other_index| write_diff(compare, dump_dir, safe, pivot_index, other_index))
+        .collect::<Vec<_>>()
+}
+
+fn pick_min_label_index(
+    compare: &ParityCompareInput,
+    cluster: &crate::cluster::OutputCluster,
+) -> Option<usize> {
+    cluster.member_indices.iter().copied().min_by(|&a, &b| {
+        compare.sides[a]
+            .label
+            .display_label()
+            .cmp(&compare.sides[b].label.display_label())
+    })
+}
+
+fn write_diff(
+    compare: &ParityCompareInput,
+    dump_dir: &Path,
+    safe: &str,
+    pivot_index: usize,
+    other_index: usize,
+) -> String {
+    let pivot_key = compare.sides[pivot_index].label.file_safe_label();
+    let other_key = compare.sides[other_index].label.file_safe_label();
+    let diff_path = dump_dir.join(format!("{safe}--diff--{pivot_key}--vs--{other_key}.txt"));
+    let diff = similar_asserts::SimpleDiff::from_str(
+        &compare.sides[pivot_index].normalized,
+        &compare.sides[other_index].normalized,
+        &compare.sides[pivot_index].label.display_label(),
+        &compare.sides[other_index].label.display_label(),
+    )
+    .to_string();
+    let _ = std::fs::write(&diff_path, &diff);
+    diff_path.to_string_lossy().to_string()
+}
+
+fn build_artifacts(
+    compare: &ParityCompareInput,
+    side_dump_paths: &[SideDumpPaths],
+    diff_paths: Vec<String>,
+    report_path: &Path,
+    meta_path: &Path,
+    analysis_path: &Path,
+) -> crate::diagnostics::ArtifactPaths {
+    crate::diagnostics::ArtifactPaths {
+        sides: compare
+            .sides
+            .iter()
+            .zip(side_dump_paths.iter())
+            .map(|(side, paths)| crate::diagnostics::SideArtifactPaths {
+                label: side.label.clone(),
+                normalized: paths.normalized.to_string_lossy().to_string(),
+                raw: paths.raw.to_string_lossy().to_string(),
+                tokens: paths.tokens.to_string_lossy().to_string(),
+                ast: paths.ast.to_string_lossy().to_string(),
+            })
+            .collect(),
+        diffs: diff_paths,
+        report: report_path.to_string_lossy().to_string(),
+        meta: meta_path.to_string_lossy().to_string(),
+        analysis: analysis_path.to_string_lossy().to_string(),
+        reruns_dir: String::new(),
+    }
 }
 
 fn mk_side_meta(

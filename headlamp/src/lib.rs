@@ -46,6 +46,8 @@ mod cargo_select_test;
 mod git_test;
 #[cfg(test)]
 mod pythonpath_test;
+#[cfg(test)]
+mod pytest_location_test;
 
 pub fn core_version() -> &'static str {
     env!("CARGO_PKG_VERSION")

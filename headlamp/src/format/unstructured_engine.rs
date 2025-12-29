@@ -2,7 +2,7 @@ use std::collections::BTreeMap;
 use std::path::{Path, PathBuf};
 
 use crate::test_model::TestConsoleEntry;
-use crate::test_model::{TestCaseResult, TestRunAggregated, TestRunModel, TestSuiteResult};
+use crate::test_model::{TestCaseResult, TestLocation, TestRunAggregated, TestRunModel, TestSuiteResult};
 
 #[derive(Debug, Clone)]
 pub enum UnstructuredStreamEvent {
@@ -70,6 +70,14 @@ struct SuiteState {
     source_path: String,
     lines: Vec<String>,
     active_output_test_name: Option<String>,
+}
+
+#[derive(Debug, Default)]
+struct SuiteParseAcc {
+    tests: Vec<TestCaseResult>,
+    failures_by_name: BTreeMap<String, String>,
+    console_entries: Vec<TestConsoleEntry>,
+    last_pending_test_index: Option<usize>,
 }
 
 #[derive(Debug, Clone)]
@@ -169,16 +177,20 @@ impl<D: UnstructuredDialect> UnstructuredStreamParser<D> {
         let Some(state) = self.current.take() else {
             return;
         };
+        let SuiteState {
+            source_path,
+            lines,
+            active_output_test_name: _,
+        } = state;
         let suite = parse_suite_block(
             &self.repo_root,
             &self.dialect,
             &SuiteBlock {
-                source_path: state.source_path,
-                lines: state.lines,
+                source_path,
+                lines: lines.clone(),
             },
         );
-        let has_any_tests = !suite.test_results.is_empty();
-        if has_any_tests {
+        if !suite.test_results.is_empty() {
             self.suites.push(suite);
         }
     }
@@ -189,114 +201,10 @@ fn parse_suite_block<D: UnstructuredDialect>(
     dialect: &D,
     block: &SuiteBlock,
 ) -> TestSuiteResult {
-    let mut tests: Vec<TestCaseResult> = vec![];
-    let mut failures_by_name: BTreeMap<String, String> = BTreeMap::new();
-    let mut console_entries: Vec<TestConsoleEntry> = vec![];
-    let mut last_pending_test_index: Option<usize> = None;
-
-    let mut line_index: usize = 0;
-    while line_index < block.lines.len() {
-        let line = block.lines[line_index].as_str();
-        if let Some(parsed) = dialect.parse_test_line(line) {
-            match parsed {
-                ParsedTestLine::Completed { name, status } => {
-                    last_pending_test_index = None;
-                    tests.push(TestCaseResult {
-                        title: name.clone(),
-                        full_name: name,
-                        status,
-                        timed_out: None,
-                        duration: 0,
-                        location: None,
-                        failure_messages: vec![],
-                        failure_details: None,
-                    });
-                }
-                ParsedTestLine::Pending {
-                    name,
-                    inline_output,
-                } => {
-                    tests.push(TestCaseResult {
-                        title: name.clone(),
-                        full_name: name,
-                        status: "pending".to_string(),
-                        timed_out: None,
-                        duration: 0,
-                        location: None,
-                        failure_messages: vec![],
-                        failure_details: None,
-                    });
-                    last_pending_test_index = Some(tests.len().saturating_sub(1));
-                    if let Some(inline) = inline_output.as_deref().filter(|s| !s.trim().is_empty())
-                    {
-                        console_entries.push(TestConsoleEntry {
-                            message: Some(serde_json::Value::String(inline.to_string())),
-                            type_name: Some("log".to_string()),
-                            origin: Some(dialect.origin().to_string()),
-                        });
-                    }
-                }
-            }
-            line_index += 1;
-            continue;
-        }
-
-        if let Some(status) = dialect.parse_status_only_line(line) {
-            if let Some(index) = last_pending_test_index.take()
-                && let Some(test_case) = tests.get_mut(index)
-            {
-                test_case.status = status;
-            };
-            line_index += 1;
-            continue;
-        }
-
-        if let Some((failed_name, consumed, failure_text)) =
-            dialect.parse_failure_block(&block.lines, line_index)
-        {
-            failures_by_name.insert(failed_name, failure_text);
-            line_index += consumed;
-            continue;
-        }
-
-        if let Some((failed_name, consumed, failure_text)) =
-            dialect.parse_panic_block(&block.lines, line_index)
-        {
-            failures_by_name.insert(failed_name, failure_text);
-            line_index += consumed;
-            continue;
-        }
-
-        if dialect.should_keep_as_console_line(line) {
-            console_entries.push(TestConsoleEntry {
-                message: Some(serde_json::Value::String(line.to_string())),
-                type_name: Some("log".to_string()),
-                origin: Some(dialect.origin().to_string()),
-            });
-        }
-
-        line_index += 1;
-    }
-
-    tests.iter_mut().for_each(|test_case| {
-        if test_case.status == "failed" {
-            if let Some(text) = failures_by_name.get(&test_case.full_name) {
-                test_case.failure_messages = vec![text.clone()];
-            }
-        }
-    });
-
-    let (_num_total_tests, num_failed_tests) = tests.iter().fold((0u64, 0u64), |acc, t| {
-        let (tot, fail) = acc;
-        let tot2 = tot.saturating_add(1);
-        let fail2 = if t.status == "failed" {
-            fail.saturating_add(1)
-        } else {
-            fail
-        };
-        (tot2, fail2)
-    });
-    let suite_failed = num_failed_tests > 0;
+    let mut acc = parse_suite_lines(dialect, &block.lines);
+    apply_failure_messages(&mut acc.tests, &acc.failures_by_name);
+    apply_failure_locations(repo_root, &block.source_path, &mut acc.tests);
+    let suite_failed = acc.tests.iter().any(|t| t.status == "failed");
 
     TestSuiteResult {
         test_file_path: absolutize_repo_relative(repo_root, &block.source_path),
@@ -305,9 +213,140 @@ fn parse_suite_block<D: UnstructuredDialect>(
         failure_message: String::new(),
         failure_details: None,
         test_exec_error: None,
-        console: (!console_entries.is_empty()).then_some(console_entries),
-        test_results: tests,
+        console: (!acc.console_entries.is_empty()).then_some(acc.console_entries),
+        test_results: acc.tests,
     }
+}
+
+fn parse_suite_lines<D: UnstructuredDialect>(dialect: &D, lines: &[String]) -> SuiteParseAcc {
+    let mut acc = SuiteParseAcc::default();
+    let mut line_index: usize = 0;
+    while line_index < lines.len() {
+        line_index = parse_suite_step(dialect, lines, line_index, &mut acc);
+    }
+    acc
+}
+
+fn parse_suite_step<D: UnstructuredDialect>(
+    dialect: &D,
+    lines: &[String],
+    line_index: usize,
+    acc: &mut SuiteParseAcc,
+) -> usize {
+    let line = lines[line_index].as_str();
+    dialect
+        .parse_test_line(line)
+        .map(|parsed| {
+            apply_parsed_test_line(dialect, acc, parsed);
+            line_index.saturating_add(1)
+        })
+        .or_else(|| {
+            dialect.parse_status_only_line(line).map(|status| {
+                apply_status_only(acc, status);
+                line_index.saturating_add(1)
+            })
+        })
+        .or_else(|| parse_failure_any(dialect, lines, line_index, acc))
+        .unwrap_or_else(|| {
+            maybe_push_console_line(dialect, acc, line);
+            line_index.saturating_add(1)
+        })
+}
+
+fn parse_failure_any<D: UnstructuredDialect>(
+    dialect: &D,
+    lines: &[String],
+    line_index: usize,
+    acc: &mut SuiteParseAcc,
+) -> Option<usize> {
+    dialect
+        .parse_failure_block(lines, line_index)
+        .or_else(|| dialect.parse_panic_block(lines, line_index))
+        .map(|(failed_name, consumed, failure_text)| {
+            acc.failures_by_name.insert(failed_name, failure_text);
+            line_index.saturating_add(consumed)
+        })
+}
+
+fn apply_parsed_test_line<D: UnstructuredDialect>(
+    dialect: &D,
+    acc: &mut SuiteParseAcc,
+    parsed: ParsedTestLine,
+) {
+    match parsed {
+        ParsedTestLine::Completed { name, status } => {
+            acc.last_pending_test_index = None;
+            acc.tests.push(empty_test_case(name, status));
+        }
+        ParsedTestLine::Pending {
+            name,
+            inline_output,
+        } => {
+            acc.tests
+                .push(empty_test_case(name.clone(), "pending".to_string()));
+            acc.last_pending_test_index = Some(acc.tests.len().saturating_sub(1));
+            inline_output
+                .as_deref()
+                .filter(|s| !s.trim().is_empty())
+                .into_iter()
+                .for_each(|inline| {
+                    acc.console_entries.push(TestConsoleEntry {
+                        message: Some(serde_json::Value::String(inline.to_string())),
+                        type_name: Some("log".to_string()),
+                        origin: Some(dialect.origin().to_string()),
+                    });
+                });
+        }
+    }
+}
+
+fn apply_status_only(acc: &mut SuiteParseAcc, status: String) {
+    if let Some(index) = acc.last_pending_test_index.take()
+        && let Some(test_case) = acc.tests.get_mut(index)
+    {
+        test_case.status = status;
+    };
+}
+
+fn maybe_push_console_line<D: UnstructuredDialect>(
+    dialect: &D,
+    acc: &mut SuiteParseAcc,
+    line: &str,
+) {
+    if dialect.should_keep_as_console_line(line) {
+        acc.console_entries.push(TestConsoleEntry {
+            message: Some(serde_json::Value::String(line.to_string())),
+            type_name: Some("log".to_string()),
+            origin: Some(dialect.origin().to_string()),
+        });
+    }
+}
+
+fn empty_test_case(full_name: String, status: String) -> TestCaseResult {
+    TestCaseResult {
+        title: full_name.clone(),
+        full_name,
+        status,
+        timed_out: None,
+        duration: 0,
+        location: None,
+        failure_messages: vec![],
+        failure_details: None,
+    }
+}
+
+fn apply_failure_messages(
+    tests: &mut [TestCaseResult],
+    failures_by_name: &BTreeMap<String, String>,
+) {
+    tests.iter_mut().for_each(|test_case| {
+        if test_case.status != "failed" {
+            return;
+        }
+        if let Some(text) = failures_by_name.get(&test_case.full_name) {
+            test_case.failure_messages = vec![text.clone()];
+        }
+    });
 }
 
 fn absolutize_repo_relative(repo_root: &Path, repo_relative: &str) -> String {
@@ -315,7 +354,57 @@ fn absolutize_repo_relative(repo_root: &Path, repo_relative: &str) -> String {
     if path.is_absolute() {
         return repo_relative.to_string();
     }
-    repo_root.join(path).to_string_lossy().to_string()
+    let joined = repo_root.join(path);
+    if joined.exists() {
+        return joined.to_string_lossy().to_string();
+    }
+    crate::format::failure_diagnostics::resolve_existing_path_best_effort(
+        &repo_root.to_string_lossy(),
+        repo_relative,
+    )
+    .unwrap_or_else(|| joined.to_string_lossy().to_string())
+}
+
+fn apply_failure_locations(repo_root: &Path, suite_source_path: &str, tests: &mut [TestCaseResult]) {
+    let suite_abs = absolutize_repo_relative(repo_root, suite_source_path);
+    let suite_file_name = Path::new(&suite_abs)
+        .file_name()
+        .map(|s| s.to_string_lossy().to_string())
+        .unwrap_or_default();
+    if suite_file_name.trim().is_empty() {
+        return;
+    }
+
+    tests.iter_mut().for_each(|test_case| {
+        if test_case.status != "failed" || test_case.location.is_some() {
+            return;
+        }
+        let loc = test_case
+            .failure_messages
+            .iter()
+            .flat_map(|msg| msg.lines())
+            .find_map(crate::format::failure_diagnostics::parse_rust_panic_location)
+            .and_then(|(file, line_number, col_number)| {
+                crate::format::failure_diagnostics::resolve_existing_path_best_effort(
+                    &repo_root.to_string_lossy(),
+                    &file,
+                )
+                .map(|resolved| (resolved, line_number, col_number))
+                .or_else(|| Some((file, line_number, col_number)))
+            })
+            .and_then(|(resolved_file, line_number, col_number)| {
+                let matches_suite = Path::new(&resolved_file)
+                    .file_name()
+                    .is_some_and(|s| s.to_string_lossy() == suite_file_name);
+                (matches_suite && line_number > 0 && col_number > 0).then_some(TestLocation {
+                    line: line_number,
+                    column: col_number,
+                })
+            });
+        if let Some(loc) = loc {
+            test_case.location = Some(loc);
+        }
+    });
 }
 
 fn build_test_run_model(suites: Vec<TestSuiteResult>) -> TestRunModel {

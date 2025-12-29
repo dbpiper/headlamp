@@ -85,91 +85,208 @@ pub(super) struct ComputeRelatedSelectionArgs<'a> {
 }
 
 pub(super) fn compute_related_selection(
-    args: ComputeRelatedSelectionArgs<'_>,
+    compute_args: ComputeRelatedSelectionArgs<'_>,
 ) -> Result<RelatedTestSelection, RunError> {
-    let ComputeRelatedSelectionArgs {
+    if compute_args.selection_is_tests_only {
+        return Ok(tests_only_related_selection(
+            compute_args.selection_paths_abs,
+        ));
+    }
+
+    let Some(key) = compute_args.selection_key else {
+        return Ok(empty_related_selection());
+    };
+
+    let parsed_args = compute_args.args;
+    let should_refine = parsed_args.changed.is_some() || parsed_args.changed_depth.is_some();
+    let max_depth = max_depth_from_args(parsed_args.changed_depth);
+    let fast_tests = cached_related(compute_args.repo_root, key, parsed_args.no_cache, || {
+        find_related_tests_fast(
+            compute_args.repo_root,
+            compute_args.production_seeds_abs,
+            &DEFAULT_TEST_GLOBS,
+            compute_args.selection_exclude_globs,
+            FAST_RELATED_TIMEOUT,
+        )
+    })?;
+    Ok(compute_related_selection_from_fast_tests(
+        ComputeRelatedFromFastTestsArgs {
+            repo_root: compute_args.repo_root,
+            dependency_language: compute_args.dependency_language,
+            project_configs: compute_args.project_configs,
+            jest_bin: compute_args.jest_bin,
+            discovery_args: compute_args.discovery_args,
+            production_seeds_abs: compute_args.production_seeds_abs,
+            selection_exclude_globs: compute_args.selection_exclude_globs,
+            fast_tests,
+            max_depth,
+            no_cache: parsed_args.no_cache,
+            should_refine,
+        },
+    ))
+}
+
+fn tests_only_related_selection(selection_paths_abs: &[String]) -> RelatedTestSelection {
+    RelatedTestSelection {
+        selected_test_paths_abs: selection_paths_abs.to_vec(),
+        rank_by_abs_path: BTreeMap::new(),
+    }
+}
+
+fn empty_related_selection() -> RelatedTestSelection {
+    RelatedTestSelection {
+        selected_test_paths_abs: vec![],
+        rank_by_abs_path: BTreeMap::new(),
+    }
+}
+
+#[derive(Debug)]
+struct ComputeRelatedFromFastTestsArgs<'a> {
+    repo_root: &'a Path,
+    dependency_language: DependencyLanguageId,
+    project_configs: &'a [PathBuf],
+    jest_bin: &'a Path,
+    discovery_args: &'a [String],
+    production_seeds_abs: &'a [String],
+    selection_exclude_globs: &'a [String],
+    fast_tests: Vec<String>,
+    max_depth: MaxDepth,
+    no_cache: bool,
+    should_refine: bool,
+}
+
+fn compute_related_selection_from_fast_tests(
+    args: ComputeRelatedFromFastTestsArgs<'_>,
+) -> RelatedTestSelection {
+    let ComputeRelatedFromFastTestsArgs {
         repo_root,
-        args,
+        dependency_language,
         project_configs,
         jest_bin,
         discovery_args,
-        dependency_language,
-        selection_key,
-        selection_is_tests_only,
-        selection_paths_abs,
         production_seeds_abs,
         selection_exclude_globs,
+        fast_tests,
+        max_depth,
+        no_cache,
+        should_refine,
     } = args;
 
-    if selection_is_tests_only {
-        return Ok(RelatedTestSelection {
-            selected_test_paths_abs: selection_paths_abs.to_vec(),
-            rank_by_abs_path: BTreeMap::new(),
+    if should_refine {
+        return related_selection_with_transitive_refine(TransitiveRefineSelectionArgs {
+            repo_root,
+            dependency_language,
+            project_configs,
+            jest_bin,
+            discovery_args,
+            production_seeds_abs,
+            selection_exclude_globs,
+            fast_tests,
+            max_depth,
+            no_cache,
         });
     }
 
-    let Some(key) = selection_key else {
-        return Ok(RelatedTestSelection {
-            selected_test_paths_abs: vec![],
-            rank_by_abs_path: BTreeMap::new(),
-        });
-    };
-
-    cached_related(repo_root, key, args.no_cache, || {
-        find_related_tests_fast(
-            repo_root,
-            production_seeds_abs,
-            &DEFAULT_TEST_GLOBS,
-            selection_exclude_globs,
-            FAST_RELATED_TIMEOUT,
-        )
+    related_selection_without_transitive_refine(RelatedSelectionArgs {
+        repo_root,
+        dependency_language,
+        production_seeds_abs,
+        selection_exclude_globs,
+        fast_tests,
     })
-    .map(|fast_tests| {
-        if !fast_tests.is_empty() {
-            let augmented = augment_with_http_tests(
+}
+
+#[derive(Debug)]
+struct RelatedSelectionArgs<'a> {
+    repo_root: &'a Path,
+    dependency_language: DependencyLanguageId,
+    production_seeds_abs: &'a [String],
+    selection_exclude_globs: &'a [String],
+    fast_tests: Vec<String>,
+}
+
+fn related_selection_without_transitive_refine(
+    args: RelatedSelectionArgs<'_>,
+) -> RelatedTestSelection {
+    let RelatedSelectionArgs {
+        repo_root,
+        dependency_language,
+        production_seeds_abs,
+        selection_exclude_globs,
+        fast_tests,
+    } = args;
+
+    if fast_tests.is_empty() {
+        select_related_tests(
+            repo_root,
+            dependency_language,
+            production_seeds_abs,
+            selection_exclude_globs,
+        )
+    } else {
+        RelatedTestSelection {
+            selected_test_paths_abs: augment_with_http_tests(
                 repo_root,
                 production_seeds_abs,
                 selection_exclude_globs,
                 fast_tests,
-            );
-            if args.changed.is_some() || args.changed_depth.is_some() {
-                return refine_by_transitive_seed_scan(RefineByTransitiveSeedScanArgs {
-                    repo_root,
-                    dependency_language,
-                    project_configs,
-                    jest_bin,
-                    discovery_args,
-                    production_seeds_abs,
-                    candidate_tests_abs: augmented,
-                    max_depth: max_depth_from_args(args.changed_depth),
-                    no_cache: args.no_cache,
-                });
-            }
-            RelatedTestSelection {
-                selected_test_paths_abs: augmented,
-                rank_by_abs_path: BTreeMap::new(),
-            }
-        } else {
-            if args.changed.is_some() || args.changed_depth.is_some() {
-                return refine_by_transitive_seed_scan(RefineByTransitiveSeedScanArgs {
-                    repo_root,
-                    dependency_language,
-                    project_configs,
-                    jest_bin,
-                    discovery_args,
-                    production_seeds_abs,
-                    candidate_tests_abs: vec![],
-                    max_depth: max_depth_from_args(args.changed_depth),
-                    no_cache: args.no_cache,
-                });
-            }
-            select_related_tests(
-                repo_root,
-                dependency_language,
-                production_seeds_abs,
-                selection_exclude_globs,
-            )
+            ),
+            rank_by_abs_path: BTreeMap::new(),
         }
+    }
+}
+
+#[derive(Debug)]
+struct TransitiveRefineSelectionArgs<'a> {
+    repo_root: &'a Path,
+    dependency_language: DependencyLanguageId,
+    project_configs: &'a [PathBuf],
+    jest_bin: &'a Path,
+    discovery_args: &'a [String],
+    production_seeds_abs: &'a [String],
+    selection_exclude_globs: &'a [String],
+    fast_tests: Vec<String>,
+    max_depth: MaxDepth,
+    no_cache: bool,
+}
+
+fn related_selection_with_transitive_refine(
+    args: TransitiveRefineSelectionArgs<'_>,
+) -> RelatedTestSelection {
+    let TransitiveRefineSelectionArgs {
+        repo_root,
+        dependency_language,
+        project_configs,
+        jest_bin,
+        discovery_args,
+        production_seeds_abs,
+        selection_exclude_globs,
+        fast_tests,
+        max_depth,
+        no_cache,
+    } = args;
+
+    let candidate_tests_abs = if fast_tests.is_empty() {
+        Vec::new()
+    } else {
+        augment_with_http_tests(
+            repo_root,
+            production_seeds_abs,
+            selection_exclude_globs,
+            fast_tests,
+        )
+    };
+
+    refine_by_transitive_seed_scan(RefineByTransitiveSeedScanArgs {
+        repo_root,
+        dependency_language,
+        project_configs,
+        jest_bin,
+        discovery_args,
+        production_seeds_abs,
+        candidate_tests_abs,
+        max_depth,
+        no_cache,
     })
 }
 
@@ -233,25 +350,13 @@ fn refine_by_transitive_seed_scan(
         };
     }
 
-    let all_tests = project_configs
-        .iter()
-        .filter_map(|cfg_path| {
-            let cfg_token = config_token(repo_root, cfg_path);
-            let mut list_args = discovery_args.to_vec();
-            list_args.extend(["--config".to_string(), cfg_token.clone()]);
-            discover_jest_list_tests_cached_with_timeout(
-                cfg_path.parent().unwrap_or(repo_root),
-                jest_bin,
-                &list_args,
-                no_cache,
-                JEST_LIST_TESTS_TIMEOUT,
-            )
-            .ok()
-        })
-        .flatten()
-        .collect::<IndexSet<_>>()
-        .into_iter()
-        .collect::<Vec<_>>();
+    let all_tests = discover_all_tests_for_transitive_scan(DiscoverAllTestsArgs {
+        repo_root,
+        project_configs,
+        jest_bin,
+        discovery_args,
+        no_cache,
+    });
 
     let mut kept = filter_tests_by_transitive_seed(
         repo_root,
@@ -272,6 +377,55 @@ fn refine_by_transitive_seed_scan(
         selected_test_paths_abs: kept,
         rank_by_abs_path,
     }
+}
+
+#[derive(Debug)]
+struct DiscoverAllTestsArgs<'a> {
+    repo_root: &'a Path,
+    project_configs: &'a [PathBuf],
+    jest_bin: &'a Path,
+    discovery_args: &'a [String],
+    no_cache: bool,
+}
+
+fn discover_tests_for_config(
+    repo_root: &Path,
+    cfg_path: &Path,
+    jest_bin: &Path,
+    discovery_args: &[String],
+    no_cache: bool,
+) -> Option<Vec<String>> {
+    let cfg_token = config_token(repo_root, cfg_path);
+    let mut list_args = discovery_args.to_vec();
+    list_args.extend(["--config".to_string(), cfg_token]);
+    discover_jest_list_tests_cached_with_timeout(
+        cfg_path.parent().unwrap_or(repo_root),
+        jest_bin,
+        &list_args,
+        no_cache,
+        JEST_LIST_TESTS_TIMEOUT,
+    )
+    .ok()
+}
+
+fn discover_all_tests_for_transitive_scan(args: DiscoverAllTestsArgs<'_>) -> Vec<String> {
+    let DiscoverAllTestsArgs {
+        repo_root,
+        project_configs,
+        jest_bin,
+        discovery_args,
+        no_cache,
+    } = args;
+
+    project_configs
+        .iter()
+        .filter_map(|cfg_path| {
+            discover_tests_for_config(repo_root, cfg_path, jest_bin, discovery_args, no_cache)
+        })
+        .flatten()
+        .collect::<IndexSet<_>>()
+        .into_iter()
+        .collect::<Vec<_>>()
 }
 
 fn config_token(repo_root: &Path, cfg: &Path) -> String {
@@ -314,19 +468,7 @@ pub(super) fn compute_directness_rank_base(
         return Ok(BTreeMap::new());
     }
 
-    let mut selection_key_parts = production_seeds
-        .iter()
-        .filter_map(|abs| {
-            Path::new(abs)
-                .strip_prefix(repo_root)
-                .ok()
-                .map(|p| p.to_slash_lossy().to_string())
-        })
-        .collect::<std::collections::BTreeSet<_>>()
-        .into_iter()
-        .collect::<Vec<_>>();
-    selection_key_parts.sort();
-    let selection_key = selection_key_parts.join("|");
+    let selection_key = selection_key_for_production_seeds(repo_root, &production_seeds);
 
     let related = cached_related(repo_root, &selection_key, no_cache, || {
         find_related_tests_fast(
@@ -338,23 +480,9 @@ pub(super) fn compute_directness_rank_base(
         )
     })?;
 
-    let route_index = get_route_index(repo_root);
-    let http_paths = production_seeds
-        .iter()
-        .flat_map(|seed| route_index.http_routes_for_source(seed))
-        .collect::<std::collections::BTreeSet<_>>()
-        .into_iter()
-        .collect::<Vec<_>>();
-    let route_tests = discover_tests_for_http_paths(repo_root, &http_paths, exclude_globs);
-
-    let existing = related
-        .iter()
-        .cloned()
-        .collect::<std::collections::BTreeSet<_>>();
-    let augmented = related
-        .into_iter()
-        .chain(route_tests.into_iter().filter(|t| !existing.contains(t)))
-        .collect::<Vec<_>>();
+    let route_tests =
+        discover_route_tests_for_production_seeds(repo_root, &production_seeds, exclude_globs);
+    let augmented = append_missing_paths_preserving_order(related, route_tests);
 
     Ok(augmented
         .into_iter()
@@ -363,4 +491,45 @@ pub(super) fn compute_directness_rank_base(
             acc.insert(normalize_abs_posix(&abs), index as i64);
             acc
         }))
+}
+
+fn selection_key_for_production_seeds(repo_root: &Path, production_seeds: &[String]) -> String {
+    let mut parts = production_seeds
+        .iter()
+        .filter_map(|abs| {
+            Path::new(abs)
+                .strip_prefix(repo_root)
+                .ok()
+                .map(|p| p.to_slash_lossy().to_string())
+        })
+        .collect::<std::collections::BTreeSet<_>>()
+        .into_iter()
+        .collect::<Vec<_>>();
+    parts.sort();
+    parts.join("|")
+}
+
+fn discover_route_tests_for_production_seeds(
+    repo_root: &Path,
+    production_seeds: &[String],
+    exclude_globs: &[String],
+) -> Vec<String> {
+    let route_index = get_route_index(repo_root);
+    let http_paths = production_seeds
+        .iter()
+        .flat_map(|seed| route_index.http_routes_for_source(seed))
+        .collect::<std::collections::BTreeSet<_>>()
+        .into_iter()
+        .collect::<Vec<_>>();
+    discover_tests_for_http_paths(repo_root, &http_paths, exclude_globs)
+}
+
+fn append_missing_paths_preserving_order(base: Vec<String>, extras: Vec<String>) -> Vec<String> {
+    let existing = base
+        .iter()
+        .cloned()
+        .collect::<std::collections::BTreeSet<_>>();
+    base.into_iter()
+        .chain(extras.into_iter().filter(|t| !existing.contains(t)))
+        .collect::<Vec<_>>()
 }

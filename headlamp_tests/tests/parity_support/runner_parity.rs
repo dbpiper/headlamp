@@ -224,76 +224,7 @@ fn write_stubbed_cargo(repo: &Path, scenario: &RunnerParityScenario) {
         );
     }
 
-    let script = if cfg!(windows) {
-        "@echo off\r\necho cargo stub not supported on windows\r\nexit /b 1\r\n".to_string()
-    } else {
-        r#"#!/usr/bin/env bash
-set -euo pipefail
-
-scenario_path=".headlamp-stub-scenario.json"
-if [[ ! -f "$scenario_path" ]]; then
-  echo "missing $scenario_path" >&2
-  exit 2
-fi
-
-sub="${1:-}"
-shift || true
-
-if [[ "$sub" == "test" ]]; then
-  # Minimal output that CargoTestStreamParser can parse.
-  echo "Running tests/sum_test.rs (target/debug/deps/sum_test-0000000000000000)"
-  echo "test sum_passes ... ok"
-  if grep -q '"success":[[:space:]]*false' "$scenario_path"; then
-    echo "test sum_fails ... FAILED"
-    echo
-    echo "failures:"
-    echo
-    echo "---- sum_fails stdout ----"
-    echo "fail"
-    echo
-    echo "failures:"
-    echo "    sum_fails"
-    echo
-    echo "test result: FAILED. 1 passed; 1 failed; 0 ignored; 0 measured; 0 filtered out"
-    exit 101
-  else
-    echo "test result: ok. 1 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out"
-    exit 0
-  fi
-fi
-
-if [[ "$sub" == "nextest" ]]; then
-  if [[ "${1:-}" == "--version" ]]; then
-    echo "cargo-nextest 0.0.0"
-    exit 0
-  fi
-  # Minimal libtest-json-plus stream.
-  echo '{"type":"suite","event":"started","test_count":2,"nextest":{"crate":"parity_stub","test_binary":"sum_test","kind":"test"}}'
-  echo '{"type":"test","event":"started","name":"parity_stub::sum_test$sum_passes"}'
-  echo '{"type":"test","event":"ok","name":"parity_stub::sum_test$sum_passes","exec_time":0.0}'
-  if grep -q '"success":[[:space:]]*false' "$scenario_path"; then
-    echo '{"type":"test","event":"failed","name":"parity_stub::sum_test$sum_fails","exec_time":0.0,"stdout":"fail"}'
-    echo '{"type":"suite","event":"failed","passed":1,"failed":1,"ignored":0,"measured":0,"filtered_out":0,"exec_time":0.0,"nextest":{"crate":"parity_stub","test_binary":"sum_test","kind":"test"}}'
-    exit 101
-  else
-    echo '{"type":"suite","event":"ok","passed":1,"failed":0,"ignored":0,"measured":0,"filtered_out":0,"exec_time":0.0,"nextest":{"crate":"parity_stub","test_binary":"sum_test","kind":"test"}}'
-    exit 0
-  fi
-fi
-
-if [[ "$sub" == "llvm-cov" ]]; then
-  if [[ "${1:-}" == "--version" ]]; then
-    echo "cargo-llvm-cov 0.0.0"
-    exit 0
-  fi
-  exit 0
-fi
-
-echo "unsupported cargo stub subcommand: $sub" >&2
-exit 2
-"#
-        .to_string()
-    };
+    let script = super::stub_scripts::cargo_stub_script();
     write_file(&cargo_path, &script);
     #[cfg(unix)]
     {
@@ -361,47 +292,72 @@ if __name__ == "__main__":
 }
 
 fn build_model(repo: &Path, scenario: &RunnerParityScenario) -> TestRunModel {
-    let test_file_path = repo
-        .join("tests")
+    let test_file_path = scenario_test_file_path(repo, scenario);
+    let pass_case = passing_case(&scenario.passing_test_name);
+    let test_results = suite_test_results(pass_case, scenario);
+    let suite = suite_result(test_file_path, test_results, scenario.should_fail);
+    TestRunModel {
+        start_time: 0,
+        test_results: vec![suite],
+        aggregated: aggregated_for_should_fail(scenario.should_fail),
+    }
+}
+
+fn scenario_test_file_path(repo: &Path, scenario: &RunnerParityScenario) -> String {
+    repo.join("tests")
         .join(format!("{}.js", scenario.test_file_stem))
         .to_string_lossy()
-        .to_string();
-    let pass_case = TestCaseResult {
-        title: scenario.passing_test_name.clone(),
-        full_name: scenario.passing_test_name.clone(),
+        .to_string()
+}
+
+fn passing_case(passing_test_name: &str) -> TestCaseResult {
+    let full_name = passing_test_name.to_string();
+    TestCaseResult {
+        title: full_name.clone(),
+        full_name,
         status: "passed".to_string(),
         timed_out: None,
         duration: 0,
         location: None,
         failure_messages: vec![],
         failure_details: None,
+    }
+}
+
+fn failing_case(scenario: &RunnerParityScenario) -> TestCaseResult {
+    let full_name = scenario.failing_test_name.to_string();
+    let (status, failure_messages) = if scenario.should_fail {
+        ("failed".to_string(), vec!["fail".to_string()])
+    } else {
+        ("passed".to_string(), vec![])
     };
-    let fail_case = TestCaseResult {
-        title: scenario.failing_test_name.clone(),
-        full_name: scenario.failing_test_name.clone(),
-        status: if scenario.should_fail {
-            "failed".to_string()
-        } else {
-            "passed".to_string()
-        },
+    TestCaseResult {
+        title: full_name.clone(),
+        full_name,
+        status,
         timed_out: None,
         duration: 0,
         location: None,
-        failure_messages: if scenario.should_fail {
-            vec!["fail".to_string()]
-        } else {
-            vec![]
-        },
+        failure_messages,
         failure_details: None,
-    };
-    let test_results = if scenario.should_fail {
-        vec![pass_case, fail_case]
-    } else {
-        vec![pass_case]
-    };
-    let suite = TestSuiteResult {
+    }
+}
+
+fn suite_test_results(pass_case: TestCaseResult, scenario: &RunnerParityScenario) -> Vec<TestCaseResult> {
+    scenario
+        .should_fail
+        .then(|| vec![pass_case, failing_case(scenario)])
+        .unwrap_or_else(|| vec![pass_case])
+}
+
+fn suite_result(
+    test_file_path: String,
+    test_results: Vec<TestCaseResult>,
+    should_fail: bool,
+) -> TestSuiteResult {
+    TestSuiteResult {
         test_file_path,
-        status: if scenario.should_fail {
+        status: if should_fail {
             "failed".to_string()
         } else {
             "passed".to_string()
@@ -412,30 +368,29 @@ fn build_model(repo: &Path, scenario: &RunnerParityScenario) -> TestRunModel {
         test_exec_error: None,
         console: None,
         test_results,
-    };
+    }
+}
+
+fn aggregated_for_should_fail(should_fail: bool) -> TestRunAggregated {
     let total_suites = 1u64;
-    let failed_suites = if scenario.should_fail { 1 } else { 0 };
+    let failed_suites = if should_fail { 1 } else { 0 };
     let passed_suites = total_suites.saturating_sub(failed_suites);
-    let total_tests: u64 = if scenario.should_fail { 2 } else { 1 };
-    let failed_tests: u64 = if scenario.should_fail { 1 } else { 0 };
+    let total_tests: u64 = if should_fail { 2 } else { 1 };
+    let failed_tests: u64 = if should_fail { 1 } else { 0 };
     let passed_tests = total_tests.saturating_sub(failed_tests);
-    TestRunModel {
+    TestRunAggregated {
+        num_total_test_suites: total_suites,
+        num_passed_test_suites: passed_suites,
+        num_failed_test_suites: failed_suites,
+        num_total_tests: total_tests,
+        num_passed_tests: passed_tests,
+        num_failed_tests: failed_tests,
+        num_pending_tests: 0,
+        num_todo_tests: 0,
+        num_timed_out_tests: None,
+        num_timed_out_test_suites: None,
         start_time: 0,
-        test_results: vec![suite],
-        aggregated: TestRunAggregated {
-            num_total_test_suites: total_suites,
-            num_passed_test_suites: passed_suites,
-            num_failed_test_suites: failed_suites,
-            num_total_tests: total_tests,
-            num_passed_tests: passed_tests,
-            num_failed_tests: failed_tests,
-            num_pending_tests: 0,
-            num_todo_tests: 0,
-            num_timed_out_tests: None,
-            num_timed_out_test_suites: None,
-            start_time: 0,
-            success: !scenario.should_fail,
-            run_time_ms: Some(0),
-        },
+        success: !should_fail,
+        run_time_ms: Some(0),
     }
 }

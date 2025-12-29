@@ -1,6 +1,7 @@
 use std::path::Path;
 
 use headlamp::format::cargo_test::{CargoTestStreamEvent, CargoTestStreamParser};
+use headlamp::format::cargo_test::parse_cargo_test_output;
 
 #[test]
 fn cargo_test_stream_parser_emits_test_finished_and_finalizes_with_failure_details() {
@@ -133,4 +134,71 @@ fn cargo_test_stream_parser_drops_empty_suites() {
     assert_eq!(model.aggregated.num_total_tests, 1);
     assert_eq!(model.aggregated.num_passed_tests, 1);
     assert_eq!(model.aggregated.num_failed_tests, 0);
+}
+
+fn mk_temp_repo_dir(name: &str) -> std::path::PathBuf {
+    let base = std::env::temp_dir()
+        .join("headlamp-tests")
+        .join("cargo-test-parser")
+        .join(name);
+    let _ = std::fs::remove_dir_all(&base);
+    std::fs::create_dir_all(&base).unwrap();
+    base
+}
+
+#[test]
+fn cargo_test_parser_resolves_suite_paths_in_workspace_members_and_sets_location_when_possible() {
+    let repo_root = mk_temp_repo_dir(
+        "cargo_test_parser_resolves_suite_paths_in_workspace_members_and_sets_location",
+    );
+    let workspace_member_test_file = repo_root
+        .join("headlamp_tests")
+        .join("tests")
+        .join("args_parse_test.rs");
+    std::fs::create_dir_all(workspace_member_test_file.parent().unwrap()).unwrap();
+    std::fs::write(
+        &workspace_member_test_file,
+        (1..=30)
+            .map(|i| format!("const LINE_{i} = {i};"))
+            .collect::<Vec<_>>()
+            .join("\n"),
+    )
+    .unwrap();
+
+    let combined = [
+        "Running tests/args_parse_test.rs (target/debug/deps/args_parse_test-0000000000000000)",
+        "test derive_args_does_not_consume_selection_path_as_boolean_value ... FAILED",
+        "",
+        "failures:",
+        "",
+        "---- derive_args_does_not_consume_selection_path_as_boolean_value stdout ----",
+        "",
+        "thread 'derive_args_does_not_consume_selection_path_as_boolean_value' panicked at tests/args_parse_test.rs:12:3:",
+        "assertion failed: parsed.selection_specified",
+        "",
+        "failures:",
+        "    derive_args_does_not_consume_selection_path_as_boolean_value",
+        "",
+        "test result: FAILED. 0 passed; 1 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.00s",
+    ]
+    .join("\n");
+
+    let model = parse_cargo_test_output(repo_root.as_path(), &combined).expect("model");
+    let suite = model.test_results.first().expect("suite");
+    assert!(
+        suite
+            .test_file_path
+            .ends_with("headlamp_tests/tests/args_parse_test.rs"),
+        "unexpected suite path: {}",
+        suite.test_file_path
+    );
+
+    let failed = suite
+        .test_results
+        .iter()
+        .find(|t| t.status == "failed")
+        .expect("failed test present");
+    let loc = failed.location.as_ref().expect("location should be inferred");
+    assert_eq!(loc.line, 12);
+    assert_eq!(loc.column, 3);
 }

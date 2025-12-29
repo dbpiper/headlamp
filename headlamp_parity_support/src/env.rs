@@ -66,90 +66,112 @@ pub(crate) fn build_env_map(repo: &Path, side_label: &ParitySideLabel) -> BTreeM
     env
 }
 
+fn pytest_requirements_path() -> Option<PathBuf> {
+    let requirements = PathBuf::from(env!("CARGO_MANIFEST_DIR"))
+        .join("..")
+        .join("headlamp_tests")
+        .join("tests")
+        .join("py_deps")
+        .join("requirements.txt");
+    requirements.exists().then_some(requirements)
+}
+
+fn venv_bin_dir(venv: &Path) -> PathBuf {
+    if cfg!(windows) {
+        venv.join("Scripts")
+    } else {
+        venv.join("bin")
+    }
+}
+
+fn pytest_path(bin: &Path) -> PathBuf {
+    if cfg!(windows) {
+        bin.join("pytest.exe")
+    } else {
+        bin.join("pytest")
+    }
+}
+
+fn python_path(bin: &Path) -> PathBuf {
+    if cfg!(windows) {
+        bin.join("python.exe")
+    } else {
+        bin.join("python")
+    }
+}
+
+fn repo_pytest_bin_if_installed(requirements: &Path) -> Option<PathBuf> {
+    let repo_venv = requirements.parent()?.join(".venv");
+    let repo_venv_bin = venv_bin_dir(&repo_venv);
+    pytest_path(&repo_venv_bin)
+        .exists()
+        .then_some(repo_venv_bin)
+}
+
+fn shared_py_deps_venv_dir() -> PathBuf {
+    PathBuf::from(env!("CARGO_MANIFEST_DIR"))
+        .join("target")
+        .join("py_deps_venv")
+}
+
+fn create_venv(venv: &Path) -> Option<()> {
+    let status = Command::new("python3")
+        .args(["-m", "venv"])
+        .arg(venv)
+        .status()
+        .ok()?;
+    if !status.success() {
+        panic!(
+            "failed to create pytest venv at {} (python3 -m venv exit={})",
+            venv.display(),
+            status.code().unwrap_or(1)
+        );
+    }
+    Some(())
+}
+
+fn pip_install_requirements(python: &Path, requirements: &Path, venv: &Path) -> Option<()> {
+    let status = Command::new(python)
+        .env("PIP_DISABLE_PIP_VERSION_CHECK", "1")
+        .args([
+            "-m",
+            "pip",
+            "install",
+            "--disable-pip-version-check",
+            "--no-input",
+            "-r",
+        ])
+        .arg(requirements)
+        .status()
+        .ok()?;
+    if !status.success() {
+        panic!(
+            "failed to install pytest deps into {} (pip exit={}). You may need network access.",
+            venv.display(),
+            status.code().unwrap_or(1)
+        );
+    }
+    Some(())
+}
+
 fn ensure_pytest_venv_bin_dir() -> Option<PathBuf> {
     static PY_BIN: OnceLock<Option<PathBuf>> = OnceLock::new();
     PY_BIN
         .get_or_init(|| {
-            let requirements = PathBuf::from(env!("CARGO_MANIFEST_DIR"))
-                .join("..")
-                .join("headlamp_tests")
-                .join("tests")
-                .join("py_deps")
-                .join("requirements.txt");
-            if !requirements.exists() {
-                return None;
-            }
-
-            let repo_venv = requirements.parent().unwrap().join(".venv");
-            let repo_venv_bin = if cfg!(windows) {
-                repo_venv.join("Scripts")
-            } else {
-                repo_venv.join("bin")
-            };
-            let repo_pytest = if cfg!(windows) {
-                repo_venv_bin.join("pytest.exe")
-            } else {
-                repo_venv_bin.join("pytest")
-            };
-            if repo_pytest.exists() {
-                return Some(repo_venv_bin);
-            }
-
-            let venv = PathBuf::from(env!("CARGO_MANIFEST_DIR"))
-                .join("target")
-                .join("py_deps_venv");
-            let bin = if cfg!(windows) {
-                venv.join("Scripts")
-            } else {
-                venv.join("bin")
-            };
-            let python = if cfg!(windows) {
-                bin.join("python.exe")
-            } else {
-                bin.join("python")
-            };
-            let pytest = if cfg!(windows) {
-                bin.join("pytest.exe")
-            } else {
-                bin.join("pytest")
-            };
-            if pytest.exists() {
+            let requirements = pytest_requirements_path()?;
+            if let Some(bin) = repo_pytest_bin_if_installed(&requirements) {
                 return Some(bin);
             }
 
-            let status = Command::new("python3")
-                .args(["-m", "venv"])
-                .arg(&venv)
-                .status()
-                .ok()?;
-            if !status.success() {
-                panic!(
-                    "failed to create pytest venv at {} (python3 -m venv exit={})",
-                    venv.display(),
-                    status.code().unwrap_or(1)
-                );
+            let venv = shared_py_deps_venv_dir();
+            let bin = venv_bin_dir(&venv);
+            if pytest_path(&bin).exists() {
+                return Some(bin);
             }
 
-            let status = Command::new(&python)
-                .env("PIP_DISABLE_PIP_VERSION_CHECK", "1")
-                .args([
-                    "-m",
-                    "pip",
-                    "install",
-                    "--disable-pip-version-check",
-                    "--no-input",
-                    "-r",
-                ])
-                .arg(&requirements)
-                .status()
-                .ok()?;
-            if !status.success() {
-                panic!(
-                    "failed to install pytest deps into {} (pip exit={}). You may need network access.",
-                    venv.display(),
-                    status.code().unwrap_or(1)
-                );
-            }
+            create_venv(&venv)?;
+            let python = python_path(&bin);
+            pip_install_requirements(&python, &requirements, &venv)?;
             Some(bin)
         })
         .clone()

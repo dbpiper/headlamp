@@ -1,9 +1,9 @@
 use std::process::{Command, Stdio};
-use std::time::{Duration, Instant};
-
-use tempfile::NamedTempFile;
+use std::thread::JoinHandle;
+use std::time::Duration;
 
 use crate::run::RunError;
+use wait_timeout::ChildExt;
 
 #[derive(Debug)]
 pub struct CapturedProcessOutput {
@@ -12,45 +12,58 @@ pub struct CapturedProcessOutput {
     pub stderr: Vec<u8>,
 }
 
+fn join_capture_thread(
+    handle: Option<JoinHandle<Result<Vec<u8>, std::io::Error>>>,
+) -> Result<Vec<u8>, RunError> {
+    let Some(handle) = handle else {
+        return Ok(vec![]);
+    };
+    handle
+        .join()
+        .map_err(|_| RunError::Io(std::io::Error::other("capture thread panicked")))?
+        .map_err(RunError::Io)
+}
+
+fn spawn_capture_thread(
+    reader: Option<impl std::io::Read + Send + 'static>,
+) -> Option<JoinHandle<Result<Vec<u8>, std::io::Error>>> {
+    reader.map(|mut r| {
+        std::thread::spawn(move || {
+            let mut buf: Vec<u8> = vec![];
+            r.read_to_end(&mut buf)?;
+            Ok(buf)
+        })
+    })
+}
+
 pub fn run_command_capture_with_timeout(
     mut command: Command,
     display_command: String,
     timeout: Duration,
 ) -> Result<CapturedProcessOutput, RunError> {
-    let stdout_file = NamedTempFile::new().map_err(RunError::Io)?;
-    let stderr_file = NamedTempFile::new().map_err(RunError::Io)?;
-
-    let stdout_handle = stdout_file.reopen().map_err(RunError::Io)?;
-    let stderr_handle = stderr_file.reopen().map_err(RunError::Io)?;
-
-    command
-        .stdout(Stdio::from(stdout_handle))
-        .stderr(Stdio::from(stderr_handle));
-
+    command.stdout(Stdio::piped()).stderr(Stdio::piped());
     let mut child = command.spawn().map_err(RunError::SpawnFailed)?;
 
-    let started_at = Instant::now();
-    loop {
-        if started_at.elapsed() >= timeout {
-            let _ = child.kill();
-            let _ = child.wait();
-            return Err(RunError::TimedOut {
-                command: display_command,
-                timeout_ms: timeout.as_millis() as u64,
-            });
-        }
+    let stdout_thread = spawn_capture_thread(child.stdout.take());
+    let stderr_thread = spawn_capture_thread(child.stderr.take());
 
-        match child.try_wait().map_err(RunError::WaitFailed)? {
-            Some(status) => {
-                let stdout = std::fs::read(stdout_file.path()).map_err(RunError::Io)?;
-                let stderr = std::fs::read(stderr_file.path()).map_err(RunError::Io)?;
-                return Ok(CapturedProcessOutput {
-                    status,
-                    stdout,
-                    stderr,
-                });
-            }
-            None => std::thread::sleep(Duration::from_millis(25)),
-        }
-    }
+    let maybe_status = ChildExt::wait_timeout(&mut child, timeout).map_err(RunError::WaitFailed)?;
+    let Some(status) = maybe_status else {
+        let _ = child.kill();
+        let _ = child.wait();
+        let _ = join_capture_thread(stdout_thread);
+        let _ = join_capture_thread(stderr_thread);
+        return Err(RunError::TimedOut {
+            command: display_command,
+            timeout_ms: timeout.as_millis() as u64,
+        });
+    };
+
+    let stdout = join_capture_thread(stdout_thread)?;
+    let stderr = join_capture_thread(stderr_thread)?;
+    Ok(CapturedProcessOutput {
+        status,
+        stdout,
+        stderr,
+    })
 }

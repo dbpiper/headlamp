@@ -117,6 +117,14 @@ pub fn parse_stack_location(line: &str) -> Option<(String, i64, i64)> {
     Some((file, ln, col))
 }
 
+pub fn parse_stack_location_resolved(line: &str, cwd: &str) -> Option<(String, i64, i64)> {
+    let (file, line_number, col_number) = parse_stack_location(line)?;
+    let resolved =
+        crate::format::failure_diagnostics::resolve_existing_path_best_effort(cwd, &file)
+            .unwrap_or(file);
+    Some((resolved, line_number, col_number))
+}
+
 pub fn deepest_project_loc(
     stack_lines: &[String],
     project_hint: &Regex,
@@ -129,6 +137,25 @@ pub fn deepest_project_loc(
             && !noisy.is_match(&simple)
         {
             return parse_stack_location(&stack_lines[i]);
+        }
+    }
+    None
+}
+
+pub fn deepest_project_loc_resolved(
+    stack_lines: &[String],
+    project_hint: &Regex,
+    cwd: &str,
+) -> Option<(String, i64, i64)> {
+    let noisy = Regex::new(r"node_modules|vitest|jest").unwrap();
+    for i in (0..stack_lines.len()).rev() {
+        let simple = stacks::strip_ansi_simple(&stack_lines[i]);
+        if !stacks::is_stack_line(&simple) || noisy.is_match(&simple) {
+            continue;
+        }
+        let (file, line_number, col_number) = parse_stack_location_resolved(&stack_lines[i], cwd)?;
+        if project_hint.is_match(&file) {
+            return Some((file, line_number, col_number));
         }
     }
     None

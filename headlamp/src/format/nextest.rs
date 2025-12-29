@@ -4,8 +4,16 @@ use std::path::{Path, PathBuf};
 use serde::Deserialize;
 
 use crate::test_model::{
-    TestCaseResult, TestConsoleEntry, TestRunAggregated, TestRunModel, TestSuiteResult,
+    TestCaseResult, TestConsoleEntry, TestLocation, TestRunAggregated, TestRunModel, TestSuiteResult,
 };
+
+type SuiteCounts = (
+    Option<u64>,
+    Option<u64>,
+    Option<u64>,
+    Option<u64>,
+    Option<u64>,
+);
 
 #[derive(Debug, Clone)]
 pub struct NextestStreamUpdate {
@@ -79,16 +87,7 @@ impl NextestStreamParser {
 
     pub fn push_line(&mut self, line: &str) -> Option<NextestStreamUpdate> {
         let trimmed = line.trim();
-        if trimmed.is_empty() {
-            return None;
-        }
-        if !(trimmed.starts_with('{') && trimmed.ends_with('}')) {
-            self.loose_log_lines.push(trimmed.to_string());
-            return None;
-        }
-        let Ok(event) = serde_json::from_str::<NextestEvent>(trimmed) else {
-            return None;
-        };
+        let event = parse_nextest_event(trimmed, &mut self.loose_log_lines)?;
         match event {
             NextestEvent::Suite {
                 event,
@@ -99,114 +98,17 @@ impl NextestStreamParser {
                 measured,
                 filtered_out,
                 ..
-            } => {
-                let meta = nextest?;
-                let key = SuiteKey {
-                    crate_name: meta.crate_name,
-                    test_binary: meta.test_binary,
-                    kind: meta.kind,
-                };
-                self.kind_by_crate_and_binary.insert(
-                    (key.crate_name.clone(), key.test_binary.clone()),
-                    key.kind.clone(),
-                );
-                match event.as_str() {
-                    "started" => {
-                        self.suites_by_key
-                            .entry(key.clone())
-                            .or_insert_with(|| SuiteAcc {
-                                key,
-                                tests: BTreeMap::new(),
-                                console_entries: vec![],
-                            });
-                    }
-                    "ok" | "failed" => {
-                        let _counts = (passed, failed, ignored, measured, filtered_out);
-                        self.suites_by_key
-                            .entry(key.clone())
-                            .or_insert_with(|| SuiteAcc {
-                                key: key.clone(),
-                                tests: BTreeMap::new(),
-                                console_entries: vec![],
-                            });
-                    }
-                    _ => {}
-                }
-                None
-            }
+            } => self.handle_suite_event(
+                event,
+                nextest,
+                (passed, failed, ignored, measured, filtered_out),
+            ),
             NextestEvent::Test {
                 event,
                 name,
                 exec_time,
                 stdout,
-            } => {
-                let suite_key = suite_key_from_test_name(&name, &self.kind_by_crate_and_binary)?;
-                let display_name = simplify_nextest_test_name(&name);
-                let suite = self
-                    .suites_by_key
-                    .entry(suite_key.clone())
-                    .or_insert_with(|| SuiteAcc {
-                        key: suite_key.clone(),
-                        tests: BTreeMap::new(),
-                        console_entries: vec![],
-                    });
-                match event.as_str() {
-                    "ok" | "failed" | "ignored" => {
-                        let status = match event.as_str() {
-                            "ok" => "passed",
-                            "failed" => "failed",
-                            "ignored" => "pending",
-                            _ => "pending",
-                        }
-                        .to_string();
-                        let duration_ms = exec_time
-                            .map(|sec| (sec * 1000.0).max(0.0) as u64)
-                            .unwrap_or(0);
-                        let mut test_case =
-                            suite
-                                .tests
-                                .remove(&display_name)
-                                .unwrap_or_else(|| TestCaseResult {
-                                    title: display_name.clone(),
-                                    full_name: display_name.clone(),
-                                    status: status.clone(),
-                                    timed_out: None,
-                                    duration: duration_ms,
-                                    location: None,
-                                    failure_messages: vec![],
-                                    failure_details: None,
-                                });
-                        test_case.status = status.clone();
-                        test_case.duration = duration_ms;
-                        if test_case.status == "failed" {
-                            let msg = stdout.clone().unwrap_or_default();
-                            if !msg.trim().is_empty() {
-                                test_case.failure_messages = vec![msg.clone()];
-                            }
-                        }
-                        if let Some(out) = stdout.as_deref().filter(|s| !s.trim().is_empty()) {
-                            suite.console_entries.extend(
-                                out.lines()
-                                    .map(str::trim)
-                                    .filter(|ln| !ln.is_empty())
-                                    .map(|ln| TestConsoleEntry {
-                                        message: Some(serde_json::Value::String(ln.to_string())),
-                                        type_name: Some("log".to_string()),
-                                        origin: Some("cargo-nextest".to_string()),
-                                    }),
-                            );
-                        }
-                        suite.tests.insert(display_name.clone(), test_case);
-                        Some(NextestStreamUpdate {
-                            suite_path: suite_display_path(&self.repo_root, &suite_key),
-                            test_name: display_name,
-                            status,
-                            stdout,
-                        })
-                    }
-                    _ => None,
-                }
-            }
+            } => self.handle_test_event(event, name, exec_time, stdout),
         }
     }
 
@@ -228,8 +130,182 @@ impl NextestStreamParser {
             .map(|suite| finalize_suite(&self.repo_root, suite))
             .filter(|suite| !suite.test_results.is_empty())
             .collect::<Vec<_>>();
-        (!suites.is_empty()).then(|| build_run_model(suites))
+        if suites.is_empty() {
+            None
+        } else {
+            Some(build_run_model(suites))
+        }
     }
+}
+
+fn parse_nextest_event(trimmed: &str, loose_log_lines: &mut Vec<String>) -> Option<NextestEvent> {
+    if trimmed.is_empty() {
+        return None;
+    }
+    if !(trimmed.starts_with('{') && trimmed.ends_with('}')) {
+        loose_log_lines.push(trimmed.to_string());
+        return None;
+    }
+    serde_json::from_str::<NextestEvent>(trimmed).ok()
+}
+
+impl NextestStreamParser {
+    fn handle_suite_event(
+        &mut self,
+        event: String,
+        nextest: Option<NextestMeta>,
+        _counts: SuiteCounts,
+    ) -> Option<NextestStreamUpdate> {
+        let meta = nextest?;
+        let key = SuiteKey {
+            crate_name: meta.crate_name,
+            test_binary: meta.test_binary,
+            kind: meta.kind,
+        };
+        self.kind_by_crate_and_binary.insert(
+            (key.crate_name.clone(), key.test_binary.clone()),
+            key.kind.clone(),
+        );
+        if matches!(event.as_str(), "started" | "ok" | "failed") {
+            self.suites_by_key
+                .entry(key.clone())
+                .or_insert_with(|| SuiteAcc {
+                    key,
+                    tests: BTreeMap::new(),
+                    console_entries: vec![],
+                });
+        }
+        None
+    }
+
+    fn handle_test_event(
+        &mut self,
+        event: String,
+        name: String,
+        exec_time: Option<f64>,
+        stdout: Option<String>,
+    ) -> Option<NextestStreamUpdate> {
+        if !matches!(event.as_str(), "ok" | "failed" | "ignored") {
+            return None;
+        }
+        let suite_key = suite_key_from_test_name(&name, &self.kind_by_crate_and_binary)?;
+        let display_name = simplify_nextest_test_name(&name);
+        let suite_path = suite_display_path(&self.repo_root, &suite_key);
+        let suite = self
+            .suites_by_key
+            .entry(suite_key.clone())
+            .or_insert_with(|| SuiteAcc {
+                key: suite_key.clone(),
+                tests: BTreeMap::new(),
+                console_entries: vec![],
+            });
+        let status = test_status_for_nextest_event(&event);
+        let duration_ms = duration_ms_from_exec_time(exec_time);
+        let mut test_case = suite
+            .tests
+            .remove(&display_name)
+            .unwrap_or_else(|| empty_test_case(&display_name, duration_ms));
+        test_case.status = status.to_string();
+        test_case.duration = duration_ms;
+        update_failure_messages(&mut test_case, stdout.as_deref());
+        update_location_if_matches_suite(&mut test_case, stdout.as_deref(), &suite_path);
+        extend_console_entries(&mut suite.console_entries, stdout.as_deref());
+        suite.tests.insert(display_name.clone(), test_case);
+        Some(NextestStreamUpdate {
+            suite_path,
+            test_name: display_name,
+            status: status.to_string(),
+            stdout,
+        })
+    }
+}
+
+fn test_status_for_nextest_event(event: &str) -> &'static str {
+    match event {
+        "ok" => "passed",
+        "failed" => "failed",
+        "ignored" => "pending",
+        _ => "pending",
+    }
+}
+
+fn duration_ms_from_exec_time(exec_time: Option<f64>) -> u64 {
+    exec_time
+        .map(|sec| (sec * 1000.0).max(0.0) as u64)
+        .unwrap_or(0)
+}
+
+fn empty_test_case(display_name: &str, duration_ms: u64) -> TestCaseResult {
+    TestCaseResult {
+        title: display_name.to_string(),
+        full_name: display_name.to_string(),
+        status: "pending".to_string(),
+        timed_out: None,
+        duration: duration_ms,
+        location: None,
+        failure_messages: vec![],
+        failure_details: None,
+    }
+}
+
+fn update_failure_messages(test_case: &mut TestCaseResult, stdout: Option<&str>) {
+    if test_case.status != "failed" {
+        return;
+    }
+    if let Some(text) = stdout.filter(|s| !s.trim().is_empty()) {
+        test_case.failure_messages = vec![text.to_string()];
+    }
+}
+
+fn update_location_if_matches_suite(
+    test_case: &mut TestCaseResult,
+    stdout: Option<&str>,
+    suite_path: &str,
+) {
+    if test_case.status != "failed" || test_case.location.is_some() {
+        return;
+    }
+    let suite_file_name = std::path::Path::new(suite_path)
+        .file_name()
+        .map(|s| s.to_string_lossy().to_string())
+        .unwrap_or_default();
+    if suite_file_name.trim().is_empty() {
+        return;
+    }
+    let Some(out) = stdout.filter(|s| !s.trim().is_empty()) else {
+        return;
+    };
+    let loc = out
+        .lines()
+        .find_map(crate::format::failure_diagnostics::parse_rust_panic_location)
+        .and_then(|(file, line_number, col_number)| {
+            let matches_suite = std::path::Path::new(&file)
+                .file_name()
+                .is_some_and(|s| s.to_string_lossy() == suite_file_name);
+            (matches_suite && line_number > 0 && col_number > 0).then_some(TestLocation {
+                line: line_number,
+                column: col_number,
+            })
+        });
+    if let Some(loc) = loc {
+        test_case.location = Some(loc);
+    }
+}
+
+fn extend_console_entries(console_entries: &mut Vec<TestConsoleEntry>, stdout: Option<&str>) {
+    let Some(out) = stdout.filter(|s| !s.trim().is_empty()) else {
+        return;
+    };
+    console_entries.extend(
+        out.lines()
+            .map(str::trim)
+            .filter(|ln| !ln.is_empty())
+            .map(|ln| TestConsoleEntry {
+                message: Some(serde_json::Value::String(ln.to_string())),
+                type_name: Some("log".to_string()),
+                origin: Some("cargo-nextest".to_string()),
+            }),
+    );
 }
 
 pub fn parse_nextest_libtest_json_output(

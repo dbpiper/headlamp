@@ -139,122 +139,164 @@ fn parse_suite(line_text: &str) -> Option<(String, String)> {
 }
 
 fn render_chunks(chunks: &[Chunk], ctx: &Ctx, only_failures: bool) -> (String, bool) {
-    let mut out: Vec<String> = vec![];
-    let mut seen_files: std::collections::BTreeSet<String> = std::collections::BTreeSet::new();
-    let mut seen_failures: std::collections::BTreeSet<String> = std::collections::BTreeSet::new();
+    let mut acc = RenderChunksAcc::default();
+    chunks
+        .iter()
+        .for_each(|chunk| render_chunk(&mut acc, chunk, ctx, only_failures));
+    let had_parsed = compute_had_parsed(&acc.out, &acc.seen_files, &acc.seen_failures);
+    (acc.out.join("\n"), had_parsed)
+}
 
-    for ch in chunks {
-        match ch {
-            Chunk::PassFail { badge, rel } => {
-                let rel2 = rel_path(rel, &ctx.cwd);
-                if !seen_files.insert(rel2.clone()) {
-                    continue;
-                }
-                if !(only_failures && badge == "PASS") {
-                    out.push(fns::build_file_badge_line(
-                        &rel2,
-                        if badge == "FAIL" { 1 } else { 0 },
-                    ));
-                }
+#[derive(Debug, Default)]
+struct RenderChunksAcc {
+    out: Vec<String>,
+    seen_files: std::collections::BTreeSet<String>,
+    seen_failures: std::collections::BTreeSet<String>,
+}
+
+fn render_chunk(acc: &mut RenderChunksAcc, chunk: &Chunk, ctx: &Ctx, only_failures: bool) {
+    match chunk {
+        Chunk::PassFail { badge, rel } => render_pass_fail(acc, ctx, only_failures, badge, rel),
+        Chunk::FailureBlock { title, lines } => render_failure_block(acc, ctx, title, lines),
+        Chunk::Summary { line } => acc.out.push(line.clone()),
+        Chunk::Stack { line } => {
+            if ctx.show_stacks {
+                acc.out.push(line.clone());
             }
-            Chunk::FailureBlock { title, lines } => {
-                out.push(fns::draw_fail_line(ctx.width));
-                let location = stacks::first_test_location(lines, &ctx.project_hint);
-                let rel_file = location
-                    .as_ref()
-                    .and_then(|loc| loc.split(':').next())
-                    .map(|p| rel_path(p, &ctx.cwd))
-                    .unwrap_or_default();
-                let header_text = if !rel_file.is_empty() {
-                    format!("{rel_file} > {title}")
-                } else {
-                    title.clone()
-                };
-                out.push(format!(
-                    "{} {}",
-                    colors::failure("×"),
-                    ansi::white(&header_text)
-                ));
-
-                let collapsed = stacks::collapse_stacks(lines);
-                let deepest = fns::deepest_project_loc(&collapsed, &ctx.project_hint).map(
-                    |(file, line, _)| codeframe::Loc {
-                        file,
-                        line,
-                        column: None,
-                    },
-                );
-
-                out.push(String::new());
-                out.extend(codeframe::build_code_frame_section(
-                    lines,
-                    ctx.show_stacks,
-                    deepest.as_ref(),
-                ));
-
-                let minimal = minimal_message_lines(lines);
-                if !minimal.is_empty() {
-                    out.push(ansi::dim("    Message:"));
-                    minimal
-                        .iter()
-                        .for_each(|ln| out.push(format!("      {ln}")));
-                    out.push(String::new());
-                }
-
-                let console_inline = extract_console_inline(lines);
-                if !console_inline.is_empty() {
-                    out.push(ansi::dim("    Console errors:"));
-                    console_inline
-                        .iter()
-                        .for_each(|ln| out.push(format!("      {ln}")));
-                    out.push(String::new());
-                }
-
-                if ctx.show_stacks {
-                    let stack_lines = collapsed
-                        .iter()
-                        .map(|ln| stacks::strip_ansi_simple(ln))
-                        .filter(|ln| stacks::is_stack_line(ln))
-                        .filter(|ln| ctx.project_hint.is_match(ln))
-                        .take(6)
-                        .collect::<Vec<_>>();
-                    if !stack_lines.is_empty() {
-                        out.push(ansi::dim("    Stack:"));
-                        stack_lines
-                            .iter()
-                            .for_each(|ln| out.push(format!("      {ln}")));
-                        out.push(String::new());
-                    }
-                }
-
-                out.push(fns::draw_fail_line(ctx.width));
-                out.push(String::new());
-                if !rel_file.is_empty() {
-                    seen_failures.insert(format!("{rel_file}|{title}"));
-                }
-            }
-            Chunk::Summary { line } => out.push(line.clone()),
-            Chunk::Stack { line } => {
-                if ctx.show_stacks {
-                    out.push(line.clone());
-                }
-            }
-            Chunk::Other { line } => {
-                if !only_failures {
-                    out.push(line.clone());
-                }
+        }
+        Chunk::Other { line } => {
+            if !only_failures {
+                acc.out.push(line.clone());
             }
         }
     }
+}
 
-    let had_parsed = !seen_files.is_empty()
+fn render_pass_fail(
+    acc: &mut RenderChunksAcc,
+    ctx: &Ctx,
+    only_failures: bool,
+    badge: &str,
+    rel: &str,
+) {
+    let rel2 = rel_path(rel, &ctx.cwd);
+    if !acc.seen_files.insert(rel2.clone()) {
+        return;
+    }
+    if only_failures && badge == "PASS" {
+        return;
+    }
+    acc.out.push(fns::build_file_badge_line(
+        &rel2,
+        (badge == "FAIL") as usize,
+    ));
+}
+
+fn render_failure_block(acc: &mut RenderChunksAcc, ctx: &Ctx, title: &str, lines: &[String]) {
+    acc.out.push(fns::draw_fail_line(ctx.width));
+    let rel_file = rel_file_for_failure(lines, ctx);
+    let header_text = build_failure_header_text(title, &rel_file);
+    acc.out.push(format!(
+        "{} {}",
+        colors::failure("×"),
+        ansi::white(&header_text)
+    ));
+    let collapsed = stacks::collapse_stacks(lines);
+    let deepest = fns::deepest_project_loc_resolved(&collapsed, &ctx.project_hint, &ctx.cwd).map(
+        |(file, line, _)| codeframe::Loc {
+            file,
+            line,
+            column: None,
+        },
+    );
+    acc.out.push(String::new());
+    acc.out.extend(codeframe::build_code_frame_section(
+        lines,
+        ctx.show_stacks,
+        deepest.as_ref(),
+    ));
+    push_failure_message_section(&mut acc.out, lines);
+    push_console_errors_section(&mut acc.out, lines);
+    push_stack_section(&mut acc.out, ctx, &collapsed);
+    acc.out.push(fns::draw_fail_line(ctx.width));
+    acc.out.push(String::new());
+    if !rel_file.is_empty() {
+        let _ = acc.seen_failures.insert(format!("{rel_file}|{title}"));
+    }
+}
+
+fn rel_file_for_failure(lines: &[String], ctx: &Ctx) -> String {
+    stacks::first_test_location(lines, &ctx.project_hint)
+        .as_ref()
+        .and_then(|loc| loc.split(':').next())
+        .map(|p| rel_path(p, &ctx.cwd))
+        .unwrap_or_default()
+}
+
+fn build_failure_header_text(title: &str, rel_file: &str) -> String {
+    if !rel_file.is_empty() {
+        format!("{rel_file} > {title}")
+    } else {
+        title.to_string()
+    }
+}
+
+fn push_failure_message_section(out: &mut Vec<String>, lines: &[String]) {
+    let minimal = minimal_message_lines(lines);
+    if minimal.is_empty() {
+        return;
+    }
+    out.push(ansi::dim("    Message:"));
+    minimal
+        .iter()
+        .for_each(|line| out.push(format!("      {line}")));
+    out.push(String::new());
+}
+
+fn push_console_errors_section(out: &mut Vec<String>, lines: &[String]) {
+    let console_inline = extract_console_inline(lines);
+    if console_inline.is_empty() {
+        return;
+    }
+    out.push(ansi::dim("    Console errors:"));
+    console_inline
+        .iter()
+        .for_each(|line| out.push(format!("      {line}")));
+    out.push(String::new());
+}
+
+fn push_stack_section(out: &mut Vec<String>, ctx: &Ctx, collapsed: &[String]) {
+    if !ctx.show_stacks {
+        return;
+    }
+    let stack_lines = collapsed
+        .iter()
+        .map(|ln| stacks::strip_ansi_simple(ln))
+        .filter(|ln| stacks::is_stack_line(ln))
+        .filter(|ln| ctx.project_hint.is_match(ln))
+        .take(6)
+        .collect::<Vec<_>>();
+    if stack_lines.is_empty() {
+        return;
+    }
+    out.push(ansi::dim("    Stack:"));
+    stack_lines
+        .iter()
+        .for_each(|line| out.push(format!("      {line}")));
+    out.push(String::new());
+}
+
+fn compute_had_parsed(
+    out: &[String],
+    seen_files: &std::collections::BTreeSet<String>,
+    seen_failures: &std::collections::BTreeSet<String>,
+) -> bool {
+    !seen_files.is_empty()
         || !seen_failures.is_empty()
-        || out.iter().any(|ln| {
-            let simple = stacks::strip_ansi_simple(ln);
+        || out.iter().any(|line| {
+            let simple = stacks::strip_ansi_simple(line);
             simple.trim_start().starts_with("PASS ") || simple.trim_start().starts_with("FAIL ")
-        });
-
-    (out.join("\n"), had_parsed)
+        })
 }
 
 fn rel_path(abs: &str, cwd: &str) -> String {

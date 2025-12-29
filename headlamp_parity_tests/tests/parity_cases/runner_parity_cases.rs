@@ -40,6 +40,40 @@ fn run_git(repo: &Path, args: &[&str]) {
     assert!(status.is_ok_and(|s| s.success()));
 }
 
+fn strip_ansi_like(text: &str) -> String {
+    let re = regex::Regex::new(r"\x1b\[[^m]*m").unwrap();
+    re.replace_all(text, "").to_string()
+}
+
+fn extract_first_message_block_lines(normalized_output: &str) -> Vec<String> {
+    let lines = normalized_output
+        .lines()
+        .map(strip_ansi_like)
+        .collect::<Vec<_>>();
+    let start = lines
+        .iter()
+        .position(|ln| ln.trim() == "Message:" || ln.trim_end().ends_with("Message:"))
+        .unwrap_or(usize::MAX);
+    if start == usize::MAX {
+        return vec![];
+    }
+    lines
+        .iter()
+        .skip(start + 1)
+        .map(|ln| ln.trim().to_string())
+        .take_while(|ln| {
+            let t = ln.trim();
+            !(t.is_empty()
+                || t.starts_with("Expected")
+                || t.starts_with("Received")
+                || t.starts_with("Stack")
+                || t.starts_with("Assertion")
+                || t.starts_with("Console"))
+        })
+        .filter(|ln| !ln.trim().is_empty())
+        .collect::<Vec<_>>()
+}
+
 #[test]
 fn parity_runner_name_pattern_only_all_four() {
     let lease = lease_repo_for_case("name-pattern-only");
@@ -288,6 +322,74 @@ fn parity_runner_basic_fail_all_four() {
             ("pytest", &pytest_args),
         ],
     );
+}
+
+#[test]
+fn parity_runner_failure_message_identical_all_four() {
+    let lease = lease_repo_for_case("failure-message-identical");
+    let repo = lease.path();
+
+    let shared_message = "assertion `left == right` failed\n  left: 1\n right: 2\n";
+    std::fs::write(
+        repo.join("tests/sum_fail_test.js"),
+        format!(
+            "test('test_sum_fails', () => {{ throw new Error({:?}); }});\n",
+            shared_message
+        ),
+    )
+    .unwrap();
+    std::fs::write(
+        repo.join("tests/sum_fail_test.rs"),
+        format!(
+            "#[test]\nfn test_sum_fails() {{\n    panic!({:?});\n}}\n",
+            shared_message
+        ),
+    )
+    .unwrap();
+    std::fs::write(
+        repo.join("tests/sum_fail_test.py"),
+        format!(
+            "def test_sum_fails() -> None:\n    raise AssertionError({:?})\n",
+            shared_message
+        ),
+    )
+    .unwrap();
+
+    let headlamp_bin = crate::parity_support::runner_parity::runner_parity_headlamp_bin();
+    let runners = [
+        ("jest", &["tests/sum_fail_test.js"][..]),
+        ("cargo-test", &["tests/sum_fail_test.rs"][..]),
+        ("cargo-nextest", &["tests/sum_fail_test.rs"][..]),
+        ("pytest", &["tests/sum_fail_test.py"][..]),
+    ];
+
+    let message_blocks = runners
+        .iter()
+        .map(|(runner, args)| {
+            let (_spec, _code, raw) = crate::parity_support::parity_run::run_headlamp_with_args_tty(
+                repo,
+                &headlamp_bin,
+                120,
+                runner,
+                args,
+            );
+            let normalized = crate::parity_support::normalize::normalize_tty_ui(raw, repo);
+            (runner.to_string(), extract_first_message_block_lines(&normalized))
+        })
+        .collect::<Vec<_>>();
+
+    let Some((_, first)) = message_blocks.first() else {
+        return;
+    };
+    message_blocks.iter().for_each(|(runner, msg)| {
+        assert_eq!(
+            msg,
+            first,
+            "runner {runner} message block differs.\n\nexpected:\n{:#?}\n\ngot:\n{:#?}",
+            first,
+            msg
+        );
+    });
 }
 
 #[test]

@@ -39,101 +39,129 @@ fn print_terminal_debug() {
 }
 
 fn main() {
-    if should_print_terminal_debug() {
-        print_terminal_debug();
-    }
+    should_print_terminal_debug()
+        .then(print_terminal_debug)
+        .unwrap_or(());
     let argv0 = std::env::args().skip(1).collect::<Vec<_>>();
-    if argv0.iter().any(|t| t == "--help" || t == "-h") {
+    if should_print_help(&argv0) {
         print_help();
         return;
     }
     let (runner, argv) = extract_runner(&argv0);
     let cwd = std::env::current_dir().unwrap_or_else(|_| std::path::PathBuf::from("."));
     let repo_root = headlamp::config::find_repo_root(&cwd);
-    let cfg = headlamp::config::load_headlamp_config(&repo_root).unwrap_or_default();
-    let cfg_tokens = headlamp::args::config_tokens(&cfg, &argv);
-    let parsed = headlamp::args::derive_args(
+    let parsed = build_parsed_args(&repo_root, &argv);
+    apply_ci_env(&parsed);
+    validate_watch_ci(&parsed);
+    maybe_print_verbose_startup(runner, &repo_root, &parsed);
+    let mut run_once_closure = || run_once(runner, &repo_root, &parsed);
+    let code = if parsed
+        .watch { {
+            headlamp::watch::run_polling_watch_loop(
+                &repo_root,
+                std::time::Duration::from_millis(800),
+                parsed.verbose,
+                &mut run_once_closure,
+            )
+        } } else { run_once_closure() };
+    std::process::exit(code);
+}
+
+fn should_print_help(argv0: &[String]) -> bool {
+    argv0.iter().any(|t| t == "--help" || t == "-h")
+}
+
+fn build_parsed_args(repo_root: &std::path::Path, argv: &[String]) -> headlamp::args::ParsedArgs {
+    let cfg = headlamp::config::load_headlamp_config(repo_root).unwrap_or_default();
+    let cfg_tokens = headlamp::args::config_tokens(&cfg, argv);
+    headlamp::args::derive_args(
         &cfg_tokens,
-        &argv,
+        argv,
         headlamp::format::terminal::is_output_terminal(),
-    );
+    )
+}
+
+fn apply_ci_env(parsed: &headlamp::args::ParsedArgs) {
     if parsed.ci {
         unsafe { std::env::set_var("CI", "1") };
     }
+}
+
+fn validate_watch_ci(parsed: &headlamp::args::ParsedArgs) {
     if parsed.watch && parsed.ci {
         eprintln!("headlamp: --watch is not allowed with --ci");
         std::process::exit(2);
     }
-    if parsed.verbose {
-        eprintln!(
-            "headlamp: runner={runner:?} repo_root={} watch={} ci={} no_cache={}",
-            repo_root.to_string_lossy(),
-            parsed.watch,
-            parsed.ci,
-            parsed.no_cache
-        );
+}
+
+fn maybe_print_verbose_startup(
+    runner: Runner,
+    repo_root: &std::path::Path,
+    parsed: &headlamp::args::ParsedArgs,
+) {
+    if !parsed.verbose {
+        return;
     }
+    eprintln!(
+        "headlamp: runner={runner:?} repo_root={} watch={} ci={} no_cache={}",
+        repo_root.to_string_lossy(),
+        parsed.watch,
+        parsed.ci,
+        parsed.no_cache
+    );
+}
 
-    let mut run_once = || -> i32 {
-        let render_run_error = |err: headlamp::run::RunError| -> i32 {
-            let ctx = headlamp::format::ctx::make_ctx(
-                &repo_root,
-                None,
-                true,
-                parsed.show_logs,
-                parsed.editor_cmd.clone(),
-            );
-            let runner_label = match runner {
-                Runner::Jest => "jest",
-                Runner::Vitest => "vitest",
-                Runner::Pytest => "pytest",
-                Runner::CargoTest => "cargo-test",
-                Runner::CargoNextest => "cargo-nextest",
-            };
-            let suite_path = format!("headlamp/{runner_label}");
-            let model = headlamp::format::infra_failure::build_infra_failure_test_run_model(
-                suite_path.as_str(),
-                "Test suite failed to run",
-                &err.to_string(),
-            );
-            let rendered =
-                headlamp::format::vitest::render_vitest_from_test_model(&model, &ctx, true);
-            if !rendered.trim().is_empty() {
-                println!("{rendered}");
-            }
-            1
-        };
-        match runner {
-            Runner::Jest | Runner::Vitest => match headlamp::jest::run_jest(&repo_root, &parsed) {
-                Ok(code) => code,
-                Err(err) => render_run_error(err),
-            },
-            Runner::Pytest => match headlamp::pytest::run_pytest(&repo_root, &parsed) {
-                Ok(code) => code,
-                Err(err) => render_run_error(err),
-            },
-            Runner::CargoTest => match headlamp::cargo::run_cargo_test(&repo_root, &parsed) {
-                Ok(code) => code,
-                Err(err) => render_run_error(err),
-            },
-            Runner::CargoNextest => match headlamp::cargo::run_cargo_nextest(&repo_root, &parsed) {
-                Ok(code) => code,
-                Err(err) => render_run_error(err),
-            },
-        }
-    };
+fn run_once(
+    runner: Runner,
+    repo_root: &std::path::Path,
+    parsed: &headlamp::args::ParsedArgs,
+) -> i32 {
+    match runner {
+        Runner::Jest | Runner::Vitest => headlamp::jest::run_jest(repo_root, parsed)
+            .unwrap_or_else(|err| render_run_error(repo_root, parsed, runner, err)),
+        Runner::Pytest => headlamp::pytest::run_pytest(repo_root, parsed)
+            .unwrap_or_else(|err| render_run_error(repo_root, parsed, runner, err)),
+        Runner::CargoTest => headlamp::cargo::run_cargo_test(repo_root, parsed)
+            .unwrap_or_else(|err| render_run_error(repo_root, parsed, runner, err)),
+        Runner::CargoNextest => headlamp::cargo::run_cargo_nextest(repo_root, parsed)
+            .unwrap_or_else(|err| render_run_error(repo_root, parsed, runner, err)),
+    }
+}
 
-    let code = if parsed.watch {
-        headlamp::watch::run_polling_watch_loop(
-            &repo_root,
-            std::time::Duration::from_millis(800),
-            parsed.verbose,
-            &mut run_once,
-        )
-    } else {
-        run_once()
-    };
-    std::process::exit(code);
+fn runner_label(runner: Runner) -> &'static str {
+    match runner {
+        Runner::Jest => "jest",
+        Runner::Vitest => "vitest",
+        Runner::Pytest => "pytest",
+        Runner::CargoTest => "cargo-test",
+        Runner::CargoNextest => "cargo-nextest",
+    }
+}
+
+fn render_run_error(
+    repo_root: &std::path::Path,
+    parsed: &headlamp::args::ParsedArgs,
+    runner: Runner,
+    err: headlamp::run::RunError,
+) -> i32 {
+    let ctx = headlamp::format::ctx::make_ctx(
+        repo_root,
+        None,
+        true,
+        parsed.show_logs,
+        parsed.editor_cmd.clone(),
+    );
+    let suite_path = format!("headlamp/{}", runner_label(runner));
+    let model = headlamp::format::infra_failure::build_infra_failure_test_run_model(
+        suite_path.as_str(),
+        "Test suite failed to run",
+        &err.to_string(),
+    );
+    let rendered = headlamp::format::vitest::render_vitest_from_test_model(&model, &ctx, true);
+    if !rendered.trim().is_empty() {
+        println!("{rendered}");
+    }
+    1
 }
 
 fn extract_runner(argv: &[String]) -> (Runner, Vec<String>) {

@@ -61,129 +61,115 @@ pub fn lines_from_details(details: Option<&Vec<Value>>) -> DetailLines {
         return (stacks, messages);
     };
 
-    let push_maybe = |value: &Value, bucket: &mut Vec<String>| {
-        if let Some(s) = value.as_str()
-            && !s.trim().is_empty()
-        {
-            bucket.extend(s.lines().map(|l| l.to_string()));
-        }
-    };
-
-    fn visit_deep(
-        value: &Value,
-        depth: usize,
-        stacks: &mut Vec<String>,
-        messages: &mut Vec<String>,
-    ) {
-        if depth > 3 {
-            return;
-        }
-        match value {
-            Value::Null => {}
-            Value::Bool(_) | Value::Number(_) => {}
-            Value::String(s) => {
-                if !s.trim().is_empty() {
-                    messages.extend(s.lines().map(|l| l.to_string()));
-                }
-            }
-            Value::Array(arr) => {
-                arr.iter()
-                    .for_each(|v| visit_deep(v, depth + 1, stacks, messages));
-            }
-            Value::Object(obj) => {
-                obj.get("message")
-                    .and_then(Value::as_str)
-                    .filter(|s| !s.trim().is_empty())
-                    .into_iter()
-                    .for_each(|s| {
-                        messages.extend(s.lines().map(|l| l.to_string()));
-                    });
-                obj.get("stack")
-                    .and_then(Value::as_str)
-                    .filter(|s| !s.trim().is_empty())
-                    .into_iter()
-                    .for_each(|s| {
-                        stacks.extend(s.lines().map(|l| l.to_string()));
-                    });
-                ["expected", "received"].into_iter().for_each(|k| {
-                    obj.get(k)
-                        .and_then(Value::as_str)
-                        .filter(|s| !s.trim().is_empty())
-                        .into_iter()
-                        .for_each(|s| {
-                            messages.extend(s.lines().map(|l| l.to_string()));
-                        });
-                });
-
-                [
-                    "errors",
-                    "details",
-                    "issues",
-                    "inner",
-                    "causes",
-                    "aggregatedErrors",
-                ]
-                .into_iter()
-                .filter_map(|k| obj.get(k))
-                .filter_map(|v| v.as_array())
-                .for_each(|arr| {
-                    arr.iter()
-                        .for_each(|v| visit_deep(v, depth + 1, stacks, messages))
-                });
-
-                ["error", "cause", "matcherResult", "context", "data"]
-                    .into_iter()
-                    .filter_map(|k| obj.get(k))
-                    .for_each(|v| visit_deep(v, depth + 1, stacks, messages));
-            }
-        }
-    }
-
     for detail in details {
-        match detail {
-            Value::String(s) => {
-                if s.contains(" at ") && s.contains(':') {
-                    stacks.extend(s.lines().map(|l| l.to_string()));
-                } else {
-                    messages.extend(s.lines().map(|l| l.to_string()));
-                }
-            }
-            Value::Object(obj) => {
-                obj.get("stack")
-                    .into_iter()
-                    .for_each(|v| push_maybe(v, &mut stacks));
-                obj.get("message")
-                    .into_iter()
-                    .for_each(|v| push_maybe(v, &mut messages));
-                if let Some(err) = obj.get("error")
-                    && let Value::Object(err_obj) = err
-                {
-                    err_obj
-                        .get("stack")
-                        .into_iter()
-                        .for_each(|v| push_maybe(v, &mut stacks));
-                    err_obj
-                        .get("message")
-                        .into_iter()
-                        .for_each(|v| push_maybe(v, &mut messages));
-                };
-                if let Some(mr) = obj.get("matcherResult")
-                    && let Value::Object(mr_obj) = mr
-                {
-                    ["stack", "message", "expected", "received"]
-                        .into_iter()
-                        .filter_map(|k| mr_obj.get(k))
-                        .for_each(|v| push_maybe(v, &mut messages));
-                };
-                visit_deep(detail, 0, &mut stacks, &mut messages);
-            }
-            Value::Array(arr) => {
-                arr.iter()
-                    .for_each(|v| visit_deep(v, 0, &mut stacks, &mut messages));
-            }
-            _ => {}
-        }
+        collect_detail_lines(detail, &mut stacks, &mut messages);
     }
 
     (stacks, messages)
+}
+
+fn push_lines(value: &Value, bucket: &mut Vec<String>) {
+    value
+        .as_str()
+        .filter(|s| !s.trim().is_empty())
+        .into_iter()
+        .flat_map(|s| s.lines())
+        .for_each(|line| bucket.push(line.to_string()));
+}
+
+fn collect_detail_lines(detail: &Value, stacks: &mut Vec<String>, messages: &mut Vec<String>) {
+    match detail {
+        Value::String(s) => push_string_detail(s, stacks, messages),
+        Value::Object(obj) => collect_object_detail(obj, stacks, messages),
+        Value::Array(arr) => arr.iter().for_each(|v| visit_deep(v, 0, stacks, messages)),
+        _ => {}
+    }
+}
+
+fn push_string_detail(text: &str, stacks: &mut Vec<String>, messages: &mut Vec<String>) {
+    let target = if text.contains(" at ") && text.contains(':') {
+        stacks
+    } else {
+        messages
+    };
+    target.extend(text.lines().map(|l| l.to_string()));
+}
+
+fn collect_object_detail(
+    obj: &serde_json::Map<String, Value>,
+    stacks: &mut Vec<String>,
+    messages: &mut Vec<String>,
+) {
+    obj.get("stack")
+        .into_iter()
+        .for_each(|v| push_lines(v, stacks));
+    obj.get("message")
+        .into_iter()
+        .for_each(|v| push_lines(v, messages));
+    obj.get("error")
+        .and_then(Value::as_object)
+        .into_iter()
+        .for_each(|err_obj| {
+            err_obj
+                .get("stack")
+                .into_iter()
+                .for_each(|v| push_lines(v, stacks));
+            err_obj
+                .get("message")
+                .into_iter()
+                .for_each(|v| push_lines(v, messages));
+        });
+    obj.get("matcherResult")
+        .and_then(Value::as_object)
+        .into_iter()
+        .for_each(|mr_obj| {
+            ["stack", "message", "expected", "received"]
+                .into_iter()
+                .filter_map(|k| mr_obj.get(k))
+                .for_each(|v| push_lines(v, messages));
+        });
+    visit_deep(&Value::Object(obj.clone()), 0, stacks, messages);
+}
+
+fn visit_deep(value: &Value, depth: usize, stacks: &mut Vec<String>, messages: &mut Vec<String>) {
+    if depth > 3 {
+        return;
+    }
+    match value {
+        Value::Null | Value::Bool(_) | Value::Number(_) => {}
+        Value::String(_) => push_lines(value, messages),
+        Value::Array(arr) => arr
+            .iter()
+            .for_each(|v| visit_deep(v, depth + 1, stacks, messages)),
+        Value::Object(obj) => {
+            obj.get("message")
+                .into_iter()
+                .for_each(|v| push_lines(v, messages));
+            obj.get("stack")
+                .into_iter()
+                .for_each(|v| push_lines(v, stacks));
+            ["expected", "received"]
+                .into_iter()
+                .filter_map(|k| obj.get(k))
+                .for_each(|v| push_lines(v, messages));
+            [
+                "errors",
+                "details",
+                "issues",
+                "inner",
+                "causes",
+                "aggregatedErrors",
+            ]
+            .into_iter()
+            .filter_map(|k| obj.get(k).and_then(Value::as_array))
+            .for_each(|arr| {
+                arr.iter()
+                    .for_each(|v| visit_deep(v, depth + 1, stacks, messages))
+            });
+            ["error", "cause", "matcherResult", "context", "data"]
+                .into_iter()
+                .filter_map(|k| obj.get(k))
+                .for_each(|v| visit_deep(v, depth + 1, stacks, messages));
+        }
+    }
 }

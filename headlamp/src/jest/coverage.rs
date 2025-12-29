@@ -196,24 +196,47 @@ pub(super) struct CollectCoverageArgs<'a> {
     pub(super) exit_code: i32,
 }
 
-pub(super) fn collect_and_print_coverage(args: CollectCoverageArgs<'_>) -> Result<i32, RunError> {
-    let CollectCoverageArgs {
-        repo_root,
-        args,
-        selection_paths_abs,
-        coverage_failure_lines,
-        mut exit_code,
-    } = args;
+struct CoverageInputs {
+    jest_cov_dir: PathBuf,
+    threshold_report: Option<CoverageReport>,
+    resolved_for_fallback_render: Option<CoverageReport>,
+}
 
+fn collect_coverage_inputs(repo_root: &Path) -> CoverageInputs {
     let jest_cov_dir = repo_root.join("coverage").join("jest");
     let json_tree = read_istanbul_coverage_tree(&jest_cov_dir);
-    let json_reports = json_tree.into_iter().map(|(_, r)| r).collect::<Vec<_>>();
+    let json_reports = json_tree
+        .into_iter()
+        .map(|(_, report)| report)
+        .collect::<Vec<_>>();
     let merged_json =
         (!json_reports.is_empty()).then(|| merge_istanbul_reports(&json_reports, repo_root));
 
+    let lcov_candidates = collect_lcov_candidates(repo_root, &jest_cov_dir);
+    let reports = lcov_candidates
+        .iter()
+        .filter(|path| path.exists())
+        .filter_map(|path| read_lcov_file(path).ok())
+        .collect::<Vec<_>>();
+    let resolved_lcov = (!reports.is_empty()).then(|| {
+        let merged = merge_reports(&reports, repo_root);
+        resolve_lcov_paths_to_root(merged, repo_root)
+    });
+
+    let threshold_report = build_jest_threshold_report(resolved_lcov.clone(), merged_json.clone());
+    let resolved_for_fallback_render = merged_json.clone().or_else(|| resolved_lcov.clone());
+
+    CoverageInputs {
+        jest_cov_dir,
+        threshold_report,
+        resolved_for_fallback_render,
+    }
+}
+
+fn collect_lcov_candidates(repo_root: &Path, jest_cov_dir: &Path) -> Vec<PathBuf> {
     let mut lcov_candidates: Vec<PathBuf> = vec![repo_root.join("coverage").join("lcov.info")];
     if jest_cov_dir.exists() {
-        WalkBuilder::new(&jest_cov_dir)
+        WalkBuilder::new(jest_cov_dir)
             .hidden(false)
             .git_ignore(false)
             .git_global(false)
@@ -224,59 +247,84 @@ pub(super) fn collect_and_print_coverage(args: CollectCoverageArgs<'_>) -> Resul
             .filter(|dent| dent.path().file_name().and_then(|x| x.to_str()) == Some("lcov.info"))
             .for_each(|dent| lcov_candidates.push(dent.into_path()));
     }
+    lcov_candidates
+}
 
-    let reports = lcov_candidates
-        .iter()
-        .filter(|p| p.exists())
-        .filter_map(|p| read_lcov_file(p).ok())
-        .collect::<Vec<_>>();
-
-    let resolved_lcov = (!reports.is_empty()).then(|| {
-        let merged = merge_reports(&reports, repo_root);
-        resolve_lcov_paths_to_root(merged, repo_root)
-    });
-
-    let threshold_report = build_jest_threshold_report(resolved_lcov.clone(), merged_json.clone());
-    let resolved = merged_json.or_else(|| resolved_lcov.clone());
+fn maybe_print_coverage(
+    repo_root: &Path,
+    args: &ParsedArgs,
+    selection_paths_abs: &[String],
+    inputs: &CoverageInputs,
+) {
+    if args.coverage_ui == headlamp_core::config::CoverageUi::Jest {
+        return;
+    }
 
     let print_opts =
         PrintOpts::for_run(args, headlamp_core::format::terminal::is_output_terminal());
 
-    if args.coverage_ui != headlamp_core::config::CoverageUi::Jest {
-        if let Some(pretty) = format_istanbul_pretty(
-            repo_root,
-            &jest_cov_dir,
-            &print_opts,
-            selection_paths_abs,
-            &args.include_globs,
-            &args.exclude_globs,
-            args.coverage_detail,
-        ) {
-            println!("{pretty}");
-        } else if let Some(resolved) = resolved {
-            let filtered = filter_report(
-                resolved,
-                repo_root,
-                &args.include_globs,
-                &args.exclude_globs,
-            );
-            let include_hotspots = should_render_hotspots(args.coverage_detail);
-            println!(
-                "{}",
-                render_report_text(&filtered, &print_opts, repo_root, include_hotspots)
-            );
-        }
+    if let Some(pretty) = format_istanbul_pretty(
+        repo_root,
+        &inputs.jest_cov_dir,
+        &print_opts,
+        selection_paths_abs,
+        &args.include_globs,
+        &args.exclude_globs,
+        args.coverage_detail,
+    ) {
+        println!("{pretty}");
+        return;
     }
 
-    let thresholds_failed = compare_thresholds_and_print_if_needed(
-        args.coverage_thresholds.as_ref(),
-        threshold_report.as_ref(),
+    let Some(resolved) = inputs.resolved_for_fallback_render.clone() else {
+        return;
+    };
+
+    let filtered = filter_report(
+        resolved,
+        repo_root,
+        &args.include_globs,
+        &args.exclude_globs,
     );
+    let include_hotspots = should_render_hotspots(args.coverage_detail);
+    println!(
+        "{}",
+        render_report_text(&filtered, &print_opts, repo_root, include_hotspots)
+    );
+}
+
+fn apply_thresholds_and_exit_code(
+    args: &ParsedArgs,
+    mut exit_code: i32,
+    threshold_report: Option<&CoverageReport>,
+    coverage_failure_lines: &IndexSet<String>,
+) -> i32 {
+    let thresholds_failed =
+        compare_thresholds_and_print_if_needed(args.coverage_thresholds.as_ref(), threshold_report);
     if exit_code == 0 && thresholds_failed {
         exit_code = 1;
     } else if should_print_coverage_threshold_failure_summary(exit_code, coverage_failure_lines) {
         print_coverage_threshold_failure_summary(coverage_failure_lines);
     }
+    exit_code
+}
 
-    Ok(exit_code)
+pub(super) fn collect_and_print_coverage(args: CollectCoverageArgs<'_>) -> Result<i32, RunError> {
+    let CollectCoverageArgs {
+        repo_root,
+        args,
+        selection_paths_abs,
+        coverage_failure_lines,
+        exit_code,
+    } = args;
+
+    let inputs = collect_coverage_inputs(repo_root);
+    maybe_print_coverage(repo_root, args, selection_paths_abs, &inputs);
+    let final_exit = apply_thresholds_and_exit_code(
+        args,
+        exit_code,
+        inputs.threshold_report.as_ref(),
+        coverage_failure_lines,
+    );
+    Ok(final_exit)
 }

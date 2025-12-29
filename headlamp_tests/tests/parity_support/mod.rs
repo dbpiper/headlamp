@@ -11,5 +11,6 @@ pub use headlamp_parity_support::{
 };
 
 pub mod runner_parity;
+pub mod stub_scripts;
 
 

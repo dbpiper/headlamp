@@ -119,8 +119,8 @@ pub(super) fn clear_previous_frame(lines: usize) {
     if lines == 0 {
         return;
     }
-    let _ = std::io::stdout().write_all("\r\u{1b}[2K".as_bytes());
+    let _ = std::io::stdout().write_all("\u{1b}[2K\r".as_bytes());
     for _ in 1..lines {
-        let _ = std::io::stdout().write_all("\u{1b}[1A\r\u{1b}[2K".as_bytes());
+        let _ = std::io::stdout().write_all("\u{1b}[1A\u{1b}[2K\r".as_bytes());
     }
 }

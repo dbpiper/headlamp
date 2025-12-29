@@ -5,6 +5,32 @@ use regex::Regex;
 
 use headlamp_core::test_model::{TestRunAggregated, TestRunModel};
 
+#[derive(Debug)]
+struct UnsplitSuiteParts {
+    test_file_path: String,
+    status: String,
+    timed_out: Option<bool>,
+    failure_message: String,
+    failure_details: Option<Vec<serde_json::Value>>,
+    test_exec_error: Option<serde_json::Value>,
+    console: Option<Vec<headlamp_core::test_model::TestConsoleEntry>>,
+    failed_tests: Vec<headlamp_core::test_model::TestCaseResult>,
+    non_failed_tests: Vec<headlamp_core::test_model::TestCaseResult>,
+}
+
+#[derive(Debug)]
+struct SplitSuiteParts {
+    test_file_path: String,
+    timed_out: Option<bool>,
+    failure_message: String,
+    failure_details: Option<Vec<serde_json::Value>>,
+    test_exec_error: Option<serde_json::Value>,
+    console: Option<Vec<headlamp_core::test_model::TestConsoleEntry>>,
+    inferred_failed_path: Option<String>,
+    failed_tests: Vec<headlamp_core::test_model::TestCaseResult>,
+    non_failed_tests: Vec<headlamp_core::test_model::TestCaseResult>,
+}
+
 static RUST_PANIC_AT_RE: Lazy<Regex> =
     Lazy::new(|| Regex::new(r#"panicked at (?:[^:]+: )?([^:\s]+:\d+:\d+)"#).unwrap());
 
@@ -52,8 +78,6 @@ fn split_cargo_suite_by_failure_location(
     repo_root: &Path,
     suite: headlamp_core::test_model::TestSuiteResult,
 ) -> Vec<headlamp_core::test_model::TestSuiteResult> {
-    let mut failed = vec![];
-    let mut other = vec![];
     let headlamp_core::test_model::TestSuiteResult {
         test_file_path,
         status,
@@ -65,14 +89,64 @@ fn split_cargo_suite_by_failure_location(
         test_results,
     } = suite;
 
-    test_results.into_iter().for_each(|test_case| {
-        if test_case.status == "failed" {
-            failed.push(test_case);
-        } else {
-            other.push(test_case);
-        }
-    });
-    let inferred_failed_path = failed.iter().find_map(|t| {
+    let (failed_tests, non_failed_tests) = partition_tests_by_failure(test_results);
+    let inferred_failed_path = infer_failed_path(repo_root, &failed_tests);
+
+    if !should_split_suite(
+        &test_file_path,
+        &inferred_failed_path,
+        &failed_tests,
+        &non_failed_tests,
+    ) {
+        return vec![build_unsplit_suite(UnsplitSuiteParts {
+            test_file_path,
+            status,
+            timed_out,
+            failure_message,
+            failure_details,
+            test_exec_error,
+            console,
+            failed_tests,
+            non_failed_tests,
+        })];
+    }
+
+    build_split_suites(SplitSuiteParts {
+        test_file_path,
+        timed_out,
+        failure_message,
+        failure_details,
+        test_exec_error,
+        console,
+        inferred_failed_path,
+        failed_tests,
+        non_failed_tests,
+    })
+}
+
+fn partition_tests_by_failure(
+    test_results: Vec<headlamp_core::test_model::TestCaseResult>,
+) -> (
+    Vec<headlamp_core::test_model::TestCaseResult>,
+    Vec<headlamp_core::test_model::TestCaseResult>,
+) {
+    test_results
+        .into_iter()
+        .fold((vec![], vec![]), |(mut failed, mut other), test_case| {
+            if test_case.status == "failed" {
+                failed.push(test_case);
+            } else {
+                other.push(test_case);
+            }
+            (failed, other)
+        })
+}
+
+fn infer_failed_path(
+    repo_root: &Path,
+    failed_tests: &[headlamp_core::test_model::TestCaseResult],
+) -> Option<String> {
+    failed_tests.iter().find_map(|t| {
         let joined = t.failure_messages.join("\n");
         let caps = RUST_PANIC_AT_RE.captures(&joined)?;
         let loc = caps.get(1)?.as_str();
@@ -82,31 +156,64 @@ fn split_cargo_suite_by_failure_location(
         } else {
             repo_root.join(file).to_string_lossy().to_string()
         })
-    });
+    })
+}
 
-    let can_split = inferred_failed_path
+fn should_split_suite(
+    test_file_path: &str,
+    inferred_failed_path: &Option<String>,
+    failed_tests: &[headlamp_core::test_model::TestCaseResult],
+    non_failed_tests: &[headlamp_core::test_model::TestCaseResult],
+) -> bool {
+    inferred_failed_path
         .as_deref()
-        .is_some_and(|p| p != test_file_path.as_str())
-        && !failed.is_empty()
-        && !other.is_empty();
-    if !can_split {
-        return vec![headlamp_core::test_model::TestSuiteResult {
-            test_results: failed.into_iter().chain(other).collect(),
-            test_file_path,
-            status,
-            timed_out,
-            failure_message,
-            failure_details,
-            test_exec_error,
-            console,
-        }];
+        .is_some_and(|p| p != test_file_path)
+        && !failed_tests.is_empty()
+        && !non_failed_tests.is_empty()
+}
+
+fn build_unsplit_suite(parts: UnsplitSuiteParts) -> headlamp_core::test_model::TestSuiteResult {
+    let UnsplitSuiteParts {
+        test_file_path,
+        status,
+        timed_out,
+        failure_message,
+        failure_details,
+        test_exec_error,
+        console,
+        failed_tests,
+        non_failed_tests,
+    } = parts;
+    headlamp_core::test_model::TestSuiteResult {
+        test_results: failed_tests.into_iter().chain(non_failed_tests).collect(),
+        test_file_path,
+        status,
+        timed_out,
+        failure_message,
+        failure_details,
+        test_exec_error,
+        console,
     }
+}
+
+fn build_split_suites(parts: SplitSuiteParts) -> Vec<headlamp_core::test_model::TestSuiteResult> {
+    let SplitSuiteParts {
+        test_file_path,
+        timed_out,
+        failure_message,
+        failure_details,
+        test_exec_error,
+        console,
+        inferred_failed_path,
+        failed_tests,
+        non_failed_tests,
+    } = parts;
     let failed_path = inferred_failed_path.unwrap_or_else(|| test_file_path.clone());
     vec![
         headlamp_core::test_model::TestSuiteResult {
             test_file_path: failed_path,
             status: "failed".to_string(),
-            test_results: failed,
+            test_results: failed_tests,
             timed_out,
             failure_message,
             failure_details,
@@ -119,7 +226,7 @@ fn split_cargo_suite_by_failure_location(
             failure_message: String::new(),
             failure_details: None,
             test_exec_error: None,
-            test_results: other,
+            test_results: non_failed_tests,
             timed_out,
             console,
         },

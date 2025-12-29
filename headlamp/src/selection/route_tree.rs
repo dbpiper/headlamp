@@ -68,96 +68,98 @@ pub fn parse_http_segments(http_path: &str) -> Vec<RouteSegment> {
         .collect()
 }
 
+fn upsert_handler<A: Clone>(
+    handlers: &BTreeMap<String, A>,
+    method: &str,
+    value: &A,
+) -> BTreeMap<String, A> {
+    let mut next = handlers.clone();
+    next.insert(method.to_ascii_uppercase(), value.clone());
+    next
+}
+
+fn kind_rank(kind: &RouteSegmentKind) -> u8 {
+    match kind {
+        RouteSegmentKind::Literal => 0,
+        RouteSegmentKind::Param => 1,
+        RouteSegmentKind::Splat => 2,
+    }
+}
+
+fn compare_route_nodes<A>(left: &RouteTrieNode<A>, right: &RouteTrieNode<A>) -> std::cmp::Ordering {
+    let left_rank = kind_rank(&left.segment.kind);
+    let right_rank = kind_rank(&right.segment.kind);
+    left_rank
+        .cmp(&right_rank)
+        .then_with(|| left.segment.segment.cmp(&right.segment.segment))
+}
+
+fn node_matches_segment<A>(candidate: &RouteTrieNode<A>, head: &RouteSegment) -> bool {
+    match (&candidate.segment.kind, &head.kind) {
+        (RouteSegmentKind::Literal, RouteSegmentKind::Literal) => {
+            candidate.segment.segment == head.segment
+        }
+        (RouteSegmentKind::Param, RouteSegmentKind::Param) => {
+            candidate.segment.param_name == head.param_name
+        }
+        (RouteSegmentKind::Splat, RouteSegmentKind::Splat) => true,
+        _ => false,
+    }
+}
+
+fn insert_segments<A: Clone>(
+    node: &RouteTrieNode<A>,
+    segments: &[RouteSegment],
+    method: &str,
+    value: &A,
+) -> RouteTrieNode<A> {
+    let Some((head, tail)) = segments.split_first() else {
+        return RouteTrieNode {
+            segment: node.segment.clone(),
+            handlers: upsert_handler(&node.handlers, method, value),
+            children: node.children.clone(),
+        };
+    };
+
+    let existing_index = node
+        .children
+        .iter()
+        .position(|candidate| node_matches_segment(candidate, head));
+    let next_child = match existing_index {
+        Some(index) => insert_segments(&node.children[index], tail, method, value),
+        None => {
+            let fresh = RouteTrieNode {
+                segment: head.clone(),
+                handlers: BTreeMap::new(),
+                children: vec![],
+            };
+            insert_segments(&fresh, tail, method, value)
+        }
+    };
+
+    let mut next_children = node.children.clone();
+    if let Some(index) = existing_index {
+        next_children[index] = next_child;
+    } else {
+        next_children.push(next_child);
+    }
+    next_children.sort_by(compare_route_nodes::<A>);
+
+    RouteTrieNode {
+        segment: node.segment.clone(),
+        handlers: node.handlers.clone(),
+        children: next_children,
+    }
+}
+
 pub fn insert_route<A: Clone>(
     trie: &RouteTrie<A>,
     segments: &[RouteSegment],
     method: &str,
     value: A,
 ) -> RouteTrie<A> {
-    fn upsert_handler<A: Clone>(
-        handlers: &BTreeMap<String, A>,
-        method: &str,
-        value: A,
-    ) -> BTreeMap<String, A> {
-        let mut next = handlers.clone();
-        next.insert(method.to_ascii_uppercase(), value);
-        next
-    }
-
-    fn insert_segments<A: Clone>(
-        node: &RouteTrieNode<A>,
-        segments: &[RouteSegment],
-        method: &str,
-        value: A,
-    ) -> RouteTrieNode<A> {
-        if segments.is_empty() {
-            return RouteTrieNode {
-                segment: node.segment.clone(),
-                handlers: upsert_handler(&node.handlers, method, value),
-                children: node.children.clone(),
-            };
-        }
-        let head = &segments[0];
-        let tail = &segments[1..];
-        let matcher = |candidate: &RouteTrieNode<A>| match (&candidate.segment.kind, &head.kind) {
-            (RouteSegmentKind::Literal, RouteSegmentKind::Literal) => {
-                candidate.segment.segment == head.segment
-            }
-            (RouteSegmentKind::Param, RouteSegmentKind::Param) => {
-                candidate.segment.param_name == head.param_name
-            }
-            (RouteSegmentKind::Splat, RouteSegmentKind::Splat) => true,
-            _ => false,
-        };
-
-        let existing_index = node.children.iter().position(matcher);
-        let next_child = match existing_index {
-            Some(idx) => insert_segments(&node.children[idx], tail, method, value),
-            None => insert_segments(
-                &RouteTrieNode {
-                    segment: head.clone(),
-                    handlers: BTreeMap::new(),
-                    children: vec![],
-                },
-                tail,
-                method,
-                value,
-            ),
-        };
-
-        let mut next_children = node.children.clone();
-        if let Some(idx) = existing_index {
-            next_children[idx] = next_child;
-        } else {
-            next_children.push(next_child);
-        }
-        next_children.sort_by(
-            |left, right| match (&left.segment.kind, &right.segment.kind) {
-                (RouteSegmentKind::Literal, RouteSegmentKind::Literal) => {
-                    left.segment.segment.cmp(&right.segment.segment)
-                }
-                (RouteSegmentKind::Param, RouteSegmentKind::Param) => {
-                    left.segment.segment.cmp(&right.segment.segment)
-                }
-                (RouteSegmentKind::Splat, RouteSegmentKind::Splat) => {
-                    left.segment.segment.cmp(&right.segment.segment)
-                }
-                (RouteSegmentKind::Literal, _) => std::cmp::Ordering::Less,
-                (_, RouteSegmentKind::Literal) => std::cmp::Ordering::Greater,
-                (RouteSegmentKind::Param, _) => std::cmp::Ordering::Less,
-                (_, RouteSegmentKind::Param) => std::cmp::Ordering::Greater,
-            },
-        );
-
-        RouteTrieNode {
-            segment: node.segment.clone(),
-            handlers: node.handlers.clone(),
-            children: next_children,
-        }
-    }
-
     RouteTrie {
-        root: insert_segments(&trie.root, segments, method, value),
+        root: insert_segments(&trie.root, segments, method, &value),
     }
 }
 

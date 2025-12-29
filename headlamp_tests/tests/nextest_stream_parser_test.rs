@@ -28,3 +28,41 @@ fn nextest_stream_parser_emits_updates_and_finalizes() {
     assert_eq!(model.test_results.len(), 1);
     assert_eq!(model.test_results[0].test_results.len(), 2);
 }
+
+#[test]
+fn nextest_parser_sets_location_when_panic_location_matches_suite_file() {
+    let repo_root = std::env::temp_dir()
+        .join("headlamp-tests")
+        .join("nextest-parser-location");
+    let _ = std::fs::remove_dir_all(&repo_root);
+    std::fs::create_dir_all(repo_root.join("tests")).unwrap();
+    std::fs::write(
+        repo_root.join("tests").join("sum_test.rs"),
+        (1..=20)
+            .map(|i| format!("const LINE_{i} = {i};"))
+            .collect::<Vec<_>>()
+            .join("\n"),
+    )
+    .unwrap();
+
+    let mut parser = NextestStreamParser::new(repo_root.as_path());
+    let lines = [
+        r#"{"type":"suite","event":"started","test_count":1,"nextest":{"crate":"parity_sum","test_binary":"sum_test","kind":"test"}}"#,
+        r#"{"type":"test","event":"failed","name":"parity_sum::sum_test$sum_fails","exec_time":0.01,"stdout":"thread 'sum_fails' panicked at tests/sum_test.rs:7:2:\nassertion `left == right` failed\n  left: 1\n right: 2\n"}"#,
+        r#"{"type":"suite","event":"failed","passed":0,"failed":1,"ignored":0,"measured":0,"filtered_out":0,"exec_time":0.02,"nextest":{"crate":"parity_sum","test_binary":"sum_test","kind":"test"}}"#,
+    ];
+    lines.iter().for_each(|line| {
+        let _ = parser.push_line(line);
+    });
+
+    let model = parser.finalize().expect("model");
+    let suite = model.test_results.first().expect("suite");
+    let failed = suite
+        .test_results
+        .iter()
+        .find(|t| t.status == "failed")
+        .expect("failed test present");
+    let loc = failed.location.as_ref().expect("location inferred");
+    assert_eq!(loc.line, 7);
+    assert_eq!(loc.column, 2);
+}

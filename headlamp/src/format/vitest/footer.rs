@@ -4,19 +4,21 @@ use crate::format::ctx::Ctx;
 use crate::format::fns::draw_rule;
 use crate::test_model::{TestRunAggregated, TestRunModel};
 
-pub(super) fn render_footer(data: &TestRunModel, ctx: &Ctx, only_failures: bool) -> Vec<String> {
-    let failed_count =
-        if data.aggregated.num_total_tests == 0 && data.aggregated.num_failed_test_suites > 0 {
-            data.aggregated.num_failed_test_suites
-        } else {
-            data.aggregated.num_failed_tests
-        };
-    let timed_out_count = data.aggregated.num_timed_out_tests.unwrap_or(0);
-    let footer = if data.test_results.len() as u64 != data.aggregated.num_total_test_suites {
-        vitest_footer_from_files(&data.test_results, &data.aggregated)
+pub(super) fn render_footer(
+    data: &TestRunModel,
+    suites: &[&crate::test_model::TestSuiteResult],
+    ctx: &Ctx,
+    only_failures: bool,
+) -> Vec<String> {
+    let filtered_agg = aggregated_from_suites(suites, data.aggregated.run_time_ms, data.start_time);
+    let failed_count = if filtered_agg.num_total_tests == 0 && filtered_agg.num_failed_test_suites > 0
+    {
+        filtered_agg.num_failed_test_suites
     } else {
-        vitest_footer(&data.aggregated, only_failures)
+        filtered_agg.num_failed_tests
     };
+    let timed_out_count = filtered_agg.num_timed_out_tests.unwrap_or(0);
+    let footer = vitest_footer(&filtered_agg, only_failures);
 
     let mut out: Vec<String> = vec![
         draw_rule(
@@ -41,51 +43,54 @@ pub(super) fn render_footer(data: &TestRunModel, ctx: &Ctx, only_failures: bool)
     out
 }
 
-fn vitest_footer_from_files(
-    files: &[crate::test_model::TestSuiteResult],
-    agg: &TestRunAggregated,
-) -> String {
-    let file_failed = |file: &crate::test_model::TestSuiteResult| -> bool {
-        file.status == "failed" || file.test_results.iter().any(|a| a.status == "failed")
-    };
-    let failed_files = files.iter().filter(|f| file_failed(f)).count() as u64;
-    let total_files = files.len() as u64;
-
-    let total_tests = files
+fn aggregated_from_suites(
+    suites: &[&crate::test_model::TestSuiteResult],
+    run_time_ms: Option<u64>,
+    start_time: u64,
+) -> TestRunAggregated {
+    let (failed_tests, passed_tests, pending_tests, todo_tests, timed_out_tests) = suites
         .iter()
-        .map(|f| f.test_results.len() as u64)
+        .flat_map(|suite| suite.test_results.iter())
+        .fold((0u64, 0u64, 0u64, 0u64, 0u64), |acc, test| {
+            let (failed, passed, pending, todo, timed_out) = acc;
+            let next_failed = failed.saturating_add((test.status == "failed") as u64);
+            let next_passed = passed.saturating_add((test.status == "passed") as u64);
+            let next_pending = pending.saturating_add((test.status == "pending") as u64);
+            let next_todo = todo.saturating_add((test.status == "todo") as u64);
+            let next_timed_out =
+                timed_out.saturating_add((test.timed_out.unwrap_or(false)) as u64);
+            (next_failed, next_passed, next_pending, next_todo, next_timed_out)
+        });
+    let total_tests = suites
+        .iter()
+        .map(|suite| suite.test_results.len() as u64)
         .sum::<u64>();
-    let failed_tests = if total_tests == 0 {
-        failed_files
-    } else {
-        files
-            .iter()
-            .flat_map(|f| f.test_results.iter())
-            .filter(|a| a.status == "failed")
-            .count() as u64
-    };
+    let failed_suites = suites
+        .iter()
+        .filter(|suite| suite.status == "failed" || suite.test_results.iter().any(|t| t.status == "failed"))
+        .count() as u64;
+    let total_suites = suites.len() as u64;
+    let passed_suites = total_suites.saturating_sub(failed_suites);
+    let timed_out_suites = suites
+        .iter()
+        .filter(|suite| suite.timed_out.unwrap_or(false))
+        .count() as u64;
 
-    let time = agg
-        .run_time_ms
-        .map(|ms| format!("{ms}ms"))
-        .unwrap_or_default();
-
-    [
-        format!(
-            "{} {} {}",
-            ansi::bold("Test Files"),
-            colors::failure(&format!("{failed_files} failed")),
-            ansi::dim(&format!("({total_files})"))
-        ),
-        format!(
-            "{}     {} {}",
-            ansi::bold("Tests"),
-            colors::failure(&format!("{failed_tests} failed")),
-            ansi::dim(&format!("({total_tests})"))
-        ),
-        format!("{}      {}", ansi::bold("Time"), time),
-    ]
-    .join("\n")
+    TestRunAggregated {
+        num_total_test_suites: total_suites,
+        num_passed_test_suites: passed_suites,
+        num_failed_test_suites: failed_suites,
+        num_total_tests: total_tests,
+        num_passed_tests: passed_tests,
+        num_failed_tests: failed_tests,
+        num_pending_tests: pending_tests,
+        num_todo_tests: todo_tests,
+        num_timed_out_tests: Some(timed_out_tests),
+        num_timed_out_test_suites: Some(timed_out_suites),
+        start_time,
+        success: failed_tests == 0 && failed_suites == 0,
+        run_time_ms,
+    }
 }
 
 fn vitest_footer(agg: &TestRunAggregated, only_failures: bool) -> String {

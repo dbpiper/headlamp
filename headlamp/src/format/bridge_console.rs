@@ -129,142 +129,197 @@ pub fn parse_bridge_console(
         let raw = render_console_message(entry.message.as_ref());
 
         if !raw.contains("[JEST-BRIDGE-EVENT]") {
-            console_list.push(ConsoleEntry {
-                type_name: entry.type_name.clone(),
-                message: Some(raw),
-                origin: entry.origin.clone(),
-                test_path: None,
-                current_test_name: None,
-            });
+            push_plain_console_entry(&mut console_list, entry, raw);
             continue;
         }
 
-        let json_text = raw.split("[JEST-BRIDGE-EVENT]").last().unwrap_or("").trim();
-        let Ok(meta) = json5::from_str::<BridgeEventMeta>(json_text) else {
+        let Some((event_type, timestamp_ms, json_text)) = parse_bridge_event(&raw) else {
             continue;
         };
-        let t = meta.type_name.as_deref().unwrap_or("");
-
-        let timestamp_ms = meta.timestamp_ms.unwrap_or_else(|| {
-            std::time::SystemTime::now()
-                .duration_since(std::time::UNIX_EPOCH)
-                .map(|d| d.as_millis() as u64)
-                .unwrap_or(0)
-        });
-
-        match t {
-            "httpResponse" => {
-                let Ok(evt) = json5::from_str::<HttpResponseBridgeEvent>(json_text) else {
-                    continue;
-                };
-                http.push(HttpEvent {
-                    timestamp_ms,
-                    kind: Some("response".to_string()),
-                    method: evt.method,
-                    url: evt.url,
-                    route: evt.route,
-                    status_code: evt.status_code,
-                    duration_ms: evt.duration_ms,
-                    content_type: evt.content_type,
-                    request_id: evt.request_id,
-                    json: evt.json,
-                    body_preview: evt.body_preview,
-                    test_path: evt.test_path,
-                    current_test_name: evt.current_test_name,
-                });
-            }
-            "httpResponseBatch" => {
-                let Ok(evt) = json5::from_str::<HttpResponseBatchBridgeEvent>(json_text) else {
-                    continue;
-                };
-                let test_path = evt.test_path;
-                let current_test_name = evt.current_test_name;
-                for item in evt.events.unwrap_or_default() {
-                    http.push(HttpEvent {
-                        timestamp_ms,
-                        kind: Some("response".to_string()),
-                        method: item.method,
-                        url: item.url,
-                        route: item.route,
-                        status_code: item.status_code,
-                        duration_ms: item.duration_ms,
-                        content_type: item.content_type,
-                        request_id: item.request_id,
-                        json: item.json,
-                        body_preview: item.body_preview,
-                        test_path: test_path.clone(),
-                        current_test_name: current_test_name.clone(),
-                    });
-                }
-            }
-            "httpAbort" => {
-                let Ok(evt) = json5::from_str::<HttpAbortBridgeEvent>(json_text) else {
-                    continue;
-                };
-                http.push(HttpEvent {
-                    timestamp_ms,
-                    kind: Some("abort".to_string()),
-                    method: evt.method,
-                    url: evt.url,
-                    route: evt.route,
-                    status_code: None,
-                    duration_ms: evt.duration_ms,
-                    content_type: None,
-                    request_id: None,
-                    json: None,
-                    body_preview: None,
-                    test_path: evt.test_path,
-                    current_test_name: evt.current_test_name,
-                });
-            }
-            "assertionFailure" => {
-                let Ok(evt) = json5::from_str::<AssertionFailureBridgeEvent>(json_text) else {
-                    continue;
-                };
-                assertions.push(AssertionEvt {
-                    timestamp_ms: evt.timestamp_ms,
-                    matcher: evt.matcher,
-                    expected_number: evt.expected_number,
-                    received_number: evt.received_number,
-                    message: evt.message,
-                    stack: evt.stack,
-                    test_path: evt.test_path,
-                    current_test_name: evt.current_test_name,
-                    expected_preview: evt.expected_preview,
-                    actual_preview: evt.actual_preview,
-                });
-            }
-            "console" => {
-                let Ok(evt) = json5::from_str::<ConsoleBridgeEvent>(json_text) else {
-                    continue;
-                };
-                console_list.push(ConsoleEntry {
-                    type_name: evt.level,
-                    message: evt.message,
-                    origin: None,
-                    test_path: evt.test_path,
-                    current_test_name: evt.current_test_name,
-                });
-            }
-            "consoleBatch" => {
-                let Ok(evt) = json5::from_str::<ConsoleBatchBridgeEvent>(json_text) else {
-                    continue;
-                };
-                evt.entries.unwrap_or_default().into_iter().for_each(|e| {
-                    console_list.push(ConsoleEntry {
-                        type_name: e.type_name,
-                        message: e.message,
-                        origin: None,
-                        test_path: None,
-                        current_test_name: None,
-                    });
-                });
-            }
-            _ => {}
-        }
+        dispatch_bridge_event(
+            &event_type,
+            timestamp_ms,
+            json_text,
+            &mut http,
+            &mut assertions,
+            &mut console_list,
+        );
     }
 
     (http, assertions, console_list)
+}
+
+fn push_plain_console_entry(
+    console_list: &mut Vec<ConsoleEntry>,
+    entry: &crate::format::bridge::BridgeConsoleEntry,
+    raw: String,
+) {
+    console_list.push(ConsoleEntry {
+        type_name: entry.type_name.clone(),
+        message: Some(raw),
+        origin: entry.origin.clone(),
+        test_path: None,
+        current_test_name: None,
+    });
+}
+
+fn parse_bridge_event(raw: &str) -> Option<(String, u64, &str)> {
+    let json_text = raw.split("[JEST-BRIDGE-EVENT]").last().unwrap_or("").trim();
+    let meta = json5::from_str::<BridgeEventMeta>(json_text).ok()?;
+    let event_type = meta.type_name.as_deref().unwrap_or("").to_string();
+    let timestamp_ms = meta.timestamp_ms.unwrap_or_else(now_timestamp_ms);
+    Some((event_type, timestamp_ms, json_text))
+}
+
+fn now_timestamp_ms() -> u64 {
+    std::time::SystemTime::now()
+        .duration_since(std::time::UNIX_EPOCH)
+        .map(|d| d.as_millis() as u64)
+        .unwrap_or(0)
+}
+
+fn dispatch_bridge_event(
+    event_type: &str,
+    timestamp_ms: u64,
+    json_text: &str,
+    http: &mut Vec<HttpEvent>,
+    assertions: &mut Vec<AssertionEvt>,
+    console_list: &mut Vec<ConsoleEntry>,
+) {
+    match event_type {
+        "httpResponse" => push_http_response(http, timestamp_ms, json_text),
+        "httpResponseBatch" => push_http_response_batch(http, timestamp_ms, json_text),
+        "httpAbort" => push_http_abort(http, timestamp_ms, json_text),
+        "assertionFailure" => push_assertion_failure(assertions, json_text),
+        "console" => push_console_entry(console_list, json_text),
+        "consoleBatch" => push_console_batch_entries(console_list, json_text),
+        _ => {}
+    }
+}
+
+fn push_http_response(http: &mut Vec<HttpEvent>, timestamp_ms: u64, json_text: &str) {
+    let Ok(evt) = json5::from_str::<HttpResponseBridgeEvent>(json_text) else {
+        return;
+    };
+    http.push(http_event_from_response(
+        timestamp_ms,
+        Some("response"),
+        evt,
+    ));
+}
+
+fn push_http_response_batch(http: &mut Vec<HttpEvent>, timestamp_ms: u64, json_text: &str) {
+    let Ok(evt) = json5::from_str::<HttpResponseBatchBridgeEvent>(json_text) else {
+        return;
+    };
+    let test_path = evt.test_path;
+    let current_test_name = evt.current_test_name;
+    evt.events.unwrap_or_default().into_iter().for_each(|item| {
+        http.push(HttpEvent {
+            timestamp_ms,
+            kind: Some("response".to_string()),
+            method: item.method,
+            url: item.url,
+            route: item.route,
+            status_code: item.status_code,
+            duration_ms: item.duration_ms,
+            content_type: item.content_type,
+            request_id: item.request_id,
+            json: item.json,
+            body_preview: item.body_preview,
+            test_path: test_path.clone(),
+            current_test_name: current_test_name.clone(),
+        });
+    });
+}
+
+fn push_http_abort(http: &mut Vec<HttpEvent>, timestamp_ms: u64, json_text: &str) {
+    let Ok(evt) = json5::from_str::<HttpAbortBridgeEvent>(json_text) else {
+        return;
+    };
+    http.push(HttpEvent {
+        timestamp_ms,
+        kind: Some("abort".to_string()),
+        method: evt.method,
+        url: evt.url,
+        route: evt.route,
+        status_code: None,
+        duration_ms: evt.duration_ms,
+        content_type: None,
+        request_id: None,
+        json: None,
+        body_preview: None,
+        test_path: evt.test_path,
+        current_test_name: evt.current_test_name,
+    });
+}
+
+fn http_event_from_response(
+    timestamp_ms: u64,
+    kind: Option<&'static str>,
+    evt: HttpResponseBridgeEvent,
+) -> HttpEvent {
+    HttpEvent {
+        timestamp_ms,
+        kind: kind.map(|k| k.to_string()),
+        method: evt.method,
+        url: evt.url,
+        route: evt.route,
+        status_code: evt.status_code,
+        duration_ms: evt.duration_ms,
+        content_type: evt.content_type,
+        request_id: evt.request_id,
+        json: evt.json,
+        body_preview: evt.body_preview,
+        test_path: evt.test_path,
+        current_test_name: evt.current_test_name,
+    }
+}
+
+fn push_assertion_failure(assertions: &mut Vec<AssertionEvt>, json_text: &str) {
+    let Ok(evt) = json5::from_str::<AssertionFailureBridgeEvent>(json_text) else {
+        return;
+    };
+    assertions.push(AssertionEvt {
+        timestamp_ms: evt.timestamp_ms,
+        matcher: evt.matcher,
+        expected_number: evt.expected_number,
+        received_number: evt.received_number,
+        message: evt.message,
+        stack: evt.stack,
+        test_path: evt.test_path,
+        current_test_name: evt.current_test_name,
+        expected_preview: evt.expected_preview,
+        actual_preview: evt.actual_preview,
+    });
+}
+
+fn push_console_entry(console_list: &mut Vec<ConsoleEntry>, json_text: &str) {
+    let Ok(evt) = json5::from_str::<ConsoleBridgeEvent>(json_text) else {
+        return;
+    };
+    console_list.push(ConsoleEntry {
+        type_name: evt.level,
+        message: evt.message,
+        origin: None,
+        test_path: evt.test_path,
+        current_test_name: evt.current_test_name,
+    });
+}
+
+fn push_console_batch_entries(console_list: &mut Vec<ConsoleEntry>, json_text: &str) {
+    let Ok(evt) = json5::from_str::<ConsoleBatchBridgeEvent>(json_text) else {
+        return;
+    };
+    evt.entries.unwrap_or_default().into_iter().for_each(|e| {
+        console_list.push(ConsoleEntry {
+            type_name: e.type_name,
+            message: e.message,
+            origin: None,
+            test_path: None,
+            current_test_name: None,
+        });
+    });
 }
 
 fn render_console_message(message_value: Option<&serde_json::Value>) -> String {

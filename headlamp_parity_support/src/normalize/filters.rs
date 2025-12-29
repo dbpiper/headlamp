@@ -3,9 +3,10 @@ use crate::normalize::paths::regex_replace;
 pub(super) fn should_keep_line_tty(raw_line: &str) -> bool {
     let without_profile = strip_headlamp_profile_suffix(raw_line);
     let stripped = headlamp::format::stacks::strip_ansi_simple(without_profile);
+    let is_ansi_only_line = stripped.trim().is_empty() && !without_profile.trim().is_empty();
     let is_profile_only_line =
         raw_line.contains("[headlamp-profile]") && stripped.trim().is_empty();
-    !is_profile_only_line && should_keep_line(&stripped)
+    !is_profile_only_line && !is_ansi_only_line && should_keep_line(&stripped)
 }
 
 pub(super) fn drop_box_table_interior_blank_lines(text: &str) -> String {
@@ -59,6 +60,18 @@ pub(super) fn strip_headlamp_profile_suffix(line: &str) -> &str {
 }
 
 fn should_keep_line(line: &str) -> bool {
+    let trimmed = line.trim();
+    if trimmed.starts_with("RUN (+") {
+        return false;
+    }
+    if trimmed.starts_with("idle ") {
+        return false;
+    }
+    if (line.contains("\u{1b}[2K") || line.contains("\u{1b}[1A"))
+        && !line.chars().any(|c| c.is_alphanumeric())
+    {
+        return false;
+    }
     if line.contains("\u{1b}[2K") && line.contains("RUN [") {
         return false;
     }

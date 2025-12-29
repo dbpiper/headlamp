@@ -74,6 +74,13 @@ pub struct RerunSideDiagnostics {
     pub token_stats_norm: token_ast::TokenStats,
 }
 
+#[derive(Debug, Clone)]
+struct NormalizedRerunSide {
+    compare_side: parity_meta::ParityCompareSideInput,
+    path: String,
+    token_stats_norm: token_ast::TokenStats,
+}
+
 #[derive(Debug, Clone, Serialize)]
 pub struct Recommendation {
     pub best_variant: Option<String>,
@@ -90,23 +97,7 @@ pub fn build_bundle(
     let clusters = cluster::cluster_indices_by_normalized(compare);
     let pivot_index = cluster::pick_pivot_index(compare);
 
-    let cluster_diagnostics = clusters
-        .iter()
-        .map(|cluster| ClusterDiagnostics {
-            normalized_hash: cluster.normalized_hash,
-            side_indices: cluster.member_indices.clone(),
-            labels: cluster
-                .member_indices
-                .iter()
-                .map(|&i| compare.sides[i].label.clone())
-                .collect(),
-            exits: cluster
-                .member_indices
-                .iter()
-                .map(|&i| compare.sides[i].exit)
-                .collect(),
-        })
-        .collect::<Vec<_>>();
+    let cluster_diagnostics = clusters_to_diagnostics(compare, &clusters);
 
     let rerun_diagnostics = reruns
         .iter()
@@ -137,6 +128,29 @@ pub fn build_bundle(
     }
 }
 
+fn clusters_to_diagnostics(
+    compare: &parity_meta::ParityCompareInput,
+    clusters: &[cluster::OutputCluster],
+) -> Vec<ClusterDiagnostics> {
+    clusters
+        .iter()
+        .map(|cluster| ClusterDiagnostics {
+            normalized_hash: cluster.normalized_hash,
+            side_indices: cluster.member_indices.clone(),
+            labels: cluster
+                .member_indices
+                .iter()
+                .map(|&i| compare.sides[i].label.clone())
+                .collect(),
+            exits: cluster
+                .member_indices
+                .iter()
+                .map(|&i| compare.sides[i].exit)
+                .collect(),
+        })
+        .collect::<Vec<_>>()
+}
+
 fn build_rerun(
     repo: &Path,
     baseline: &parity_meta::ParityCompareInput,
@@ -146,82 +160,21 @@ fn build_rerun(
         return None;
     }
 
-    let normalized_sides = rerun
-        .sides
-        .iter()
-        .enumerate()
-        .map(|(index, side)| {
-            let normalizer = baseline.sides[index].meta.normalization.normalizer;
-            let raw = std::fs::read_to_string(&side.path).unwrap_or_default();
-            let normalized = match normalizer {
-                parity_meta::NormalizerKind::NonTty => normalize::normalize(raw, repo),
-                parity_meta::NormalizerKind::TtyUi => normalize::normalize_tty_ui(raw, repo),
-            };
-            let token_stats_norm = token_ast::build_token_stream(&normalized).stats;
-            (
-                parity_meta::ParityCompareSideInput {
-                    label: side.label.clone(),
-                    exit: side.code,
-                    raw: String::new(),
-                    normalized,
-                    meta: baseline.sides[index].meta.clone(),
-                },
-                side.path.clone(),
-                token_stats_norm,
-            )
-        })
-        .collect::<Vec<_>>();
-
-    let compare = parity_meta::ParityCompareInput {
-        sides: normalized_sides
-            .iter()
-            .map(|(compare_side, _, _)| compare_side.clone())
-            .collect(),
-    };
-
+    let normalized_sides = normalize_rerun_sides(repo, baseline, rerun);
+    let compare = compare_input_from_normalized_sides(&normalized_sides);
     let clusters = cluster::cluster_indices_by_normalized(&compare);
     let pivot_index = cluster::pick_pivot_index(&compare);
-
-    let all_exits_equal = compare
-        .sides
-        .first()
-        .map(|first| compare.sides.iter().all(|side| side.exit == first.exit))
-        .unwrap_or(true);
+    let all_exits_equal = all_exits_equal(&compare);
     let normalized_equal = clusters.len() == 1 && all_exits_equal;
-
     let score = score_variant(&clusters, all_exits_equal);
 
     Some(RerunDiagnostics {
         variant: rerun.variant.clone(),
         sides: normalized_sides
             .into_iter()
-            .map(
-                |(compare_side, path, token_stats_norm)| RerunSideDiagnostics {
-                    label: compare_side.label,
-                    exit: compare_side.exit,
-                    path,
-                    normalized_bytes: compare_side.normalized.len(),
-                    token_stats_norm,
-                },
-            )
+            .map(rerun_side_diagnostics)
             .collect(),
-        clusters: clusters
-            .iter()
-            .map(|cluster| ClusterDiagnostics {
-                normalized_hash: cluster.normalized_hash,
-                side_indices: cluster.member_indices.clone(),
-                labels: cluster
-                    .member_indices
-                    .iter()
-                    .map(|&i| compare.sides[i].label.clone())
-                    .collect(),
-                exits: cluster
-                    .member_indices
-                    .iter()
-                    .map(|&i| compare.sides[i].exit)
-                    .collect(),
-            })
-            .collect(),
+        clusters: clusters_to_diagnostics(&compare, &clusters),
         pivot: PivotDiagnostics {
             side_index: pivot_index,
             label: compare.sides[pivot_index].label.clone(),
@@ -229,6 +182,84 @@ fn build_rerun(
         normalized_equal,
         score,
     })
+}
+
+fn normalize_rerun_sides(
+    repo: &Path,
+    baseline: &parity_meta::ParityCompareInput,
+    rerun: &crate::RerunMeta,
+) -> Vec<NormalizedRerunSide> {
+    rerun
+        .sides
+        .iter()
+        .enumerate()
+        .map(|(index, side)| normalize_rerun_side(repo, baseline, index, side))
+        .collect()
+}
+
+fn normalize_rerun_side(
+    repo: &Path,
+    baseline: &parity_meta::ParityCompareInput,
+    index: usize,
+    side: &crate::RerunSideMeta,
+) -> NormalizedRerunSide {
+    let normalizer = baseline.sides[index].meta.normalization.normalizer;
+    let raw = std::fs::read_to_string(&side.path).unwrap_or_default();
+    let normalized = normalize_text(repo, normalizer, raw);
+    let token_stats_norm = token_ast::build_token_stream(&normalized).stats;
+    let compare_side = parity_meta::ParityCompareSideInput {
+        label: side.label.clone(),
+        exit: side.code,
+        raw: String::new(),
+        normalized,
+        meta: baseline.sides[index].meta.clone(),
+    };
+    NormalizedRerunSide {
+        compare_side,
+        path: side.path.clone(),
+        token_stats_norm,
+    }
+}
+
+fn normalize_text(repo: &Path, normalizer: parity_meta::NormalizerKind, raw: String) -> String {
+    match normalizer {
+        parity_meta::NormalizerKind::NonTty => normalize::normalize(raw, repo),
+        parity_meta::NormalizerKind::TtyUi => normalize::normalize_tty_ui(raw, repo),
+    }
+}
+
+fn compare_input_from_normalized_sides(
+    normalized_sides: &[NormalizedRerunSide],
+) -> parity_meta::ParityCompareInput {
+    parity_meta::ParityCompareInput {
+        sides: normalized_sides
+            .iter()
+            .map(|s| s.compare_side.clone())
+            .collect(),
+    }
+}
+
+fn all_exits_equal(compare: &parity_meta::ParityCompareInput) -> bool {
+    compare
+        .sides
+        .first()
+        .map(|first| compare.sides.iter().all(|side| side.exit == first.exit))
+        .unwrap_or(true)
+}
+
+fn rerun_side_diagnostics(side: NormalizedRerunSide) -> RerunSideDiagnostics {
+    let NormalizedRerunSide {
+        compare_side,
+        path,
+        token_stats_norm,
+    } = side;
+    RerunSideDiagnostics {
+        label: compare_side.label,
+        exit: compare_side.exit,
+        path,
+        normalized_bytes: compare_side.normalized.len(),
+        token_stats_norm,
+    }
 }
 
 fn score_variant(clusters: &[cluster::OutputCluster], all_exits_equal: bool) -> u64 {

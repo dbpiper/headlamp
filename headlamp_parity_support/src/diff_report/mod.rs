@@ -13,16 +13,45 @@ pub fn build_parity_report_with_meta(compare: &ParityCompareInput) -> String {
     let clusters = crate::cluster::cluster_indices_by_normalized(compare);
     let pivot_index = crate::cluster::pick_pivot_index(compare);
     let pivot_label = compare.sides[pivot_index].label.display_label();
-
-    let mut sections: Vec<String> = vec![
-        summary::build_artifact_summary(compare),
-        summary::build_cluster_summary(compare, pivot_index, &clusters),
-        summary::build_token_ast_summary(compare, pivot_index, &clusters),
-        summary::build_block_order_summary(compare, pivot_index, &clusters),
-    ];
-
     let pivot_norm = &compare.sides[pivot_index].normalized;
 
+    let mut sections = base_sections(compare, pivot_index, &clusters);
+
+    other_indices_for_comparisons(compare, pivot_index, &clusters)
+        .into_iter()
+        .for_each(|other_index| {
+            let other_label = compare.sides[other_index].label.display_label();
+            let other_norm = &compare.sides[other_index].normalized;
+            push_comparison_sections(
+                &mut sections,
+                &pivot_label,
+                &other_label,
+                pivot_norm,
+                other_norm,
+            );
+        });
+
+    finalize_sections(sections)
+}
+
+fn base_sections(
+    compare: &ParityCompareInput,
+    pivot_index: usize,
+    clusters: &[crate::cluster::OutputCluster],
+) -> Vec<String> {
+    vec![
+        summary::build_artifact_summary(compare),
+        summary::build_cluster_summary(compare, pivot_index, clusters),
+        summary::build_token_ast_summary(compare, pivot_index, clusters),
+        summary::build_block_order_summary(compare, pivot_index, clusters),
+    ]
+}
+
+fn other_indices_for_comparisons(
+    compare: &ParityCompareInput,
+    pivot_index: usize,
+    clusters: &[crate::cluster::OutputCluster],
+) -> Vec<usize> {
     clusters
         .iter()
         .filter(|cluster| !cluster.member_indices.contains(&pivot_index))
@@ -34,46 +63,53 @@ pub fn build_parity_report_with_meta(compare: &ParityCompareInput) -> String {
                     .cmp(&compare.sides[b].label.display_label())
             })
         })
-        .for_each(|other_index| {
-            let other_label = compare.sides[other_index].label.display_label();
-            let other_norm = &compare.sides[other_index].normalized;
+        .collect()
+}
 
-            sections.push(format!("Comparison: {pivot_label} vs {other_label}"));
-            sections.push(compare::build_classification_section(
-                pivot_norm, other_norm,
-            ));
-            sections.push(compare::build_first_mismatch_section(
-                &pivot_label,
-                &other_label,
-                pivot_norm,
-                other_norm,
-            ));
-            sections.push(compare::build_blank_runs_section(
-                &pivot_label,
-                &other_label,
-                pivot_norm,
-                other_norm,
-            ));
-            sections.push(tables::build_table_section(
-                &pivot_label,
-                &other_label,
-                pivot_norm,
-                other_norm,
-            ));
-            sections.push(tables::build_istanbul_table_section(
-                &pivot_label,
-                &other_label,
-                pivot_norm,
-                other_norm,
-            ));
-            sections.push(compare::build_counts_section(
-                &pivot_label,
-                &other_label,
-                pivot_norm,
-                other_norm,
-            ));
-        });
+fn push_comparison_sections(
+    sections: &mut Vec<String>,
+    pivot_label: &str,
+    other_label: &str,
+    pivot_norm: &str,
+    other_norm: &str,
+) {
+    sections.push(format!("Comparison: {pivot_label} vs {other_label}"));
+    sections.push(compare::build_classification_section(
+        pivot_norm, other_norm,
+    ));
+    sections.push(compare::build_first_mismatch_section(
+        pivot_label,
+        other_label,
+        pivot_norm,
+        other_norm,
+    ));
+    sections.push(compare::build_blank_runs_section(
+        pivot_label,
+        other_label,
+        pivot_norm,
+        other_norm,
+    ));
+    sections.push(tables::build_table_section(
+        pivot_label,
+        other_label,
+        pivot_norm,
+        other_norm,
+    ));
+    sections.push(tables::build_istanbul_table_section(
+        pivot_label,
+        other_label,
+        pivot_norm,
+        other_norm,
+    ));
+    sections.push(compare::build_counts_section(
+        pivot_label,
+        other_label,
+        pivot_norm,
+        other_norm,
+    ));
+}
 
+fn finalize_sections(sections: Vec<String>) -> String {
     sections
         .into_iter()
         .filter(|section| !section.is_empty())
