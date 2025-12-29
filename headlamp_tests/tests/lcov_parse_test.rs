@@ -5,13 +5,13 @@ use headlamp::coverage::print::{
 
 #[test]
 fn parses_lcov_da_lines() {
-    let text = r#"
+    let text = r#"TN:
 SF:/repo/src/a.ts
 DA:1,1
 DA:2,0
 DA:3,4
 end_of_record
-"#;
+:"#;
     let report = parse_lcov_text(text);
     assert_eq!(report.files.len(), 1);
     let f = &report.files[0];
@@ -22,13 +22,13 @@ end_of_record
 
 #[test]
 fn formats_summary_and_hotspots() {
-    let text = r#"
+    let text = r#"TN:
 SF:/repo/src/a.ts
 DA:10,0
 DA:11,0
 DA:12,1
 end_of_record
-"#;
+:"#;
     let report = parse_lcov_text(text);
     let opts = PrintOpts {
         max_files: None,

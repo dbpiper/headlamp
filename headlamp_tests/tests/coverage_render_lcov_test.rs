@@ -2,6 +2,7 @@ use std::path::Path;
 
 use headlamp::coverage::lcov::read_repo_lcov_filtered;
 use headlamp::coverage::print::{PrintOpts, render_report_text};
+use path_slash::PathExt;
 
 fn write_file(path: &Path, contents: &str) {
     if let Some(parent) = path.parent() {
@@ -15,17 +16,23 @@ fn renders_compact_and_optional_hotspots_from_repo_lcov() {
     let temp = tempfile::TempDir::new().unwrap();
     let repo_root = temp.path();
 
-    let lcov_text = r#"
-SF:/repo/src/a.ts
+    write_file(&repo_root.join("src/a.ts"), "");
+    write_file(&repo_root.join("src/b.ts"), "");
+    let a_abs = repo_root.join("src/a.ts").to_slash_lossy().to_string();
+    let b_abs = repo_root.join("src/b.ts").to_slash_lossy().to_string();
+    let lcov_text = format!(
+        r#"TN:
+SF:{a_abs}
 DA:10,0
 DA:11,0
 DA:12,1
 end_of_record
-SF:/repo/src/b.ts
+SF:{b_abs}
 DA:1,1
 end_of_record
-"#;
-    write_file(&repo_root.join("coverage/lcov.info"), lcov_text);
+"#
+    );
+    write_file(&repo_root.join("coverage/lcov.info"), &lcov_text);
 
     let report = read_repo_lcov_filtered(
         repo_root,
@@ -44,8 +51,8 @@ end_of_record
 
     let without_hotspots = render_report_text(&report, &opts, repo_root, false);
     assert!(without_hotspots.contains("Lines:"));
-    assert!(without_hotspots.contains("src/a.ts"));
-    assert!(without_hotspots.contains("src/b.ts"));
+    assert!(without_hotspots.contains("src/a.ts"), "{without_hotspots}");
+    assert!(without_hotspots.contains("src/b.ts"), "{without_hotspots}");
     assert!(!without_hotspots.contains("src/a.ts:"));
 
     let with_hotspots = render_report_text(&report, &opts, repo_root, true);

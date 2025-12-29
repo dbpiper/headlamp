@@ -42,10 +42,11 @@ impl RunnerId {
 pub fn shared_real_runner_repo() -> PathBuf {
     static REPO: OnceLock<PathBuf> = OnceLock::new();
     REPO.get_or_init(|| {
+        let process_id = std::process::id();
         let repo = PathBuf::from(env!("CARGO_MANIFEST_DIR"))
             .join("target")
             .join("parity-fixtures")
-            .join("real-runner-repo");
+            .join(format!("real-runner-repo-{process_id}"));
         if !repo.exists() {
             std::fs::create_dir_all(&repo).unwrap();
         }
@@ -62,10 +63,11 @@ fn shared_real_runner_repo_for_worktrees() -> PathBuf {
 pub fn shared_threshold_real_runner_repo() -> PathBuf {
     static REPO: OnceLock<PathBuf> = OnceLock::new();
     REPO.get_or_init(|| {
+        let process_id = std::process::id();
         let repo = PathBuf::from(env!("CARGO_MANIFEST_DIR"))
             .join("target")
             .join("parity-fixtures")
-            .join("real-runner-repo-thresholds");
+            .join(format!("real-runner-repo-thresholds-{process_id}"));
         if !repo.exists() {
             std::fs::create_dir_all(&repo).unwrap();
         }
@@ -512,6 +514,10 @@ fn worktrees_root() -> PathBuf {
         .join("worktrees")
 }
 
+fn worktrees_root_for_process() -> PathBuf {
+    worktrees_root().join(format!("{}", std::process::id()))
+}
+
 fn reset_worktrees_root() {}
 
 #[derive(Debug)]
@@ -558,7 +564,7 @@ impl RealRunnerWorktreePool {
         let base_repo = shared_real_runner_repo_for_worktrees();
         let base_head = git_rev_parse_head(&base_repo).expect("git rev-parse HEAD failed");
         let process_id = std::process::id();
-        let pool_root = worktrees_root().join("pool").join(format!("{process_id}"));
+        let pool_root = worktrees_root_for_process().join("pool");
         let _ = std::fs::create_dir_all(&pool_root);
 
         let pool_size = default_worktree_pool_size();
@@ -695,9 +701,9 @@ pub fn real_runner_worktree(name: &str) -> PathBuf {
     let _guard = worktree_git_lock().lock().unwrap();
     let base_repo = shared_real_runner_repo_for_worktrees();
     let safe = safe_dir_component(name);
-    let dir = worktrees_root().join(&safe);
+    let dir = worktrees_root_for_process().join(&safe);
 
-    let _ = std::fs::create_dir_all(worktrees_root());
+    let _ = std::fs::create_dir_all(worktrees_root_for_process());
 
     // Defensive cleanup for interrupted previous runs.
     let _ = std::fs::remove_file(base_repo.join(".git/index.lock"));
