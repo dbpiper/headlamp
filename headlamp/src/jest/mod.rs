@@ -53,6 +53,7 @@ struct AggregatedProjectRuns {
 }
 
 pub fn run_jest(repo_root: &Path, args: &ParsedArgs) -> Result<i32, RunError> {
+    let started_at = std::time::Instant::now();
     run_bootstrap_if_configured(repo_root, args)?;
     let jest_bin = ensure_jest_bin_exists(repo_root)?;
     let selection_paths_abs = selection::selection_paths_abs(repo_root, args)?;
@@ -116,7 +117,22 @@ pub fn run_jest(repo_root: &Path, args: &ParsedArgs) -> Result<i32, RunError> {
     })?;
     let aggregated = aggregate_project_runs(per_project_results);
     print_jest_run_output(repo_root, args, &directness_rank, &aggregated);
-    maybe_collect_coverage(repo_root, args, &selection_paths_abs, &aggregated)
+    let exit = maybe_collect_coverage(repo_root, args, &selection_paths_abs, &aggregated)?;
+    // Sidecar diagnostics for CI debugging (does not affect stdout parity).
+    headlamp_core::diagnostics_trace::maybe_write_run_trace(
+        repo_root,
+        "jest",
+        args,
+        Some(started_at),
+        serde_json::json!({
+            "jest_bin": jest_bin.to_string_lossy().to_string(),
+            "project_configs_count": project_configs.len(),
+            "selection_paths_abs_count": selection_paths_abs.len(),
+            "selected_test_paths_abs_count": related_selection.selected_test_paths_abs.len(),
+            "exit_code": exit,
+        }),
+    );
+    Ok(exit)
 }
 
 fn run_bootstrap_if_configured(repo_root: &Path, args: &ParsedArgs) -> Result<(), RunError> {

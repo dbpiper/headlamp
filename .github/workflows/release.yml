@@ -20,6 +20,7 @@ jobs:
       RUSTFLAGS: -C link-arg=-fuse-ld=mold
       SCCACHE_GHA_CACHE_TO: sccache-${{ github.ref_name }}
       SCCACHE_GHA_CACHE_FROM: sccache-${{ github.ref_name }},sccache-main
+      HEADLAMP_PARITY_DUMP_ROOT: ${{ github.workspace }}/ci-dumps
     steps:
       - uses: actions/checkout@v4
         with:
@@ -83,6 +84,27 @@ jobs:
 
       - name: run headlamp (changed=lastRelease)
         run: cargo run -p headlamp --locked -- --runner=cargo-nextest --changed=lastRelease
+
+      - name: Parity diagnostics index (on failure)
+        if: failure()
+        shell: bash
+        run: |
+          set -euo pipefail
+          echo "headlamp: parity diagnostics root: ${HEADLAMP_PARITY_DUMP_ROOT}"
+          if [ -d "${HEADLAMP_PARITY_DUMP_ROOT}" ]; then
+            echo "headlamp: diagnostics files (first 200):"
+            find "${HEADLAMP_PARITY_DUMP_ROOT}" -type f | sort | head -200
+          else
+            echo "headlamp: no diagnostics directory found"
+          fi
+
+      - name: Upload parity diagnostics (on failure)
+        if: failure()
+        uses: actions/upload-artifact@v4
+        with:
+          name: headlamp-parity-diagnostics-${{ github.run_id }}-${{ github.run_attempt }}
+          path: ci-dumps
+          if-no-files-found: ignore
 
       - name: sccache stats
         if: always()

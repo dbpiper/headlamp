@@ -29,6 +29,7 @@ pub mod args;
 pub mod config;
 mod config_ts;
 pub mod coverage;
+pub mod diagnostics_trace;
 pub mod error;
 pub mod format;
 pub mod help;

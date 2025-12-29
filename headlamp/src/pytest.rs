@@ -24,6 +24,7 @@ mod adapter;
 use adapter::PytestAdapter;
 
 pub fn run_pytest(repo_root: &Path, args: &ParsedArgs) -> Result<i32, RunError> {
+    let started_at = std::time::Instant::now();
     run_bootstrap_if_configured(repo_root, args)?;
     let selected = resolve_pytest_selection(repo_root, args)?;
     let pytest_bin = pytest_bin();
@@ -33,9 +34,33 @@ pub fn run_pytest(repo_root: &Path, args: &ParsedArgs) -> Result<i32, RunError> 
         run_pytest_streaming(repo_root, args, pytest_bin, cmd_args, pythonpath)?;
     maybe_print_rendered_pytest_run(repo_root, args, exit_code, &model);
     if args.coverage_abort_on_failure && exit_code != 0 {
+        headlamp_core::diagnostics_trace::maybe_write_run_trace(
+            repo_root,
+            "pytest",
+            args,
+            Some(started_at),
+            serde_json::json!({
+                "pytest_bin": pytest_bin,
+                "selected_count": selected.len(),
+                "exit_code": exit_code,
+                "coverage_aborted": true,
+            }),
+        );
         return Ok(exit_code);
     }
     let final_exit = maybe_collect_pytest_coverage(repo_root, args, exit_code)?;
+    headlamp_core::diagnostics_trace::maybe_write_run_trace(
+        repo_root,
+        "pytest",
+        args,
+        Some(started_at),
+        serde_json::json!({
+            "pytest_bin": pytest_bin,
+            "selected_count": selected.len(),
+            "exit_code": final_exit,
+            "coverage_aborted": false,
+        }),
+    );
     Ok(final_exit)
 }
 

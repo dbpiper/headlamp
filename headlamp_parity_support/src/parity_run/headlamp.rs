@@ -23,8 +23,10 @@ pub fn run_headlamp_with_args_tty_env(
     args: &[&str],
     extra_env: &[(&str, String)],
 ) -> (ParityRunSpec, i32, String) {
-    let spec = mk_headlamp_tty_run_spec(repo, headlamp_bin, columns, runner, args, extra_env);
-    let (code, out) = crate::exec::run_cmd_tty(build_command_from_spec(&spec), columns);
+    let mut spec = mk_headlamp_tty_run_spec(repo, headlamp_bin, columns, runner, args, extra_env);
+    let (code, out, backend) =
+        crate::exec::run_cmd_tty_with_backend(build_command_from_spec(&spec), columns);
+    spec.exec_backend = Some(backend.to_string());
     (spec, code, out)
 }
 
@@ -42,6 +44,33 @@ fn mk_headlamp_tty_run_spec(
         runner_stack: headlamp_runner_stack(runner),
     };
     let mut env = build_env_map(repo, &side_label);
+    // Always-on in CI: write headlamp sidecar diagnostics under the parity dump root (or temp).
+    // This does not affect stdout/stderr that parity compares.
+    if std::env::var("CI").ok().is_some()
+        || std::env::var("HEADLAMP_PARITY_DUMP_ROOT").ok().is_some()
+    {
+        let dump_root = std::env::var("HEADLAMP_PARITY_DUMP_ROOT")
+            .ok()
+            .map(|s| s.trim().to_string())
+            .filter(|s| !s.is_empty())
+            .map(std::path::PathBuf::from)
+            .unwrap_or_else(std::env::temp_dir);
+        let repo_key = headlamp::fast_related::stable_repo_key_hash_12(repo);
+        let run_id = format!(
+            "run-{}-{}",
+            std::process::id(),
+            crate::hashing::next_capture_id()
+        );
+        let dir = dump_root
+            .join("headlamp-trace")
+            .join(repo_key)
+            .join(side_label.file_safe_label())
+            .join(run_id);
+        env.insert(
+            "HEADLAMP_DIAGNOSTICS_DIR".to_string(),
+            dir.to_string_lossy().to_string(),
+        );
+    }
     extra_env.iter().for_each(|(k, v)| {
         env.insert((*k).to_string(), v.clone());
     });
@@ -56,6 +85,7 @@ fn mk_headlamp_tty_run_spec(
         env,
         tty_columns: Some(columns),
         stdout_piped: false,
+        exec_backend: None,
     }
 }
 

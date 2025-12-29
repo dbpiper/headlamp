@@ -297,6 +297,7 @@ fn ts_fixture_spec(opts: FixtureSpecOptions<'_>, ts_cli: &Path, ts_args: &[&str]
         env,
         tty_columns,
         stdout_piped,
+        exec_backend: None,
     }
 }
 
@@ -326,6 +327,7 @@ fn rs_fixture_spec(
         env,
         tty_columns,
         stdout_piped,
+        exec_backend: None,
     }
 }
 

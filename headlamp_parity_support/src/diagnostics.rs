@@ -8,12 +8,42 @@ pub struct DiagnosticsBundle {
     pub schema_version: u32,
     pub case: String,
     pub repo: String,
+    pub host: HostDiagnostics,
+    pub exec: ExecDiagnostics,
     pub sides: Vec<RunSideDiagnostics>,
     pub artifacts: ArtifactPaths,
     pub clusters: Vec<ClusterDiagnostics>,
     pub pivot: PivotDiagnostics,
     pub reruns: Vec<RerunDiagnostics>,
     pub recommendation: Recommendation,
+}
+
+#[derive(Debug, Clone, Serialize)]
+pub struct HostDiagnostics {
+    pub os: String,
+    pub arch: String,
+    pub rustc: Option<String>,
+    pub git: Option<String>,
+    pub node: Option<String>,
+    pub python: Option<String>,
+    pub script: Option<String>,
+}
+
+#[derive(Debug, Clone, Serialize)]
+pub struct ExecDiagnostics {
+    pub specs: Vec<ExecSpecDiagnostics>,
+}
+
+#[derive(Debug, Clone, Serialize)]
+pub struct ExecSpecDiagnostics {
+    pub label: parity_meta::ParitySideLabel,
+    pub cwd: String,
+    pub program: String,
+    pub args: Vec<String>,
+    pub tty_columns: Option<usize>,
+    pub stdout_piped: bool,
+    pub exec_backend: Option<String>,
+    pub env_allowlist: std::collections::BTreeMap<String, String>,
 }
 
 #[derive(Debug, Clone, Serialize)]
@@ -93,6 +123,7 @@ pub fn build_bundle(
     artifacts: ArtifactPaths,
     compare: &parity_meta::ParityCompareInput,
     reruns: &[crate::RerunMeta],
+    run_group: Option<&crate::types::ParityRunGroup>,
 ) -> DiagnosticsBundle {
     let clusters = cluster::cluster_indices_by_normalized(compare);
     let pivot_index = cluster::pick_pivot_index(compare);
@@ -105,10 +136,15 @@ pub fn build_bundle(
         .collect::<Vec<_>>();
     let recommendation = recommend_variant(&rerun_diagnostics);
 
+    let host = build_host_diagnostics();
+    let exec = build_exec_diagnostics(run_group);
+
     DiagnosticsBundle {
-        schema_version: 4,
+        schema_version: 5,
         case: case.to_string(),
         repo: repo.to_string_lossy().to_string(),
+        host,
+        exec,
         sides: compare
             .sides
             .iter()
@@ -126,6 +162,73 @@ pub fn build_bundle(
         reruns: rerun_diagnostics,
         recommendation,
     }
+}
+
+fn build_host_diagnostics() -> HostDiagnostics {
+    HostDiagnostics {
+        os: std::env::consts::OS.to_string(),
+        arch: std::env::consts::ARCH.to_string(),
+        rustc: capture_version_line(["rustc", "-V"]),
+        git: capture_version_line(["git", "--version"]),
+        node: capture_version_line(["node", "--version"]),
+        python: capture_version_line(["python3", "--version"])
+            .or_else(|| capture_version_line(["python", "--version"])),
+        script: capture_version_line(["script", "--version"]),
+    }
+}
+
+fn capture_version_line(args: impl IntoIterator<Item = &'static str>) -> Option<String> {
+    let mut it = args.into_iter();
+    let program = it.next()?;
+    let output = std::process::Command::new(program).args(it).output().ok()?;
+    let stdout = String::from_utf8_lossy(&output.stdout).trim().to_string();
+    let stderr = String::from_utf8_lossy(&output.stderr).trim().to_string();
+    let line = if !stdout.is_empty() { stdout } else { stderr };
+    (!line.is_empty()).then_some(line)
+}
+
+fn build_exec_diagnostics(run_group: Option<&crate::types::ParityRunGroup>) -> ExecDiagnostics {
+    let specs = run_group
+        .map(|g| {
+            g.sides
+                .iter()
+                .map(|spec| ExecSpecDiagnostics {
+                    label: spec.side_label.clone(),
+                    cwd: spec.cwd.to_string_lossy().to_string(),
+                    program: spec.program.to_string_lossy().to_string(),
+                    args: spec.args.clone(),
+                    tty_columns: spec.tty_columns,
+                    stdout_piped: spec.stdout_piped,
+                    exec_backend: spec.exec_backend.clone(),
+                    env_allowlist: allowlisted_env(&spec.env),
+                })
+                .collect::<Vec<_>>()
+        })
+        .unwrap_or_default();
+    ExecDiagnostics { specs }
+}
+
+fn allowlisted_env(
+    env: &std::collections::BTreeMap<String, String>,
+) -> std::collections::BTreeMap<String, String> {
+    const KEYS: &[&str] = &[
+        "CI",
+        "TERM",
+        "TERM_PROGRAM",
+        "FORCE_COLOR",
+        "NO_COLOR",
+        "CLICOLOR",
+        "COLUMNS",
+        "RUST_BACKTRACE",
+        "RUST_LIB_BACKTRACE",
+        "NODE_OPTIONS",
+        "PYTHONPATH",
+        "HEADLAMP_DIAGNOSTICS_DIR",
+        "HEADLAMP_PARITY_DUMP_ROOT",
+    ];
+    KEYS.iter()
+        .filter_map(|k| env.get(*k).map(|v| ((*k).to_string(), v.clone())))
+        .collect()
 }
 
 fn clusters_to_diagnostics(

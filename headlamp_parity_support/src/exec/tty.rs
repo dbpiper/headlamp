@@ -7,7 +7,22 @@ use crate::hashing::next_capture_id;
 use super::portable_pty::run_cmd_tty_portable_pty;
 use super::shell::{build_tty_shell_command, build_tty_shell_command_stdout_redirect};
 
-pub fn run_cmd_tty(mut cmd: Command, columns: usize) -> (i32, String) {
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum TtyBackend {
+    PortablePty,
+    Script,
+}
+
+impl std::fmt::Display for TtyBackend {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        match self {
+            TtyBackend::PortablePty => write!(f, "portable_pty"),
+            TtyBackend::Script => write!(f, "script"),
+        }
+    }
+}
+
+pub fn run_cmd_tty_with_backend(mut cmd: Command, columns: usize) -> (i32, String, TtyBackend) {
     let _timing = crate::timing::TimingGuard::start("tty_run");
     apply_tty_env(&mut cmd, true);
 
@@ -15,7 +30,7 @@ pub fn run_cmd_tty(mut cmd: Command, columns: usize) -> (i32, String) {
     // (Different `script(1)` implementations and PTY behaviors can subtly change runner output.)
     let portable = run_cmd_tty_portable_pty(&cmd, columns, tty_timeout());
     if let Some((code, out)) = portable {
-        return (code, sanitize_tty_output(out));
+        return (code, sanitize_tty_output(out), TtyBackend::PortablePty);
     }
 
     let tty_capture_path = capture_path("tty-capture");
@@ -24,11 +39,16 @@ pub fn run_cmd_tty(mut cmd: Command, columns: usize) -> (i32, String) {
     let Some((code, stderr_text)) = run_script_capture_stderr(script, tty_timeout()) else {
         // `portable_pty` was already attempted above; if we get here and `script` failed to run,
         // we have no other fallback.
-        return (1, String::new());
+        return (1, String::new(), TtyBackend::Script);
     };
     let combined = sanitize_tty_output(format!("{}{}", read_lossy(&tty_capture_path), stderr_text));
     let _ = std::fs::remove_file(&tty_capture_path);
-    (code, combined)
+    (code, combined, TtyBackend::Script)
+}
+
+pub fn run_cmd_tty(cmd: Command, columns: usize) -> (i32, String) {
+    let (code, out, _backend) = run_cmd_tty_with_backend(cmd, columns);
+    (code, out)
 }
 
 pub fn run_cmd_tty_stdout_piped(mut cmd: Command, columns: usize) -> (i32, String) {

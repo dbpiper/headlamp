@@ -12,6 +12,9 @@ pub struct ParityRunSpec {
     pub env: BTreeMap<String, String>,
     pub tty_columns: Option<usize>,
     pub stdout_piped: bool,
+    /// How the command was executed/captured when tty_columns is Some(..).
+    /// Populated by the parity harness; `None` means unknown/not-applicable.
+    pub exec_backend: Option<String>,
 }
 
 #[derive(Debug, Clone)]
