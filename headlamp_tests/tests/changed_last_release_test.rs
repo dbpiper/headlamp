@@ -125,5 +125,3 @@ fn changed_last_release_falls_back_to_all_when_no_stable_release_tags_exist() {
     let rel = rel_paths(repo, changed_files(repo, ChangedMode::LastRelease).unwrap());
     assert!(rel.is_empty(), "{rel:?}");
 }
-
-
