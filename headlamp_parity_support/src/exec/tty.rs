@@ -18,6 +18,14 @@ pub fn run_cmd_tty(mut cmd: Command, columns: usize) -> (i32, String) {
         return run_cmd_tty_portable_pty(&cmd, columns, tty_timeout())
             .unwrap_or((1, String::new()));
     };
+    // If `script` itself failed due to unsupported flags/options, fall back to the portable PTY.
+    // (This avoids hard failures across differing `script(1)` implementations.)
+    if code != 0
+        && stderr_text.contains("script:")
+        && (stderr_text.contains("illegal option") || stderr_text.contains("invalid option"))
+    {
+        return run_cmd_tty_portable_pty(&cmd, columns, tty_timeout()).unwrap_or((1, stderr_text));
+    }
     let combined = sanitize_tty_output(format!("{}{}", read_lossy(&tty_capture_path), stderr_text));
     let _ = std::fs::remove_file(&tty_capture_path);
     (code, combined)
@@ -35,6 +43,13 @@ pub fn run_cmd_tty_stdout_piped(mut cmd: Command, columns: usize) -> (i32, Strin
         return run_cmd_tty_portable_pty(&cmd, columns, tty_timeout())
             .unwrap_or((1, String::new()));
     };
+    // If `script` itself failed due to unsupported flags/options, fall back to the portable PTY.
+    if code != 0
+        && stderr_text.contains("script:")
+        && (stderr_text.contains("illegal option") || stderr_text.contains("invalid option"))
+    {
+        return run_cmd_tty_portable_pty(&cmd, columns, tty_timeout()).unwrap_or((1, stderr_text));
+    }
     let combined = sanitize_tty_output(format!(
         "{}{}{}",
         read_lossy(&stdout_capture_path),
@@ -77,8 +92,23 @@ fn capture_path(prefix: &str) -> PathBuf {
 
 fn build_script_command(cmd: &Command, capture_path: &PathBuf, shell_command: String) -> Command {
     let mut script = Command::new("script");
-    script.arg("-q").arg(capture_path);
-    script.arg("sh").arg("-lc").arg(shell_command);
+    // We need to support both:
+    // - GNU util-linux `script` (Linux): use `-c` to run a command under a PTY.
+    // - BSD `script` (macOS): does NOT support `-c`; instead it accepts a command + args
+    //   after the output file path.
+    //
+    // If we try the BSD style on Linux, `-lc` (intended for `sh`) may be parsed as a `script`
+    // option and fail ("invalid option -- 'l'"). So we branch by OS.
+    if cfg!(target_os = "macos") {
+        script.arg("-q").arg(capture_path);
+        script.arg("sh").arg("-lc").arg(shell_command);
+    } else {
+        script
+            .arg("-q")
+            .arg("-c")
+            .arg(shell_command)
+            .arg(capture_path);
+    }
     script.stdout(std::process::Stdio::null());
     script.current_dir(
         cmd.get_current_dir()
