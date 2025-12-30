@@ -118,12 +118,6 @@ fn release(args: ReleaseArgs) -> anyhow::Result<()> {
         )
     })?;
 
-    let old_prev = old_version.patch.checked_sub(1).map(|patch| {
-        let mut v = old_version.clone();
-        v.patch = patch;
-        v
-    });
-
     // 1) Rust crate version
     write_cargo_package_version(&headlamp_cargo_toml, &new_version)?;
 
@@ -138,21 +132,7 @@ fn release(args: ReleaseArgs) -> anyhow::Result<()> {
         .join("pyproject.toml");
     write_pyproject_version(&pypi_pyproject, &old_version, &new_version)?;
 
-    // 4) Keep the "lastRelease" regression test in sync with the new release.
-    let changed_last_release_test = repo_root
-        .join("headlamp_tests")
-        .join("tests")
-        .join("changed_last_release_test.rs");
-    if changed_last_release_test.exists() {
-        bump_changed_last_release_test(
-            &changed_last_release_test,
-            &old_version,
-            old_prev.as_ref(),
-            &new_version,
-        )?;
-    }
-
-    // 5) Copy top-level README.md into all wrapper package READMEs.
+    // 4) Copy top-level README.md into all wrapper package READMEs.
     let top_readme = repo_root.join("README.md");
     let readme_contents = std::fs::read_to_string(&top_readme)
         .with_context(|| format!("failed to read {}", top_readme.display()))?;
@@ -363,31 +343,6 @@ fn write_pyproject_version(
         .replacen(&text, 1, format!(r#"version = "{new_version}""#))
         .to_string();
     std::fs::write(path, new_text).with_context(|| format!("write {}", path.display()))?;
-    Ok(())
-}
-
-fn bump_changed_last_release_test(
-    path: &Path,
-    old_version: &Version,
-    old_prev: Option<&Version>,
-    new_version: &Version,
-) -> anyhow::Result<()> {
-    let text = std::fs::read_to_string(path).with_context(|| format!("read {}", path.display()))?;
-
-    let mut out = text.clone();
-    // IMPORTANT: order matters.
-    // We want old_prev -> old and old -> new, but if we map old_prev -> old first,
-    // the second replacement would also upgrade the previous tag to new.
-    //
-    // So: bump old -> new first, then bump old_prev -> old.
-    out = out.replace(&format!("v{old_version}"), &format!("v{new_version}"));
-    if let Some(old_prev) = old_prev {
-        out = out.replace(&format!("v{old_prev}"), &format!("v{old_version}"));
-    }
-
-    if out != text {
-        std::fs::write(path, out).with_context(|| format!("write {}", path.display()))?;
-    }
     Ok(())
 }
 
