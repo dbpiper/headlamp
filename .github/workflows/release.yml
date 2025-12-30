@@ -200,7 +200,7 @@ jobs:
         run: cargo build -p headlamp --release --target ${{ matrix.cargo_target }}
 
       - uses: actions/setup-python@v5
-        if: startsWith(github.ref, 'refs/tags/v') && (matrix.target_label == 'darwin-x64' || matrix.target_label == 'darwin-arm64' || matrix.target_label == 'win32-x64' || matrix.target_label == 'linux-x64-gnu' || matrix.target_label == 'linux-arm64-gnu')
+        if: startsWith(github.ref, 'refs/tags/v') && (matrix.target_label == 'darwin-x64' || matrix.target_label == 'darwin-arm64' || matrix.target_label == 'win32-x64' || matrix.target_label == 'linux-x64-gnu' || matrix.target_label == 'linux-arm64-gnu' || matrix.target_label == 'linux-x64-musl' || matrix.target_label == 'linux-arm64-musl')
         with:
           python-version: "3.11"
 
@@ -264,12 +264,20 @@ jobs:
         run: |
           set -euo pipefail
           rm -rf python/headlamp_pypi/dist
-          mkdir -p python/headlamp_pypi/src/headlamp/bin
-          cp -f target/release/headlamp python/headlamp_pypi/src/headlamp/bin/headlamp
-          chmod +x python/headlamp_pypi/src/headlamp/bin/headlamp || true
+
+          # Build wheels from a temp copy outside the git repo so cibuildwheel definitely
+          # includes the injected binary when copying sources into the manylinux container.
+          tmp_dir="$(mktemp -d)"
+          pkg_dir="${tmp_dir}/headlamp_pypi"
+          mkdir -p "${pkg_dir}"
+          rsync -a --delete python/headlamp_pypi/ "${pkg_dir}/"
+          mkdir -p "${pkg_dir}/src/headlamp/bin"
+          cp -f target/release/headlamp "${pkg_dir}/src/headlamp/bin/headlamp"
+          chmod +x "${pkg_dir}/src/headlamp/bin/headlamp" || true
+
           python -m pip install --upgrade pip
           python -m pip install cibuildwheel
-          python -m cibuildwheel python/headlamp_pypi --output-dir python/headlamp_pypi/dist
+          python -m cibuildwheel "${pkg_dir}" --output-dir python/headlamp_pypi/dist
         env:
           CIBW_BUILD: ${{ matrix.target_label == 'linux-arm64-gnu' && 'cp311-manylinux_aarch64' || 'cp311-manylinux_x86_64' }}
           CIBW_SKIP: "*-musllinux*"
@@ -300,6 +308,46 @@ jobs:
         uses: actions/upload-artifact@v4
         with:
           name: headlamp-pypi-wheels-${{ matrix.target_label == 'linux-arm64-gnu' && 'linux-arm64-manylinux' || 'linux-x64-manylinux' }}
+          path: python/headlamp_pypi/dist/*.whl
+          if-no-files-found: error
+
+      - name: Build PyPI wheel (linux musllinux)
+        if: startsWith(github.ref, 'refs/tags/v') && runner.os == 'Linux' && (matrix.target_label == 'linux-x64-musl' || matrix.target_label == 'linux-arm64-musl')
+        shell: bash
+        run: |
+          set -euo pipefail
+          rm -rf python/headlamp_pypi/dist
+
+          tmp_dir="$(mktemp -d)"
+          pkg_dir="${tmp_dir}/headlamp_pypi"
+          mkdir -p "${pkg_dir}"
+          rsync -a --delete python/headlamp_pypi/ "${pkg_dir}/"
+          mkdir -p "${pkg_dir}/src/headlamp/bin"
+          cp -f "target/${{ matrix.cargo_target }}/release/headlamp" "${pkg_dir}/src/headlamp/bin/headlamp"
+          chmod +x "${pkg_dir}/src/headlamp/bin/headlamp" || true
+
+          python -m pip install --upgrade pip
+          python -m pip install cibuildwheel
+          python -m cibuildwheel "${pkg_dir}" --output-dir python/headlamp_pypi/dist
+        env:
+          CIBW_BUILD: ${{ matrix.target_label == 'linux-arm64-musl' && 'cp311-musllinux_aarch64' || 'cp311-musllinux_x86_64' }}
+          CIBW_SKIP: "*-manylinux*"
+          CIBW_BUILD_FRONTEND: build
+          CIBW_MUSLLINUX_X86_64_IMAGE: musllinux_1_2
+          CIBW_MUSLLINUX_AARCH64_IMAGE: musllinux_1_2
+          CIBW_BEFORE_BUILD: |
+            set -euo pipefail
+            test -s "src/headlamp/bin/headlamp"
+            chmod +x "src/headlamp/bin/headlamp" || true
+            magic="$(head -c 4 "src/headlamp/bin/headlamp" | od -An -t x1 | tr -d ' \n')"
+            echo "headlamp: magic=${magic}"
+            test "${magic}" = "7f454c46"
+
+      - name: Upload PyPI wheel artifact (linux musllinux)
+        if: startsWith(github.ref, 'refs/tags/v') && runner.os == 'Linux' && (matrix.target_label == 'linux-x64-musl' || matrix.target_label == 'linux-arm64-musl')
+        uses: actions/upload-artifact@v4
+        with:
+          name: headlamp-pypi-wheels-${{ matrix.target_label == 'linux-arm64-musl' && 'linux-arm64-musllinux' || 'linux-x64-musllinux' }}
           path: python/headlamp_pypi/dist/*.whl
           if-no-files-found: error
 
