@@ -356,9 +356,9 @@ jobs:
       matrix:
         include:
           - platform_label: macos-x64
-            runs_on: macos-13
+            runs_on: macos-latest
           - platform_label: macos-arm64
-            runs_on: macos-14
+            runs_on: macos-latest
           - platform_label: windows-x64
             runs_on: windows-latest
           - platform_label: linux-x64-manylinux
