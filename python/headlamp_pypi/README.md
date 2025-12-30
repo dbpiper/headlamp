@@ -104,6 +104,21 @@ Headlamp also supports embedded TOML config (lower precedence than explicit conf
 - `pyproject.toml` under `[tool.headlamp]`
 - `Cargo.toml` under `[package.metadata.headlamp]`
 
+### Example: `headlamp.toml` (recommended for Rust + Python)
+
+```toml
+# Run tests sequentially (useful for very heavy integration tests)
+sequential = true
+
+[coverage]
+abort_on_failure = true
+mode = "auto"
+page_fit = true
+
+[changed]
+depth = 20
+```
+
 ### Example: `headlamp.config.ts`
 
 Rules:

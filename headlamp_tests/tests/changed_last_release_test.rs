@@ -63,7 +63,7 @@ fn changed_last_release_uses_previous_tag_when_head_is_tagged() {
 
     commit_file(repo, "a.txt", "a1\n", "a1");
     commit_file(repo, "b.txt", "b1\n", "b1");
-    run_git(repo, &["tag", "v0.1.37"]);
+    run_git(repo, &["tag", "v0.1.57"]);
 
     commit_file(repo, "c.txt", "c1\n", "c1");
     run_git(repo, &["tag", "v0.1.38"]);
@@ -99,10 +99,10 @@ fn changed_last_release_ignores_prerelease_tags() {
     init_repo(repo);
 
     commit_file(repo, "a.txt", "a1\n", "a1");
-    run_git(repo, &["tag", "v0.1.37"]);
+    run_git(repo, &["tag", "v0.1.57"]);
 
     commit_file(repo, "b.txt", "b1\n", "b1");
-    run_git(repo, &["tag", "v0.1.37-rc.1"]);
+    run_git(repo, &["tag", "v0.1.57-rc.1"]);
 
     commit_file(repo, "c.txt", "c1\n", "c1");
 

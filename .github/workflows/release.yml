@@ -399,19 +399,30 @@ jobs:
           python -m cibuildwheel python/headlamp_pypi --output-dir python/headlamp_pypi/dist
         env:
           CIBW_BUILD: ${{ matrix.platform_label == 'linux-arm64-manylinux' && 'cp311-manylinux_aarch64' || 'cp311-manylinux_x86_64' }}
-          CIBW_SKIP: "pp* *-musllinux*"
+          CIBW_SKIP: "*-musllinux*"
           CIBW_MANYLINUX_X86_64_IMAGE: manylinux_2_28
           CIBW_MANYLINUX_AARCH64_IMAGE: manylinux_2_28
+          CIBW_ENVIRONMENT: HEADLAMP_GIT_SHA=${{ github.sha }}
           CIBW_BEFORE_BUILD: |
             set -euo pipefail
             PROJECT_DIR="$(pwd)"
-            REPO_ROOT="$(cd "${PROJECT_DIR}/../.." && pwd)"
+
+            if [ -z "${HEADLAMP_GIT_SHA:-}" ]; then
+              echo "headlamp: HEADLAMP_GIT_SHA is required"
+              exit 1
+            fi
+
+            REPO_WORKDIR="$(mktemp -d)"
+            git clone --no-checkout https://github.com/dbpiper/headlamp.git "${REPO_WORKDIR}/headlamp"
+            cd "${REPO_WORKDIR}/headlamp"
+            git fetch --depth 1 origin "${HEADLAMP_GIT_SHA}"
+            git checkout --detach FETCH_HEAD
+
             curl -sSf https://sh.rustup.rs | sh -s -- -y --profile minimal
             . "${HOME}/.cargo/env"
-            cd "${REPO_ROOT}"
             cargo build -p headlamp --release
             mkdir -p "${PROJECT_DIR}/src/headlamp/bin"
-            cp -f "${REPO_ROOT}/target/release/headlamp" "${PROJECT_DIR}/src/headlamp/bin/headlamp"
+            cp -f "target/release/headlamp" "${PROJECT_DIR}/src/headlamp/bin/headlamp"
             chmod +x "${PROJECT_DIR}/src/headlamp/bin/headlamp" || true
 
       - uses: actions/upload-artifact@v4
