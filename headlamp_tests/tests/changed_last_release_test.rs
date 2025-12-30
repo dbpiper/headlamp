@@ -63,10 +63,10 @@ fn changed_last_release_uses_previous_tag_when_head_is_tagged() {
 
     commit_file(repo, "a.txt", "a1\n", "a1");
     commit_file(repo, "b.txt", "b1\n", "b1");
-    run_git(repo, &["tag", "v0.1.35"]);
+    run_git(repo, &["tag", "v0.1.37"]);
 
     commit_file(repo, "c.txt", "c1\n", "c1");
-    run_git(repo, &["tag", "v0.1.36"]);
+    run_git(repo, &["tag", "v0.1.37"]);
 
     let rel = rel_paths(repo, changed_files(repo, ChangedMode::LastRelease).unwrap());
     assert!(rel.contains(&"c.txt".to_string()), "{rel:?}");
@@ -99,10 +99,10 @@ fn changed_last_release_ignores_prerelease_tags() {
     init_repo(repo);
 
     commit_file(repo, "a.txt", "a1\n", "a1");
-    run_git(repo, &["tag", "v0.1.35"]);
+    run_git(repo, &["tag", "v0.1.37"]);
 
     commit_file(repo, "b.txt", "b1\n", "b1");
-    run_git(repo, &["tag", "v0.1.36-rc.1"]);
+    run_git(repo, &["tag", "v0.1.37-rc.1"]);
 
     commit_file(repo, "c.txt", "c1\n", "c1");
 

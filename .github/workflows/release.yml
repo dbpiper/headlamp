@@ -319,3 +319,131 @@ jobs:
         env:
           CARGO_REGISTRY_TOKEN: ${{ secrets.CARGO_REGISTRY_TOKEN }}
         run: cargo publish -p headlamp --locked
+
+  build-pypi-sdist:
+    name: build (pypi sdist)
+    needs: verify
+    runs-on: ubuntu-latest
+    if: startsWith(github.ref, 'refs/tags/v')
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.11"
+
+      - name: Build sdist
+        working-directory: python/headlamp_pypi
+        run: |
+          set -euo pipefail
+          python -m pip install --upgrade pip
+          python -m pip install build
+          python -m build --sdist
+
+      - uses: actions/upload-artifact@v4
+        with:
+          name: headlamp-pypi-sdist
+          path: python/headlamp_pypi/dist/*.tar.gz
+          if-no-files-found: error
+
+  build-pypi-wheels:
+    name: "build (pypi wheels: ${{ matrix.platform_label }})"
+    needs: verify
+    if: startsWith(github.ref, 'refs/tags/v')
+    runs-on: ${{ matrix.runs_on }}
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - platform_label: macos-x64
+            runs_on: macos-13
+          - platform_label: macos-arm64
+            runs_on: macos-14
+          - platform_label: windows-x64
+            runs_on: windows-latest
+          - platform_label: linux-x64-manylinux
+            runs_on: ubuntu-latest
+          - platform_label: linux-arm64-manylinux
+            runs_on: ubuntu-24.04-arm64
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.11"
+
+      - name: Build wheel (macOS/windows)
+        if: runner.os != 'Linux'
+        shell: bash
+        run: |
+          set -euo pipefail
+          cargo build -p headlamp --release
+          mkdir -p python/headlamp_pypi/src/headlamp/bin
+          if [ "${RUNNER_OS}" = "Windows" ]; then
+            cp -f target/release/headlamp.exe python/headlamp_pypi/src/headlamp/bin/headlamp.exe
+          else
+            cp -f target/release/headlamp python/headlamp_pypi/src/headlamp/bin/headlamp
+            chmod +x python/headlamp_pypi/src/headlamp/bin/headlamp || true
+          fi
+          python -m pip install --upgrade pip
+          python -m pip install build
+          (cd python/headlamp_pypi && python -m build --wheel)
+
+      - name: Build wheel (linux manylinux via cibuildwheel)
+        if: runner.os == 'Linux'
+        shell: bash
+        run: |
+          set -euo pipefail
+          python -m pip install --upgrade pip
+          python -m pip install cibuildwheel
+          python -m cibuildwheel python/headlamp_pypi --output-dir python/headlamp_pypi/dist
+        env:
+          CIBW_BUILD: ${{ matrix.platform_label == 'linux-arm64-manylinux' && 'cp311-manylinux_aarch64' || 'cp311-manylinux_x86_64' }}
+          CIBW_SKIP: "pp* *-musllinux*"
+          CIBW_MANYLINUX_X86_64_IMAGE: manylinux_2_28
+          CIBW_MANYLINUX_AARCH64_IMAGE: manylinux_2_28
+          CIBW_BEFORE_BUILD: |
+            set -euo pipefail
+            PROJECT_DIR="$(pwd)"
+            REPO_ROOT="$(cd "${PROJECT_DIR}/../.." && pwd)"
+            curl -sSf https://sh.rustup.rs | sh -s -- -y --profile minimal
+            . "${HOME}/.cargo/env"
+            cd "${REPO_ROOT}"
+            cargo build -p headlamp --release
+            mkdir -p "${PROJECT_DIR}/src/headlamp/bin"
+            cp -f "${REPO_ROOT}/target/release/headlamp" "${PROJECT_DIR}/src/headlamp/bin/headlamp"
+            chmod +x "${PROJECT_DIR}/src/headlamp/bin/headlamp" || true
+
+      - uses: actions/upload-artifact@v4
+        with:
+          name: headlamp-pypi-wheels-${{ matrix.platform_label }}
+          path: python/headlamp_pypi/dist/*.whl
+          if-no-files-found: error
+
+  publish-pypi:
+    name: publish (pypi)
+    needs:
+      - build-pypi-wheels
+      - build-pypi-sdist
+      - upload-release-assets
+    runs-on: ubuntu-latest
+    if: startsWith(github.ref, 'refs/tags/v')
+    permissions:
+      contents: read
+      id-token: write
+    steps:
+      - name: Download all build artifacts
+        uses: actions/download-artifact@v4
+        with:
+          path: artifacts
+
+      - name: List artifacts (debug)
+        shell: bash
+        run: |
+          set -euo pipefail
+          find artifacts -type f | sort
+
+      - name: Publish to PyPI (Trusted Publishing)
+        uses: pypa/gh-action-pypi-publish@release/v1
+        with:
+          packages-dir: artifacts
