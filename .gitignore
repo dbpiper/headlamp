@@ -26,6 +26,9 @@ headlamp/tests/js_deps/package-lock.json
 **/.mypy_cache/
 **/.ruff_cache/
 **/.python-version
+**/build/
+**/dist/
+**/*.egg-info/
 
 # Coverage outputs
 coverage/

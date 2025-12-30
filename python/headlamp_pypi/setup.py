@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 from wheel.bdist_wheel import bdist_wheel as _bdist_wheel
+from setuptools import setup
 
 
 class bdist_wheel(_bdist_wheel):
@@ -11,15 +12,22 @@ class bdist_wheel(_bdist_wheel):
 
     def finalize_options(self) -> None:
         super().finalize_options()
-        self.root_is_pure = False
+        setattr(self, "root_is_pure", False)
+
+    def run(self) -> None:
+        distribution = self.distribution
+        original_has_ext_modules = distribution.has_ext_modules
+
+        setattr(distribution, "has_ext_modules", lambda: True)
+        try:
+            super().run()
+        finally:
+            setattr(distribution, "has_ext_modules", original_has_ext_modules)
 
     def get_tag(self):
-        python, abi, plat = super().get_tag()
+        _python_tag, _abi_tag, platform_tag = super().get_tag()
         # We ship one wheel per platform and it works across Python 3.
-        return ("py3", "none", plat)
+        return ("py3", "none", platform_tag)
 
 
-if __name__ == "__main__":
-    from setuptools import setup
-
-    setup(cmdclass={"bdist_wheel": bdist_wheel})
+setup(cmdclass={"bdist_wheel": bdist_wheel})

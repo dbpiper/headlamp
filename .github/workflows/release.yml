@@ -271,7 +271,7 @@ jobs:
           tmp_dir="$(mktemp -d)"
           pkg_dir="${tmp_dir}/headlamp_pypi"
           mkdir -p "${pkg_dir}"
-          rsync -a --delete python/headlamp_pypi/ "${pkg_dir}/"
+          rsync -a --delete --exclude 'build' --exclude 'dist' --exclude '*.egg-info' python/headlamp_pypi/ "${pkg_dir}/"
           mkdir -p "${pkg_dir}/src/headlamp/bin"
           cp -f target/release/headlamp "${pkg_dir}/src/headlamp/bin/headlamp"
           chmod +x "${pkg_dir}/src/headlamp/bin/headlamp" || true
@@ -301,10 +301,21 @@ jobs:
             if command -v sha256sum >/dev/null 2>&1; then
               sha256sum "src/headlamp/bin/headlamp" || true
             fi
-            # Verify ELF magic bytes: 0x7F 'E' 'L' 'F'
-            magic="$(head -c 4 "src/headlamp/bin/headlamp" | od -An -t x1 | tr -d ' \n')"
-            echo "headlamp: magic=${magic}"
-            test "${magic}" = "7f454c46"
+            python - <<'PY'
+            from __future__ import annotations
+
+            import pathlib
+
+            binary_path = pathlib.Path("src/headlamp/bin/headlamp")
+            size_bytes = binary_path.stat().st_size
+            print(f"headlamp: size={size_bytes}")
+            if size_bytes < 1_000_000:
+              raise SystemExit("headlamp: binary unexpectedly small")
+            magic = binary_path.read_bytes()[:4]
+            print(f"headlamp: magic={magic.hex()}")
+            if magic != b"\x7fELF":
+              raise SystemExit("headlamp: expected ELF magic bytes")
+            PY
 
       - name: Upload PyPI wheel artifact (linux manylinux)
         if: startsWith(github.ref, 'refs/tags/v') && runner.os == 'Linux' && (matrix.target_label == 'linux-x64-gnu' || matrix.target_label == 'linux-arm64-gnu')
@@ -325,7 +336,7 @@ jobs:
           tmp_dir="$(mktemp -d)"
           pkg_dir="${tmp_dir}/headlamp_pypi"
           mkdir -p "${pkg_dir}"
-          rsync -a --delete python/headlamp_pypi/ "${pkg_dir}/"
+          rsync -a --delete --exclude 'build' --exclude 'dist' --exclude '*.egg-info' python/headlamp_pypi/ "${pkg_dir}/"
           mkdir -p "${pkg_dir}/src/headlamp/bin"
           cp -f "target/${{ matrix.cargo_target }}/release/headlamp" "${pkg_dir}/src/headlamp/bin/headlamp"
           chmod +x "${pkg_dir}/src/headlamp/bin/headlamp" || true
@@ -345,9 +356,21 @@ jobs:
             set -euo pipefail
             test -s "src/headlamp/bin/headlamp"
             chmod +x "src/headlamp/bin/headlamp" || true
-            magic="$(head -c 4 "src/headlamp/bin/headlamp" | od -An -t x1 | tr -d ' \n')"
-            echo "headlamp: magic=${magic}"
-            test "${magic}" = "7f454c46"
+            python - <<'PY'
+            from __future__ import annotations
+
+            import pathlib
+
+            binary_path = pathlib.Path("src/headlamp/bin/headlamp")
+            size_bytes = binary_path.stat().st_size
+            print(f"headlamp: size={size_bytes}")
+            if size_bytes < 1_000_000:
+              raise SystemExit("headlamp: binary unexpectedly small")
+            magic = binary_path.read_bytes()[:4]
+            print(f"headlamp: magic={magic.hex()}")
+            if magic != b"\x7fELF":
+              raise SystemExit("headlamp: expected ELF magic bytes")
+            PY
 
       - name: Upload PyPI wheel artifact (linux musllinux)
         if: startsWith(github.ref, 'refs/tags/v') && runner.os == 'Linux' && (matrix.target_label == 'linux-x64-musl' || matrix.target_label == 'linux-arm64-musl')
