@@ -131,7 +131,7 @@ jobs:
             cargo_target: x86_64-unknown-linux-gnu
             binary_name: headlamp
           - target_label: linux-arm64-gnu
-            runs_on: ubuntu-24.04-arm64
+            runs_on: ubuntu-24.04-arm
             cargo_target: aarch64-unknown-linux-gnu
             binary_name: headlamp
           - target_label: linux-x64-musl
@@ -139,7 +139,7 @@ jobs:
             cargo_target: x86_64-unknown-linux-musl
             binary_name: headlamp
           - target_label: linux-arm64-musl
-            runs_on: ubuntu-24.04-arm64
+            runs_on: ubuntu-24.04-arm
             cargo_target: aarch64-unknown-linux-musl
             binary_name: headlamp
           - target_label: win32-x64
