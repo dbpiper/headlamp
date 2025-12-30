@@ -264,6 +264,7 @@ jobs:
         run: |
           set -euo pipefail
           rm -rf python/headlamp_pypi/dist
+          mkdir -p python/headlamp_pypi/dist
 
           # Build wheels from a temp copy outside the git repo so cibuildwheel definitely
           # includes the injected binary when copying sources into the manylinux container.
@@ -277,7 +278,9 @@ jobs:
 
           python -m pip install --upgrade pip
           python -m pip install cibuildwheel
-          python -m cibuildwheel "${pkg_dir}" --output-dir python/headlamp_pypi/dist
+          pushd "${pkg_dir}"
+          python -m cibuildwheel . --output-dir "${GITHUB_WORKSPACE}/python/headlamp_pypi/dist"
+          popd
         env:
           CIBW_BUILD: ${{ matrix.target_label == 'linux-arm64-gnu' && 'cp311-manylinux_aarch64' || 'cp311-manylinux_x86_64' }}
           CIBW_SKIP: "*-musllinux*"
@@ -317,6 +320,7 @@ jobs:
         run: |
           set -euo pipefail
           rm -rf python/headlamp_pypi/dist
+          mkdir -p python/headlamp_pypi/dist
 
           tmp_dir="$(mktemp -d)"
           pkg_dir="${tmp_dir}/headlamp_pypi"
@@ -328,7 +332,9 @@ jobs:
 
           python -m pip install --upgrade pip
           python -m pip install cibuildwheel
-          python -m cibuildwheel "${pkg_dir}" --output-dir python/headlamp_pypi/dist
+          pushd "${pkg_dir}"
+          python -m cibuildwheel . --output-dir "${GITHUB_WORKSPACE}/python/headlamp_pypi/dist"
+          popd
         env:
           CIBW_BUILD: ${{ matrix.target_label == 'linux-arm64-musl' && 'cp311-musllinux_aarch64' || 'cp311-musllinux_x86_64' }}
           CIBW_SKIP: "*-manylinux*"
