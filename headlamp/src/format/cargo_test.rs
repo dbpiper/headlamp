@@ -1,3 +1,4 @@
+use std::borrow::Cow;
 use std::path::Path;
 
 use crate::format::unstructured_engine::{
@@ -89,7 +90,12 @@ pub fn parse_cargo_test_output(repo_root: &Path, combined_output: &str) -> Optio
 }
 
 fn parse_suite_header_source_path(line: &str) -> Option<String> {
-    let trimmed = line.trim();
+    let stripped = if line.contains('\u{1b}') {
+        Cow::Owned(String::from_utf8_lossy(&strip_ansi_escapes::strip(line.as_bytes())).to_string())
+    } else {
+        Cow::Borrowed(line)
+    };
+    let trimmed = stripped.trim();
     let rest = trimmed.strip_prefix("Running ")?;
     let (path_like, _) = rest.split_once(" (").unwrap_or((rest, ""));
     let cleaned = path_like.trim();

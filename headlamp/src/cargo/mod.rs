@@ -16,6 +16,7 @@ mod coverage;
 mod llvm_cov;
 mod model_norm;
 mod paths;
+mod run_trace;
 mod runner_args;
 mod selection;
 
@@ -69,74 +70,46 @@ pub fn run_cargo_test(repo_root: &Path, args: &ParsedArgs) -> Result<i32, RunErr
     let changed = changed_files_for_args(repo_root, args)?;
     let selection = selection::derive_cargo_selection(repo_root, args, &changed);
     if early_exit_for_zero_changed_selection_cargo_test(repo_root, args, &selection) {
-        headlamp_core::diagnostics_trace::maybe_write_run_trace(
+        run_trace::trace_cargo_test_early_exit(
             repo_root,
-            "cargo-test",
             args,
-            Some(started_at),
-            serde_json::json!({
-                "changed_files_count": changed.len(),
-                "selected_test_count": selection.selected_test_count,
-                "early_exit": true,
-                "exit_code": 0,
-            }),
+            started_at,
+            changed.len(),
+            selection.selected_test_count,
         );
         return Ok(0);
     }
     if let Some(exit_code) = maybe_run_cargo_test_with_llvm_cov(repo_root, args, &selection)? {
-        let final_exit = llvm_cov::finish_coverage_after_test_run(
+        return run_trace::finish_cargo_test_llvm_cov_and_trace(
             repo_root,
             args,
+            started_at,
+            changed.len(),
+            &selection,
             exit_code,
-            &selection.extra_cargo_args,
         );
-        let final_exit_code = final_exit.as_ref().ok().copied();
-        let final_exit_error = final_exit.as_ref().err().map(|e| e.to_string());
-        headlamp_core::diagnostics_trace::maybe_write_run_trace(
-            repo_root,
-            "cargo-test",
-            args,
-            Some(started_at),
-            serde_json::json!({
-                "changed_files_count": changed.len(),
-                "selected_test_count": selection.selected_test_count,
-                "used_llvm_cov": true,
-                "exit_code": final_exit_code,
-                "error": final_exit_error,
-            }),
-        );
-        return final_exit;
     }
     let run = run_cargo_test_streaming(repo_root, args, &selection.extra_cargo_args)?;
     print_runner_tail_if_failed_without_tests(run.exit_code, &run.model, &run.tail);
     maybe_print_rendered_model(repo_root, args, run.exit_code, &run.model);
     if args.coverage_abort_on_failure && run.exit_code != 0 {
-        let out = Ok(normalize_runner_exit_code(run.exit_code));
-        headlamp_core::diagnostics_trace::maybe_write_run_trace(
+        return Ok(run_trace::normalize_and_trace_cargo_test_coverage_abort(
             repo_root,
-            "cargo-test",
             args,
-            Some(started_at),
-            serde_json::json!({
-                "changed_files_count": changed.len(),
-                "selected_test_count": selection.selected_test_count,
-                "coverage_aborted": true,
-                "exit_code": out.as_ref().ok().copied(),
-            }),
-        );
-        return out;
+            started_at,
+            changed.len(),
+            &selection,
+            run.exit_code,
+        ));
     }
     let final_exit = maybe_print_lcov_and_adjust_exit(repo_root, args, run.exit_code);
-    headlamp_core::diagnostics_trace::maybe_write_run_trace(
+    run_trace::trace_cargo_test_final_exit(
         repo_root,
-        "cargo-test",
         args,
-        Some(started_at),
-        serde_json::json!({
-            "changed_files_count": changed.len(),
-            "selected_test_count": selection.selected_test_count,
-            "exit_code": final_exit,
-        }),
+        started_at,
+        changed.len(),
+        &selection,
+        final_exit,
     );
     Ok(final_exit)
 }

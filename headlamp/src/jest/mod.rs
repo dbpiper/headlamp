@@ -52,8 +52,21 @@ struct AggregatedProjectRuns {
     raw_output_all: Vec<String>,
 }
 
-pub fn run_jest(repo_root: &Path, args: &ParsedArgs) -> Result<i32, RunError> {
-    let started_at = std::time::Instant::now();
+#[derive(Debug)]
+struct JestRunContext {
+    jest_bin: PathBuf,
+    selection_paths_abs: Vec<String>,
+    discovery_args: Vec<String>,
+    project_configs: Vec<PathBuf>,
+    related_selection: headlamp_core::selection::related_tests::RelatedTestSelection,
+    directness_rank: std::collections::BTreeMap<String, i64>,
+    out_json_base: PathBuf,
+    name_pattern_only_for_discovery: bool,
+    base_cmd_args: Vec<String>,
+    mode: crate::live_progress::LiveProgressMode,
+}
+
+fn build_jest_run_context(repo_root: &Path, args: &ParsedArgs) -> Result<JestRunContext, RunError> {
     run_bootstrap_if_configured(repo_root, args)?;
     let jest_bin = ensure_jest_bin_exists(repo_root)?;
     let selection_paths_abs = selection::selection_paths_abs(repo_root, args)?;
@@ -102,23 +115,43 @@ pub fn run_jest(repo_root: &Path, args: &ParsedArgs) -> Result<i32, RunError> {
         headlamp_core::format::terminal::is_output_terminal(),
         args.ci,
     );
-    let per_project_results = project_run::run_projects(project_run::RunProjectsArgs {
-        repo_root,
-        args,
-        project_configs: &project_configs,
-        jest_bin: &jest_bin,
-        discovery_args: &discovery_args,
-        related_selection: &related_selection.selected_test_paths_abs,
-        base_cmd_args: &base_cmd_args,
-        selection_paths_abs: &selection_paths_abs,
+    Ok(JestRunContext {
+        jest_bin,
+        selection_paths_abs,
+        discovery_args,
+        project_configs,
+        related_selection,
+        directness_rank,
+        out_json_base,
         name_pattern_only_for_discovery,
-        out_json_base: &out_json_base,
+        base_cmd_args,
         mode,
-    })?;
-    let aggregated = aggregate_project_runs(per_project_results);
-    print_jest_run_output(repo_root, args, &directness_rank, &aggregated);
-    let exit = maybe_collect_coverage(repo_root, args, &selection_paths_abs, &aggregated)?;
-    // Sidecar diagnostics for CI debugging (does not affect stdout parity).
+    })
+}
+
+#[derive(Debug)]
+struct JestRunTraceCounts {
+    project_configs_count: usize,
+    selection_paths_abs_count: usize,
+    selected_test_paths_abs_count: usize,
+}
+
+fn build_jest_run_trace_counts(ctx: &JestRunContext) -> JestRunTraceCounts {
+    JestRunTraceCounts {
+        project_configs_count: ctx.project_configs.len(),
+        selection_paths_abs_count: ctx.selection_paths_abs.len(),
+        selected_test_paths_abs_count: ctx.related_selection.selected_test_paths_abs.len(),
+    }
+}
+
+fn write_jest_run_trace(
+    repo_root: &Path,
+    args: &ParsedArgs,
+    started_at: std::time::Instant,
+    jest_bin: &Path,
+    counts: JestRunTraceCounts,
+    exit_code: i32,
+) {
     headlamp_core::diagnostics_trace::maybe_write_run_trace(
         repo_root,
         "jest",
@@ -126,12 +159,35 @@ pub fn run_jest(repo_root: &Path, args: &ParsedArgs) -> Result<i32, RunError> {
         Some(started_at),
         serde_json::json!({
             "jest_bin": jest_bin.to_string_lossy().to_string(),
-            "project_configs_count": project_configs.len(),
-            "selection_paths_abs_count": selection_paths_abs.len(),
-            "selected_test_paths_abs_count": related_selection.selected_test_paths_abs.len(),
-            "exit_code": exit,
+            "project_configs_count": counts.project_configs_count,
+            "selection_paths_abs_count": counts.selection_paths_abs_count,
+            "selected_test_paths_abs_count": counts.selected_test_paths_abs_count,
+            "exit_code": exit_code,
         }),
     );
+}
+
+pub fn run_jest(repo_root: &Path, args: &ParsedArgs) -> Result<i32, RunError> {
+    let started_at = std::time::Instant::now();
+    let ctx = build_jest_run_context(repo_root, args)?;
+    let per_project_results = project_run::run_projects(project_run::RunProjectsArgs {
+        repo_root,
+        args,
+        project_configs: &ctx.project_configs,
+        jest_bin: &ctx.jest_bin,
+        discovery_args: &ctx.discovery_args,
+        related_selection: &ctx.related_selection.selected_test_paths_abs,
+        base_cmd_args: &ctx.base_cmd_args,
+        selection_paths_abs: &ctx.selection_paths_abs,
+        name_pattern_only_for_discovery: ctx.name_pattern_only_for_discovery,
+        out_json_base: &ctx.out_json_base,
+        mode: ctx.mode,
+    })?;
+    let aggregated = aggregate_project_runs(per_project_results);
+    print_jest_run_output(repo_root, args, &ctx.directness_rank, &aggregated);
+    let exit = maybe_collect_coverage(repo_root, args, &ctx.selection_paths_abs, &aggregated)?;
+    let counts = build_jest_run_trace_counts(&ctx);
+    write_jest_run_trace(repo_root, args, started_at, &ctx.jest_bin, counts, exit);
     Ok(exit)
 }
 

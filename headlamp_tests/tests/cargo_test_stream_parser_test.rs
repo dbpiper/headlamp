@@ -136,6 +136,39 @@ fn cargo_test_stream_parser_drops_empty_suites() {
     assert_eq!(model.aggregated.num_failed_tests, 0);
 }
 
+#[test]
+fn cargo_test_stream_parser_parses_suite_header_with_ansi_prefix() {
+    let repo_root = Path::new("/repo");
+
+    let combined = [
+        "\u{1b}[1m\u{1b}[92m     Running\u{1b}[0m tests/sum_fail_test.rs (target/debug/deps/sum_fail_test-0000000000000000)",
+        "running 1 test",
+        "test test_sum_fails ... FAILED",
+        "",
+        "failures:",
+        "",
+        "---- test_sum_fails stdout ----",
+        "",
+        "thread 'test_sum_fails' panicked at tests/sum_fail_test.rs:7:1:",
+        "boom",
+        "",
+        "failures:",
+        "    test_sum_fails",
+        "",
+        "test result: FAILED. 0 passed; 1 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.00s",
+    ]
+    .join("\n");
+
+    let model = parse_cargo_test_output(repo_root, &combined).expect("model");
+    assert_eq!(model.test_results.len(), 1);
+    assert_eq!(model.aggregated.num_total_test_suites, 1);
+    assert_eq!(model.aggregated.num_total_tests, 1);
+    assert_eq!(model.aggregated.num_failed_tests, 1);
+
+    let suite = model.test_results.first().expect("suite");
+    assert!(suite.test_file_path.ends_with("tests/sum_fail_test.rs"));
+}
+
 fn mk_temp_repo_dir(name: &str) -> std::path::PathBuf {
     let base = std::env::temp_dir()
         .join("headlamp-tests")
