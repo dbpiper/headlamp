@@ -66,7 +66,7 @@ fn changed_last_release_uses_previous_tag_when_head_is_tagged() {
     run_git(repo, &["tag", "v0.1.37"]);
 
     commit_file(repo, "c.txt", "c1\n", "c1");
-    run_git(repo, &["tag", "v0.1.37"]);
+    run_git(repo, &["tag", "v0.1.38"]);
 
     let rel = rel_paths(repo, changed_files(repo, ChangedMode::LastRelease).unwrap());
     assert!(rel.contains(&"c.txt".to_string()), "{rel:?}");
