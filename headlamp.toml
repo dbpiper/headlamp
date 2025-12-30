@@ -1,0 +1,7 @@
+[coverage]
+abort_on_failure = true
+mode = "auto"
+page_fit = true
+
+[changed]
+depth = 20

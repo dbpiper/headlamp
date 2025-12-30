@@ -3,6 +3,7 @@ use std::path::{Path, PathBuf};
 
 use duct::cmd as duct_cmd;
 use serde::Deserialize;
+use serde_json::Value as JsonValue;
 use which::which;
 
 use crate::config_ts::load_headlamp_config_ts_oxc;
@@ -119,6 +120,7 @@ pub fn find_repo_root(start: &Path) -> PathBuf {
 
 pub fn discover_config_path(repo_root: &Path) -> Option<PathBuf> {
     let names = [
+        "headlamp.toml",
         "headlamp.config.ts",
         "headlamp.config.js",
         "headlamp.config.mjs",
@@ -146,10 +148,11 @@ pub fn discover_config_path(repo_root: &Path) -> Option<PathBuf> {
 }
 
 pub fn load_headlamp_config(repo_root: &Path) -> Result<HeadlampConfig, HeadlampError> {
-    let Some(path) = discover_config_path(repo_root) else {
-        return Ok(HeadlampConfig::default());
-    };
-    load_headlamp_config_from_path(&path)
+    if let Some(path) = discover_config_path(repo_root) {
+        return load_headlamp_config_from_path(&path);
+    }
+
+    load_embedded_toml_config(repo_root)
 }
 
 pub fn load_headlamp_config_from_path(path: &Path) -> Result<HeadlampConfig, HeadlampError> {
@@ -162,6 +165,7 @@ pub fn load_headlamp_config_from_path(path: &Path) -> Result<HeadlampConfig, Hea
     match ext.as_str() {
         "json" | "json5" | "jsonc" => load_json_config(path),
         "yaml" | "yml" => load_yaml_config(path),
+        "toml" => load_toml_config(path, TomlConfigSource::FullFile).map(|v| v.unwrap_or_default()),
         "ts" => load_ts_config_oxc(path),
         "js" | "mjs" | "cjs" => load_js_config(path),
         _ => Ok(HeadlampConfig::default()),
@@ -190,6 +194,140 @@ fn load_yaml_config(path: &Path) -> Result<HeadlampConfig, HeadlampError> {
         path: path.to_path_buf(),
         message: err.to_string(),
     })
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum TomlConfigSource {
+    FullFile,
+    PyProjectToolHeadlamp,
+    CargoPackageMetadataHeadlamp,
+}
+
+fn load_embedded_toml_config(repo_root: &Path) -> Result<HeadlampConfig, HeadlampError> {
+    let pyproject_path = repo_root.join("pyproject.toml");
+    if pyproject_path.exists() {
+        if let Some(config) =
+            load_toml_config(&pyproject_path, TomlConfigSource::PyProjectToolHeadlamp)?
+        {
+            return Ok(config);
+        }
+    }
+
+    let cargo_toml_path = repo_root.join("Cargo.toml");
+    if cargo_toml_path.exists() {
+        if let Some(config) = load_toml_config(
+            &cargo_toml_path,
+            TomlConfigSource::CargoPackageMetadataHeadlamp,
+        )? {
+            return Ok(config);
+        }
+    }
+
+    Ok(HeadlampConfig::default())
+}
+
+fn load_toml_config(
+    path: &Path,
+    source: TomlConfigSource,
+) -> Result<Option<HeadlampConfig>, HeadlampError> {
+    let raw = std::fs::read_to_string(path).map_err(|source| HeadlampError::Io {
+        path: path.to_path_buf(),
+        source,
+    })?;
+
+    let toml_value =
+        toml::from_str::<toml::Value>(&raw).map_err(|err| HeadlampError::ConfigParse {
+            path: path.to_path_buf(),
+            message: err.to_string(),
+        })?;
+
+    let maybe_table_value = match source {
+        TomlConfigSource::FullFile => Some(toml_value),
+        TomlConfigSource::PyProjectToolHeadlamp => extract_pyproject_tool_headlamp(&toml_value),
+        TomlConfigSource::CargoPackageMetadataHeadlamp => {
+            extract_cargo_package_metadata_headlamp(&toml_value)
+        }
+    };
+
+    let Some(table_value) = maybe_table_value else {
+        return Ok(None);
+    };
+
+    let json_value =
+        serde_json::to_value(table_value).map_err(|err| HeadlampError::ConfigParse {
+            path: path.to_path_buf(),
+            message: err.to_string(),
+        })?;
+    let normalized = normalize_toml_keys_to_camel_case(&json_value);
+
+    serde_json::from_value::<HeadlampConfig>(normalized)
+        .map(Some)
+        .map_err(|err| HeadlampError::ConfigParse {
+            path: path.to_path_buf(),
+            message: err.to_string(),
+        })
+}
+
+fn extract_pyproject_tool_headlamp(value: &toml::Value) -> Option<toml::Value> {
+    value
+        .as_table()
+        .and_then(|root| root.get("tool"))
+        .and_then(|tool| tool.as_table())
+        .and_then(|tool_table| tool_table.get("headlamp"))
+        .cloned()
+}
+
+fn extract_cargo_package_metadata_headlamp(value: &toml::Value) -> Option<toml::Value> {
+    value
+        .as_table()
+        .and_then(|root| root.get("package"))
+        .and_then(|package| package.as_table())
+        .and_then(|package_table| package_table.get("metadata"))
+        .and_then(|metadata| metadata.as_table())
+        .and_then(|metadata_table| metadata_table.get("headlamp"))
+        .cloned()
+}
+
+fn normalize_toml_keys_to_camel_case(value: &JsonValue) -> JsonValue {
+    match value {
+        JsonValue::Object(object) => {
+            let normalized_entries = object.iter().map(|(key, value)| {
+                let normalized_key = normalize_toml_key(key);
+                let normalized_value = normalize_toml_keys_to_camel_case(value);
+                (normalized_key, normalized_value)
+            });
+            JsonValue::Object(normalized_entries.collect())
+        }
+        JsonValue::Array(array) => JsonValue::Array(
+            array
+                .iter()
+                .map(normalize_toml_keys_to_camel_case)
+                .collect(),
+        ),
+        other => other.clone(),
+    }
+}
+
+fn normalize_toml_key(key: &str) -> String {
+    if !key.contains('_') {
+        return key.to_string();
+    }
+
+    let mut segments = key.split('_').filter(|segment| !segment.is_empty());
+    let Some(first_segment) = segments.next() else {
+        return key.to_string();
+    };
+
+    let mut normalized_key = String::from(first_segment);
+    for segment in segments {
+        let mut chars = segment.chars();
+        let Some(first_char) = chars.next() else {
+            continue;
+        };
+        normalized_key.push(first_char.to_ascii_uppercase());
+        normalized_key.extend(chars);
+    }
+    normalized_key
 }
 
 fn load_js_config(path: &Path) -> Result<HeadlampConfig, HeadlampError> {

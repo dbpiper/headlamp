@@ -2,7 +2,7 @@ use std::path::Path;
 
 use tempfile::TempDir;
 
-use headlamp::config::{discover_config_path, load_headlamp_config_from_path};
+use headlamp::config::{discover_config_path, load_headlamp_config, load_headlamp_config_from_path};
 
 fn write_file(path: &Path, contents: &str) {
     if let Some(parent) = path.parent() {
@@ -222,4 +222,111 @@ export default defineConfig({
         text.to_ascii_lowercase().contains("unsupported"),
         "expected clear unsupported message, got: {text}"
     );
+}
+
+#[test]
+fn config_discovery_prefers_headlamp_toml_over_headlamp_config() {
+    let temp = TempDir::new().unwrap();
+    let root = temp.path();
+
+    write_file(&root.join("headlamp.config.json"), r#"{ "sequential": false }"#);
+    write_file(&root.join("headlamp.toml"), r#"sequential = true"#);
+
+    let discovered = discover_config_path(root).unwrap();
+    assert!(discovered.ends_with("headlamp.toml"));
+}
+
+#[test]
+fn config_loads_headlamp_toml_with_snake_case_keys() {
+    let temp = TempDir::new().unwrap();
+    let path = temp.path().join("headlamp.toml");
+    write_file(
+        &path,
+        r#"
+sequential = true
+bootstrap_command = "test:bootstrap"
+jest_args = ["--runInBand"]
+
+[coverage]
+abort_on_failure = true
+mode = "auto"
+page_fit = true
+"#,
+    );
+
+    let cfg = load_headlamp_config_from_path(&path).unwrap();
+    assert_eq!(cfg.sequential, Some(true));
+    assert_eq!(cfg.bootstrap_command.as_deref(), Some("test:bootstrap"));
+    assert_eq!(
+        cfg.jest_args.clone().unwrap_or_default(),
+        vec!["--runInBand".to_string()]
+    );
+    match cfg.coverage {
+        Some(headlamp::config::CoverageConfig::Obj(section)) => {
+            assert_eq!(section.abort_on_failure, Some(true));
+            assert_eq!(
+                section.mode.map(|v| format!("{v:?}")),
+                Some("Auto".to_string())
+            );
+            assert_eq!(section.page_fit, Some(true));
+        }
+        other => panic!("expected coverage obj, got {other:?}"),
+    }
+}
+
+#[test]
+fn config_loads_pyproject_toml_tool_headlamp_section() {
+    let temp = TempDir::new().unwrap();
+    let root = temp.path();
+    write_file(
+        &root.join("pyproject.toml"),
+        r#"
+[tool.headlamp]
+sequential = true
+bootstrap_command = "test:bootstrap"
+"#,
+    );
+
+    let cfg = load_headlamp_config(root).unwrap();
+    assert_eq!(cfg.sequential, Some(true));
+    assert_eq!(cfg.bootstrap_command.as_deref(), Some("test:bootstrap"));
+}
+
+#[test]
+fn config_loads_cargo_toml_package_metadata_headlamp_section() {
+    let temp = TempDir::new().unwrap();
+    let root = temp.path();
+    write_file(
+        &root.join("Cargo.toml"),
+        r#"
+[package]
+name = "tmp"
+version = "0.1.0"
+
+[package.metadata.headlamp]
+sequential = true
+bootstrap_command = "test:bootstrap"
+"#,
+    );
+
+    let cfg = load_headlamp_config(root).unwrap();
+    assert_eq!(cfg.sequential, Some(true));
+    assert_eq!(cfg.bootstrap_command.as_deref(), Some("test:bootstrap"));
+}
+
+#[test]
+fn config_prefers_explicit_config_files_over_embedded_toml() {
+    let temp = TempDir::new().unwrap();
+    let root = temp.path();
+    write_file(
+        &root.join("pyproject.toml"),
+        r#"
+[tool.headlamp]
+sequential = true
+"#,
+    );
+    write_file(&root.join("headlamp.config.json"), r#"{ "sequential": false }"#);
+
+    let cfg = load_headlamp_config(root).unwrap();
+    assert_eq!(cfg.sequential, Some(false));
 }
