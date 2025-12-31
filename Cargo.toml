@@ -6,4 +6,5 @@ members = [
   "headlamp_parity_tests",
   "headlamp_parity_support",
   "xtask",
+  "treemap_viewer",
 ]

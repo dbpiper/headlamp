@@ -1,10 +1,13 @@
-use std::process::{Command, Stdio};
+use std::process::Command;
 
 use anyhow::{bail, Context};
 use clap::{Parser, Subcommand};
-use regex::Regex;
-use semver::Version;
 use std::path::{Path, PathBuf};
+use xtask::size_report;
+use xtask::size_treemap::{generate_treemap_json, write_treemap_json, SizeTreemapInputs};
+
+mod release_cmd;
+use release_cmd::{ReleaseArgs, RevertReleaseArgs};
 
 #[derive(Parser, Debug)]
 #[command(name = "xtask")]
@@ -28,329 +31,178 @@ enum Commands {
     /// Example:
     ///   cargo run -p xtask -- release v0.1.37
     Release(ReleaseArgs),
-}
 
-#[derive(Parser, Debug)]
-struct RevertReleaseArgs {
-    /// Remote name to delete the tag from.
-    #[arg(long, default_value = "origin")]
-    remote: String,
-
-    /// Override the tag to delete (e.g. v0.1.36).
-    #[arg(long)]
-    tag: Option<String>,
-
-    /// Do not delete the remote tag.
-    #[arg(long)]
-    no_remote: bool,
-
-    /// Print the git commands that would run, but do not execute them.
-    #[arg(long, default_value_t = true)]
-    dry_run: bool,
-
-    /// Actually perform the deletion.
+    /// Parse an Apple `ld` `-map` file and print the biggest code-size contributors.
     ///
-    /// This sets dry_run=false.
-    #[arg(long)]
-    yes: bool,
+    /// Example:
+    ///   cargo run -p xtask -- size-report --map target/size/headlamp.map
+    SizeReport(SizeReportArgs),
+
+    /// Generate a treemap JSON for the `headlamp` binary (file/function level via DWARF).
+    ///
+    /// Example:
+    ///   cargo run -p xtask -- size-treemap --map target/size/headlamp.map --dwarf target/size/headlamp.dSYM/Contents/Resources/DWARF/headlamp
+    SizeTreemap(SizeTreemapArgs),
 }
 
 #[derive(Parser, Debug)]
-struct ReleaseArgs {
-    /// Release version (e.g. v0.1.37 or 0.1.37)
-    version: String,
+struct SizeReportArgs {
+    /// Path to an Apple `ld` `-map` file (generated via `-Wl,-map,<path>`).
+    #[arg(long, default_value = "target/size/headlamp.map")]
+    map: PathBuf,
+
+    /// Number of rows to print.
+    #[arg(long, default_value_t = 30)]
+    top: usize,
+}
+
+#[derive(Parser, Debug)]
+struct SizeTreemapArgs {
+    /// Path to an Apple `ld` `-map` file.
+    #[arg(long, default_value = "target/size/headlamp.map")]
+    map: PathBuf,
+
+    /// Path to the built headlamp release binary to analyze.
+    #[arg(long, default_value = "target/release/headlamp")]
+    binary: PathBuf,
+
+    /// Where to write the dSYM output directory.
+    #[arg(long, default_value = "target/size/headlamp.dSYM")]
+    dsym: PathBuf,
+
+    /// Where to write the treemap JSON.
+    #[arg(long, default_value = "target/size/headlamp.treemap.json")]
+    out: PathBuf,
+
+    /// If set, include all crates (not just headlamp).
+    #[arg(long, default_value_t = false)]
+    include_deps: bool,
 }
 
 fn main() -> anyhow::Result<()> {
     let cli = Cli::parse();
     match cli.command {
-        Commands::RevertRelease(args) => revert_release(args),
-        Commands::Release(args) => release(args),
+        Commands::RevertRelease(args) => release_cmd::revert_release(args),
+        Commands::Release(args) => release_cmd::release(args),
+        Commands::SizeReport(args) => size_report_cmd(args),
+        Commands::SizeTreemap(args) => size_treemap_cmd(args),
     }
 }
 
-fn revert_release(mut args: RevertReleaseArgs) -> anyhow::Result<()> {
-    if args.yes {
-        args.dry_run = false;
+fn size_report_cmd(args: SizeReportArgs) -> anyhow::Result<()> {
+    let report = size_report::parse_map_file(&args.map)?;
+    println!("map: {}", args.map.display());
+    println!("top crates by summed symbol sizes:");
+
+    for row in report.crate_sizes.iter().take(args.top) {
+        println!("{:>10}  {}", format_bytes(row.bytes), row.crate_name);
     }
 
-    let tag = match args.tag.clone() {
-        Some(t) => t,
-        None => resolve_latest_stable_reachable_tag()?
-            .with_context(|| "no stable semver tag reachable from HEAD")?,
+    Ok(())
+}
+
+fn size_treemap_cmd(args: SizeTreemapArgs) -> anyhow::Result<()> {
+    let start = std::time::Instant::now();
+    let repo_root = release_cmd::repo_root()?;
+    let map_path = repo_root.join(args.map);
+    let binary_path = repo_root.join(args.binary);
+    let out_path = repo_root.join(args.out);
+
+    ensure_parent_dir_exists(&map_path)?;
+    ensure_parent_dir_exists(&out_path)?;
+
+    eprintln!("[size-treemap] build (map + debuginfo)…");
+    build_headlamp_release_with_map(&map_path, &binary_path)?;
+    eprintln!("[size-treemap] build done in {:?}", start.elapsed());
+
+    eprintln!("[size-treemap] dsym…");
+    ensure_dsym_for_binary(&binary_path)?;
+    eprintln!("[size-treemap] dsym done in {:?}", start.elapsed());
+
+    eprintln!("[size-treemap] parse/addr2line/aggregate…");
+    let treemap = generate_treemap_json(SizeTreemapInputs {
+        map_path,
+        binary_path,
+        focus_headlamp: !args.include_deps,
+    })?;
+    eprintln!("[size-treemap] analysis done in {:?}", start.elapsed());
+
+    write_treemap_json(&out_path, &treemap)?;
+    println!("wrote {}", out_path.display());
+    eprintln!("[size-treemap] total {:?}", start.elapsed());
+    Ok(())
+}
+
+fn ensure_parent_dir_exists(path: &Path) -> anyhow::Result<()> {
+    let Some(parent) = path.parent() else {
+        return Ok(());
     };
+    std::fs::create_dir_all(parent)
+        .with_context(|| format!("failed to create dir {}", parent.display()))?;
+    Ok(())
+}
 
-    let local_cmd = format!("git tag -d {tag}");
-    let remote_cmd = format!("git push --delete {} {tag}", args.remote);
+fn build_headlamp_release_with_map(map_path: &Path, binary_path: &Path) -> anyhow::Result<()> {
+    if binary_path.exists() {
+        std::fs::remove_file(binary_path)
+            .with_context(|| format!("failed to remove {}", binary_path.display()))?;
+    }
 
-    if args.dry_run {
-        println!("{local_cmd}");
-        if !args.no_remote {
-            println!("{remote_cmd}");
-        }
+    let status = Command::new("cargo")
+        .arg("rustc")
+        .arg("-p")
+        .arg("headlamp")
+        .arg("--release")
+        .arg("--bin")
+        .arg("headlamp")
+        .arg("--config")
+        .arg("profile.release.debug=2")
+        .arg("--")
+        .arg("-C")
+        .arg(format!("link-arg=-Wl,-map,{}", map_path.display()))
+        .status()
+        .context("failed to spawn cargo rustc")?;
+    if !status.success() {
+        bail!("cargo rustc failed (exit={:?})", status.code());
+    }
+    if !map_path.exists() {
+        bail!(
+            "expected linker map at {} but it was not created; build may have skipped linking",
+            map_path.display()
+        );
+    }
+    Ok(())
+}
+
+fn ensure_dsym_for_binary(binary_path: &Path) -> anyhow::Result<()> {
+    let produced_dsym = binary_path.with_extension("dSYM");
+    if produced_dsym.exists() {
         return Ok(());
     }
 
-    // Safety: require --yes for non-dry-run (even if someone passes --dry-run=false explicitly).
-    if !args.yes {
-        bail!(
-            "refusing to run destructive action without --yes. Re-run with --yes or use --dry-run."
-        );
-    }
-
-    run_git(["tag", "-d", &tag])?;
-    if !args.no_remote {
-        run_git(["push", "--delete", &args.remote, &tag])?;
-    }
-
-    Ok(())
-}
-
-fn release(args: ReleaseArgs) -> anyhow::Result<()> {
-    let repo_root = repo_root()?;
-    let new_version = parse_version(&args.version)?;
-
-    let headlamp_cargo_toml = repo_root.join("headlamp").join("Cargo.toml");
-    let old_version = read_cargo_package_version(&headlamp_cargo_toml).with_context(|| {
-        format!(
-            "failed to read current headlamp version from {}",
-            headlamp_cargo_toml.display()
-        )
-    })?;
-
-    // 1) Rust crate version
-    write_cargo_package_version(&headlamp_cargo_toml, &new_version)?;
-
-    // 2) npm wrapper version
-    let npm_package_json = repo_root.join("npm").join("headlamp").join("package.json");
-    write_npm_package_version(&npm_package_json, &old_version, &new_version)?;
-
-    // 3) PyPI wrapper version
-    let pypi_pyproject = repo_root
-        .join("python")
-        .join("headlamp_pypi")
-        .join("pyproject.toml");
-    write_pyproject_version(&pypi_pyproject, &old_version, &new_version)?;
-
-    // 4) Copy top-level README.md into all wrapper package READMEs.
-    let top_readme = repo_root.join("README.md");
-    let readme_contents = std::fs::read_to_string(&top_readme)
-        .with_context(|| format!("failed to read {}", top_readme.display()))?;
-    overwrite_file(
-        &repo_root.join("npm").join("headlamp").join("README.md"),
-        &readme_contents,
-    )?;
-    overwrite_file(
-        &repo_root
-            .join("python")
-            .join("headlamp_pypi")
-            .join("README.md"),
-        &readme_contents,
-    )?;
-
-    Ok(())
-}
-
-fn resolve_latest_stable_reachable_tag() -> anyhow::Result<Option<String>> {
-    // `--merged HEAD` filters to reachable tags.
-    // `--sort=-v:refname` gives version-sort order (best-effort).
-    let out = run_git_capture(["tag", "--merged", "HEAD", "--sort=-v:refname"])?;
-    let tags = out
-        .lines()
-        .map(|s| s.trim().to_string())
-        .filter(|s| !s.is_empty())
-        .collect::<Vec<_>>();
-
-    // Common GitHub-ish tag styles:
-    // - v0.1.36
-    // - 0.1.36
-    // - headlamp-v0.1.36 / release-v0.1.36 / refs/tags/v0.1.36
-    // We parse the first semver-like substring and then ignore prerelease tags.
-    let version_re =
-        Regex::new(r"(?P<prefix>^|[^0-9A-Za-z])v?(?P<ver>\d+\.\d+\.\d+(?:[-+][0-9A-Za-z\.\-]+)?)")
-            .expect("regex");
-
-    let mut best: Option<(Version, String)> = None;
-    for tag in tags {
-        let Some(cap) = version_re.captures(&tag) else {
-            continue;
-        };
-        let ver_text = cap.name("ver").unwrap().as_str();
-        let Ok(ver) = Version::parse(ver_text) else {
-            continue;
-        };
-        if !ver.pre.is_empty() {
-            // Ignore prerelease tags like v1.2.3-rc.1
-            continue;
-        }
-
-        match &best {
-            None => best = Some((ver, tag)),
-            Some((best_ver, best_tag)) => {
-                if ver > *best_ver {
-                    best = Some((ver, tag));
-                } else if ver == *best_ver {
-                    // Prefer canonical tags if multiple represent the same version.
-                    let canonical_v = format!("v{}", best_ver);
-                    let is_tag_canonical = tag == canonical_v || tag == best_ver.to_string();
-                    let is_best_canonical =
-                        best_tag == &canonical_v || best_tag == &best_ver.to_string();
-                    let should_replace = (is_tag_canonical && !is_best_canonical)
-                        || (is_tag_canonical == is_best_canonical && tag.len() < best_tag.len());
-                    if should_replace {
-                        best = Some((ver, tag));
-                    }
-                }
-            }
-        }
-    }
-
-    Ok(best.map(|(_, tag)| tag))
-}
-
-fn run_git(args: impl IntoIterator<Item = impl AsRef<str>>) -> anyhow::Result<()> {
-    let mut cmd = Command::new("git");
-    for a in args {
-        cmd.arg(a.as_ref());
-    }
-    let status = cmd.status().context("failed to spawn git")?;
+    let status = Command::new("xcrun")
+        .arg("dsymutil")
+        .arg("-o")
+        .arg(&produced_dsym)
+        .arg(binary_path)
+        .status()
+        .context("failed to spawn dsymutil")?;
     if !status.success() {
-        bail!("git command failed (exit={:?})", status.code());
+        bail!("dsymutil failed (exit={:?})", status.code());
     }
     Ok(())
 }
 
-fn run_git_capture(args: impl IntoIterator<Item = impl AsRef<str>>) -> anyhow::Result<String> {
-    let mut cmd = Command::new("git");
-    for a in args {
-        cmd.arg(a.as_ref());
+fn format_bytes(bytes: u64) -> String {
+    const KIB: f64 = 1024.0;
+    const MIB: f64 = 1024.0 * 1024.0;
+
+    let bytes_f64 = bytes as f64;
+    if bytes_f64 >= MIB {
+        return format!("{:.2} MiB", bytes_f64 / MIB);
     }
-    let output = cmd
-        .stdout(Stdio::piped())
-        .stderr(Stdio::piped())
-        .output()
-        .context("failed to spawn git")?;
-    if !output.status.success() {
-        let stderr = String::from_utf8_lossy(&output.stderr);
-        bail!(
-            "git command failed (exit={:?}): {stderr}",
-            output.status.code()
-        );
+    if bytes_f64 >= KIB {
+        return format!("{:.2} KiB", bytes_f64 / KIB);
     }
-    Ok(String::from_utf8_lossy(&output.stdout).to_string())
-}
-
-fn repo_root() -> anyhow::Result<PathBuf> {
-    let manifest_dir = PathBuf::from(env!("CARGO_MANIFEST_DIR"));
-    let repo_root = manifest_dir
-        .parent()
-        .context("xtask: failed to locate repo root (no parent of CARGO_MANIFEST_DIR)")?;
-    Ok(repo_root.to_path_buf())
-}
-
-fn parse_version(input: &str) -> anyhow::Result<Version> {
-    let s = input.trim().trim_start_matches('v');
-    let v = Version::parse(s).with_context(|| format!("invalid semver version: {input}"))?;
-    Ok(v)
-}
-
-fn read_cargo_package_version(path: &Path) -> anyhow::Result<Version> {
-    let text = std::fs::read_to_string(path).with_context(|| format!("read {}", path.display()))?;
-    let re =
-        Regex::new(r#"(?m)^\s*\[package\]\s*$[\s\S]*?^\s*version\s*=\s*"([^"]+)""#).expect("regex");
-    let caps = re
-        .captures(&text)
-        .with_context(|| format!("no [package].version found in {}", path.display()))?;
-    let ver_text = caps.get(1).unwrap().as_str();
-    Version::parse(ver_text)
-        .with_context(|| format!("failed to parse [package].version in {}", path.display()))
-}
-
-fn write_cargo_package_version(path: &Path, new_version: &Version) -> anyhow::Result<()> {
-    let text = std::fs::read_to_string(path).with_context(|| format!("read {}", path.display()))?;
-    let re = Regex::new(r#"(?m)^(\s*version\s*=\s*")([^"]+)(")\s*$"#).expect("regex");
-    // Replace only within the first [package] stanza by slicing.
-    let pkg_re = Regex::new(r#"(?m)^\s*\[package\]\s*$"#).expect("regex");
-    let Some(pkg_start) = pkg_re.find(&text) else {
-        bail!("no [package] section found in {}", path.display());
-    };
-    let (head, tail) = text.split_at(pkg_start.start());
-    let replaced_tail = {
-        // Find the end of the [package] section: next [section] header or EOF.
-        let section_re = Regex::new(r#"(?m)^\s*\[[^\]]+\]\s*$"#).expect("regex");
-        let mut it = section_re.find_iter(tail);
-        let _first = it.next(); // this is [package]
-        let pkg_end = it.next().map(|m| m.start()).unwrap_or(tail.len());
-        let (pkg_block, rest) = tail.split_at(pkg_end);
-        let replaced_pkg = re
-            .replacen(pkg_block, 1, |caps: &regex::Captures<'_>| {
-                format!("{}{}{}", &caps[1], new_version, &caps[3])
-            })
-            .to_string();
-        format!("{replaced_pkg}{rest}")
-    };
-    let new_text = format!("{head}{replaced_tail}");
-    std::fs::write(path, new_text).with_context(|| format!("write {}", path.display()))?;
-    Ok(())
-}
-
-fn write_npm_package_version(
-    path: &Path,
-    old_version: &Version,
-    new_version: &Version,
-) -> anyhow::Result<()> {
-    let text = std::fs::read_to_string(path).with_context(|| format!("read {}", path.display()))?;
-    let re = Regex::new(r#""version"\s*:\s*"([^"]+)""#).expect("regex");
-    let Some(caps) = re.captures(&text) else {
-        bail!("npm: no version field found in {}", path.display());
-    };
-    let current = caps.get(1).unwrap().as_str();
-    if current != old_version.to_string() {
-        bail!(
-            "npm: version mismatch in {} (expected {}, found {})",
-            path.display(),
-            old_version,
-            current
-        );
-    }
-    let new_text = re
-        .replacen(&text, 1, format!(r#""version": "{new_version}""#))
-        .to_string();
-    std::fs::write(path, new_text).with_context(|| format!("write {}", path.display()))?;
-    Ok(())
-}
-
-fn write_pyproject_version(
-    path: &Path,
-    old_version: &Version,
-    new_version: &Version,
-) -> anyhow::Result<()> {
-    let text = std::fs::read_to_string(path).with_context(|| format!("read {}", path.display()))?;
-    let re = Regex::new(r#"(?m)^\s*version\s*=\s*"([^"]+)""#).expect("regex");
-    let Some(caps) = re.captures(&text) else {
-        bail!("pypi: no version field found in {}", path.display());
-    };
-    let current = caps.get(1).unwrap().as_str();
-    if current != old_version.to_string() {
-        bail!(
-            "pypi: version mismatch in {} (expected {}, found {})",
-            path.display(),
-            old_version,
-            current
-        );
-    }
-    let new_text = re
-        .replacen(&text, 1, format!(r#"version = "{new_version}""#))
-        .to_string();
-    std::fs::write(path, new_text).with_context(|| format!("write {}", path.display()))?;
-    Ok(())
-}
-
-fn overwrite_file(path: &Path, contents: &str) -> anyhow::Result<()> {
-    if let Some(parent) = path.parent() {
-        std::fs::create_dir_all(parent)
-            .with_context(|| format!("mkdir -p {}", parent.display()))?;
-    }
-    std::fs::write(path, contents).with_context(|| format!("write {}", path.display()))?;
-    Ok(())
+    format!("{bytes} B")
 }
