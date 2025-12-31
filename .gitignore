@@ -31,7 +31,7 @@ headlamp/tests/js_deps/package-lock.json
 **/*.egg-info/
 
 # Coverage outputs
-coverage/
+/coverage/
 
 # Local dev config (nextest, etc.)
 .config/
