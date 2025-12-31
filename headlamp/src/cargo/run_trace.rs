@@ -46,6 +46,7 @@ pub(super) fn trace_cargo_test_early_exit(
 pub(super) fn finish_cargo_test_llvm_cov_and_trace(
     repo_root: &Path,
     args: &ParsedArgs,
+    session: &crate::session::RunSession,
     started_at: Instant,
     changed_files_count: usize,
     selection: &selection::CargoSelection,
@@ -54,6 +55,7 @@ pub(super) fn finish_cargo_test_llvm_cov_and_trace(
     let final_exit = llvm_cov::finish_coverage_after_test_run(
         repo_root,
         args,
+        session,
         exit_code,
         &selection.extra_cargo_args,
     );

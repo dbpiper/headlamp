@@ -40,16 +40,42 @@ fn headlamp_cargo_target_dir(repo_root: &Path) -> PathBuf {
     repo_root.join("target").join("headlamp-cargo")
 }
 
-pub(super) fn apply_headlamp_cargo_target_dir(cmd: &mut std::process::Command, repo_root: &Path) {
-    // Respect caller-provided CARGO_TARGET_DIR (important for isolation in tests and for users
-    // who already manage their own target dirs).
-    if std::env::var_os("CARGO_TARGET_DIR").is_none() {
-        cmd.env("CARGO_TARGET_DIR", headlamp_cargo_target_dir(repo_root));
+fn headlamp_cargo_target_dir_for_session(
+    keep_artifacts: bool,
+    repo_root: &Path,
+    session: &crate::session::RunSession,
+) -> PathBuf {
+    if keep_artifacts {
+        headlamp_cargo_target_dir(repo_root)
+    } else {
+        session.subdir("cargo-target")
     }
 }
 
-pub(super) fn headlamp_cargo_target_dir_for_duct(repo_root: &Path) -> PathBuf {
+pub(super) fn apply_headlamp_cargo_target_dir(
+    cmd: &mut std::process::Command,
+    keep_artifacts: bool,
+    repo_root: &Path,
+    session: &crate::session::RunSession,
+) {
+    // Respect caller-provided CARGO_TARGET_DIR (important for isolation in tests and for users
+    // who already manage their own target dirs).
+    if std::env::var_os("CARGO_TARGET_DIR").is_none() {
+        cmd.env(
+            "CARGO_TARGET_DIR",
+            headlamp_cargo_target_dir_for_session(keep_artifacts, repo_root, session),
+        );
+    }
+}
+
+pub(super) fn headlamp_cargo_target_dir_for_duct(
+    keep_artifacts: bool,
+    repo_root: &Path,
+    session: &crate::session::RunSession,
+) -> PathBuf {
     std::env::var_os("CARGO_TARGET_DIR")
         .map(PathBuf::from)
-        .unwrap_or_else(|| headlamp_cargo_target_dir(repo_root))
+        .unwrap_or_else(|| {
+            headlamp_cargo_target_dir_for_session(keep_artifacts, repo_root, session)
+        })
 }

@@ -8,6 +8,7 @@ use super::helpers::{
 
 static HEADLAMP_FLAGS: Lazy<std::collections::HashSet<&'static str>> = Lazy::new(|| {
     [
+        "--keepArtifacts",
         "--coverage",
         "--coverage.abortOnFailure",
         "--coverage-ui",
@@ -74,6 +75,7 @@ static TAKES_VALUE: Lazy<std::collections::HashSet<&'static str>> = Lazy::new(||
 
 static BOOL_FLAGS: Lazy<std::collections::HashSet<&'static str>> = Lazy::new(|| {
     [
+        "--keepArtifacts",
         "--coverage",
         "--coverage.abortOnFailure",
         "--onlyFailures",
@@ -104,6 +106,7 @@ fn append_basic_config_tokens(tokens: &mut Vec<String>, cfg: &HeadlampConfig) {
     trimmed(cfg.bootstrap_command.as_deref())
         .into_iter()
         .for_each(|cmd| tokens.push(format!("--bootstrapCommand={cmd}")));
+    push_bool_flag(tokens, cfg.keep_artifacts == Some(true), "--keepArtifacts");
     push_bool_flag(tokens, cfg.sequential == Some(true), "--sequential");
     push_bool_flag(tokens, cfg.watch == Some(true), "--watch");
     push_bool_flag(tokens, cfg.ci == Some(true), "--ci");

@@ -64,12 +64,16 @@ fn print_runner_tail_if_failed_without_tests(
     last_lines.into_iter().for_each(|line| eprintln!("{line}"));
 }
 
-pub fn run_cargo_test(repo_root: &Path, args: &ParsedArgs) -> Result<i32, RunError> {
+pub fn run_cargo_test(
+    repo_root: &Path,
+    args: &ParsedArgs,
+    session: &crate::session::RunSession,
+) -> Result<i32, RunError> {
     let started_at = Instant::now();
     run_optional_bootstrap(repo_root, args)?;
     let changed = changed_files_for_args(repo_root, args)?;
     let selection = selection::derive_cargo_selection(repo_root, args, &changed);
-    if early_exit_for_zero_changed_selection_cargo_test(repo_root, args, &selection) {
+    if early_exit_for_zero_changed_selection_cargo_test(repo_root, args, session, &selection) {
         run_trace::trace_cargo_test_early_exit(
             repo_root,
             args,
@@ -79,17 +83,20 @@ pub fn run_cargo_test(repo_root: &Path, args: &ParsedArgs) -> Result<i32, RunErr
         );
         return Ok(0);
     }
-    if let Some(exit_code) = maybe_run_cargo_test_with_llvm_cov(repo_root, args, &selection)? {
+    if let Some(exit_code) =
+        maybe_run_cargo_test_with_llvm_cov(repo_root, args, session, &selection)?
+    {
         return run_trace::finish_cargo_test_llvm_cov_and_trace(
             repo_root,
             args,
+            session,
             started_at,
             changed.len(),
             &selection,
             exit_code,
         );
     }
-    let run = run_cargo_test_streaming(repo_root, args, &selection.extra_cargo_args)?;
+    let run = run_cargo_test_streaming(repo_root, args, session, &selection.extra_cargo_args)?;
     print_runner_tail_if_failed_without_tests(run.exit_code, &run.model, &run.tail);
     maybe_print_rendered_model(repo_root, args, run.exit_code, &run.model);
     if args.coverage_abort_on_failure && run.exit_code != 0 {
@@ -102,7 +109,7 @@ pub fn run_cargo_test(repo_root: &Path, args: &ParsedArgs) -> Result<i32, RunErr
             run.exit_code,
         ));
     }
-    let final_exit = maybe_print_lcov_and_adjust_exit(repo_root, args, run.exit_code);
+    let final_exit = maybe_print_lcov_and_adjust_exit(repo_root, args, session, run.exit_code);
     run_trace::trace_cargo_test_final_exit(
         repo_root,
         args,
@@ -117,6 +124,7 @@ pub fn run_cargo_test(repo_root: &Path, args: &ParsedArgs) -> Result<i32, RunErr
 fn early_exit_for_zero_changed_selection_cargo_test(
     repo_root: &Path,
     args: &ParsedArgs,
+    session: &crate::session::RunSession,
     selection: &selection::CargoSelection,
 ) -> bool {
     let should_early_exit = selection.changed_selection_attempted
@@ -146,7 +154,7 @@ fn early_exit_for_zero_changed_selection_cargo_test(
         println!("{rendered}");
     }
     let _ = if args.collect_coverage && args.coverage_ui != CoverageUi::Jest {
-        coverage::print_lcov(repo_root, args)
+        coverage::print_lcov(repo_root, args, session)
     } else {
         false
     };
@@ -156,13 +164,18 @@ fn early_exit_for_zero_changed_selection_cargo_test(
 fn maybe_run_cargo_test_with_llvm_cov(
     repo_root: &Path,
     args: &ParsedArgs,
+    session: &crate::session::RunSession,
     selection: &selection::CargoSelection,
 ) -> Result<Option<i32>, RunError> {
-    if !(args.collect_coverage && coverage::has_cargo_llvm_cov(repo_root)) {
+    if !(args.collect_coverage && coverage::has_cargo_llvm_cov(repo_root, args, session)) {
         return Ok(None);
     }
-    let exit_code =
-        llvm_cov::run_cargo_llvm_cov_test_and_render(repo_root, args, &selection.extra_cargo_args)?;
+    let exit_code = llvm_cov::run_cargo_llvm_cov_test_and_render(
+        repo_root,
+        args,
+        session,
+        &selection.extra_cargo_args,
+    )?;
     Ok(Some(exit_code))
 }
 
@@ -176,6 +189,7 @@ struct CargoTestRunOutput {
 fn run_cargo_test_streaming(
     repo_root: &Path,
     args: &ParsedArgs,
+    session: &crate::session::RunSession,
     extra_cargo_args: &[String],
 ) -> Result<CargoTestRunOutput, RunError> {
     let mode = live_progress_mode(
@@ -184,7 +198,7 @@ fn run_cargo_test_streaming(
     );
     let live_progress = LiveProgress::start(1, mode);
     let run_start = Instant::now();
-    let cmd = build_cargo_test_command(repo_root, args, extra_cargo_args);
+    let cmd = build_cargo_test_command(repo_root, args, session, extra_cargo_args);
     headlamp_core::diagnostics_trace::maybe_write_run_trace(
         repo_root,
         "cargo-test",
@@ -217,6 +231,7 @@ fn run_cargo_test_streaming(
 fn build_cargo_test_command(
     repo_root: &Path,
     args: &ParsedArgs,
+    session: &crate::session::RunSession,
     extra_cargo_args: &[String],
 ) -> std::process::Command {
     let mut cmd = std::process::Command::new("cargo");
@@ -226,35 +241,43 @@ fn build_cargo_test_command(
         extra_cargo_args,
     ));
     cmd.current_dir(repo_root);
-    paths::apply_headlamp_cargo_target_dir(&mut cmd, repo_root);
+    paths::apply_headlamp_cargo_target_dir(&mut cmd, args.keep_artifacts, repo_root, session);
     cmd.env("RUST_BACKTRACE", "1");
     cmd.env("RUST_LIB_BACKTRACE", "1");
     cmd
 }
 
-pub fn run_cargo_nextest(repo_root: &Path, args: &ParsedArgs) -> Result<i32, RunError> {
+pub fn run_cargo_nextest(
+    repo_root: &Path,
+    args: &ParsedArgs,
+    session: &crate::session::RunSession,
+) -> Result<i32, RunError> {
     run_optional_bootstrap(repo_root, args)?;
     let changed = changed_files_for_args(repo_root, args)?;
     let selection = selection::derive_cargo_selection(repo_root, args, &changed);
-    if let Some(exit_code) = early_exit_for_zero_changed_selection(repo_root, args, &selection) {
+    if let Some(exit_code) =
+        early_exit_for_zero_changed_selection(repo_root, args, session, &selection)
+    {
         return Ok(exit_code);
     }
-    ensure_cargo_nextest_is_available(repo_root)?;
-    if let Some(exit_code) = maybe_run_nextest_with_llvm_cov(repo_root, args, &selection)? {
+    ensure_cargo_nextest_is_available(repo_root, args, session)?;
+    if let Some(exit_code) = maybe_run_nextest_with_llvm_cov(repo_root, args, session, &selection)?
+    {
         return llvm_cov::finish_coverage_after_test_run(
             repo_root,
             args,
+            session,
             exit_code,
             &selection.extra_cargo_args,
         );
     }
-    let run = run_nextest_streaming(repo_root, args, &selection.extra_cargo_args)?;
+    let run = run_nextest_streaming(repo_root, args, session, &selection.extra_cargo_args)?;
     print_runner_tail_if_failed_without_tests(run.exit_code, &run.model, &run.tail);
     maybe_print_rendered_model(repo_root, args, run.exit_code, &run.model);
     if args.coverage_abort_on_failure && run.exit_code != 0 {
         return Ok(normalize_runner_exit_code(run.exit_code));
     }
-    let final_exit = maybe_print_lcov_and_adjust_exit(repo_root, args, run.exit_code);
+    let final_exit = maybe_print_lcov_and_adjust_exit(repo_root, args, session, run.exit_code);
     Ok(final_exit)
 }
 
@@ -271,6 +294,7 @@ fn changed_files_for_args(
 fn early_exit_for_zero_changed_selection(
     repo_root: &Path,
     args: &ParsedArgs,
+    session: &crate::session::RunSession,
     selection: &selection::CargoSelection,
 ) -> Option<i32> {
     let should_early_exit = selection.changed_selection_attempted
@@ -300,15 +324,19 @@ fn early_exit_for_zero_changed_selection(
         println!("{rendered}");
     }
     let thresholds_failed = if args.collect_coverage && args.coverage_ui != CoverageUi::Jest {
-        coverage::print_lcov(repo_root, args)
+        coverage::print_lcov(repo_root, args, session)
     } else {
         false
     };
     Some(thresholds_failed as i32)
 }
 
-fn ensure_cargo_nextest_is_available(repo_root: &Path) -> Result<(), RunError> {
-    coverage::has_cargo_nextest(repo_root)
+fn ensure_cargo_nextest_is_available(
+    repo_root: &Path,
+    args: &ParsedArgs,
+    session: &crate::session::RunSession,
+) -> Result<(), RunError> {
+    coverage::has_cargo_nextest(repo_root, args, session)
         .then_some(())
         .ok_or_else(|| RunError::MissingRunner {
             runner: "cargo-nextest".to_string(),
@@ -319,14 +347,16 @@ fn ensure_cargo_nextest_is_available(repo_root: &Path) -> Result<(), RunError> {
 fn maybe_run_nextest_with_llvm_cov(
     repo_root: &Path,
     args: &ParsedArgs,
+    session: &crate::session::RunSession,
     selection: &selection::CargoSelection,
 ) -> Result<Option<i32>, RunError> {
-    if !(args.collect_coverage && coverage::has_cargo_llvm_cov(repo_root)) {
+    if !(args.collect_coverage && coverage::has_cargo_llvm_cov(repo_root, args, session)) {
         return Ok(None);
     }
     let exit_code = llvm_cov::run_cargo_llvm_cov_nextest_and_render(
         repo_root,
         args,
+        session,
         &selection.extra_cargo_args,
     )?;
     Ok(Some(exit_code))
@@ -342,6 +372,7 @@ struct NextestRunOutput {
 fn run_nextest_streaming(
     repo_root: &Path,
     args: &ParsedArgs,
+    session: &crate::session::RunSession,
     extra_cargo_args: &[String],
 ) -> Result<NextestRunOutput, RunError> {
     let mode = live_progress_mode(
@@ -350,7 +381,7 @@ fn run_nextest_streaming(
     );
     let live_progress = LiveProgress::start(1, mode);
     let run_start = Instant::now();
-    let cmd = build_nextest_command(repo_root, args, extra_cargo_args);
+    let cmd = build_nextest_command(repo_root, args, session, extra_cargo_args);
     headlamp_core::diagnostics_trace::maybe_write_run_trace(
         repo_root,
         "cargo-nextest",
@@ -382,6 +413,7 @@ fn run_nextest_streaming(
 fn build_nextest_command(
     repo_root: &Path,
     args: &ParsedArgs,
+    session: &crate::session::RunSession,
     extra_cargo_args: &[String],
 ) -> std::process::Command {
     let mut cmd = std::process::Command::new("cargo");
@@ -391,7 +423,7 @@ fn build_nextest_command(
         extra_cargo_args,
     ));
     cmd.current_dir(repo_root);
-    paths::apply_headlamp_cargo_target_dir(&mut cmd, repo_root);
+    paths::apply_headlamp_cargo_target_dir(&mut cmd, args.keep_artifacts, repo_root, session);
     cmd.env("NEXTEST_EXPERIMENTAL_LIBTEST_JSON", "1");
     cmd.env("RUST_BACKTRACE", "1");
     cmd.env("RUST_LIB_BACKTRACE", "1");
@@ -417,9 +449,14 @@ fn maybe_print_rendered_model(
     }
 }
 
-fn maybe_print_lcov_and_adjust_exit(repo_root: &Path, args: &ParsedArgs, exit_code: i32) -> i32 {
+fn maybe_print_lcov_and_adjust_exit(
+    repo_root: &Path,
+    args: &ParsedArgs,
+    session: &crate::session::RunSession,
+    exit_code: i32,
+) -> i32 {
     let thresholds_failed = if args.collect_coverage && args.coverage_ui != CoverageUi::Jest {
-        coverage::print_lcov(repo_root, args)
+        coverage::print_lcov(repo_root, args, session)
     } else {
         false
     };

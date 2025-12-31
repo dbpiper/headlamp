@@ -61,12 +61,17 @@ struct JestRunContext {
     related_selection: headlamp_core::selection::related_tests::RelatedTestSelection,
     directness_rank: std::collections::BTreeMap<String, i64>,
     out_json_base: PathBuf,
+    coverage_root: PathBuf,
     name_pattern_only_for_discovery: bool,
     base_cmd_args: Vec<String>,
     mode: crate::live_progress::LiveProgressMode,
 }
 
-fn build_jest_run_context(repo_root: &Path, args: &ParsedArgs) -> Result<JestRunContext, RunError> {
+fn build_jest_run_context(
+    repo_root: &Path,
+    args: &ParsedArgs,
+    session: &crate::session::RunSession,
+) -> Result<JestRunContext, RunError> {
     run_bootstrap_if_configured(repo_root, args)?;
     let jest_bin = ensure_jest_bin_exists(repo_root)?;
     let selection_paths_abs = selection::selection_paths_abs(repo_root, args)?;
@@ -105,8 +110,13 @@ fn build_jest_run_context(repo_root: &Path, args: &ParsedArgs) -> Result<JestRun
         args.no_cache,
         &related_selection.selected_test_paths_abs,
     )?;
-    let tmp = std::env::temp_dir().join("headlamp").join("jest");
+    let tmp = session.subdir("jest");
     let (reporter_path, setup_path, out_json_base) = write_jest_assets(&tmp)?;
+    let coverage_root = if args.keep_artifacts {
+        repo_root.join("coverage")
+    } else {
+        session.subdir("coverage")
+    };
     let name_pattern_only_for_discovery =
         bridge::should_skip_run_tests_by_path_for_name_pattern_only(args, &selection_paths_abs);
     let base_cmd_args =
@@ -123,6 +133,7 @@ fn build_jest_run_context(repo_root: &Path, args: &ParsedArgs) -> Result<JestRun
         related_selection,
         directness_rank,
         out_json_base,
+        coverage_root,
         name_pattern_only_for_discovery,
         base_cmd_args,
         mode,
@@ -167,9 +178,13 @@ fn write_jest_run_trace(
     );
 }
 
-pub fn run_jest(repo_root: &Path, args: &ParsedArgs) -> Result<i32, RunError> {
+pub fn run_jest(
+    repo_root: &Path,
+    args: &ParsedArgs,
+    session: &crate::session::RunSession,
+) -> Result<i32, RunError> {
     let started_at = std::time::Instant::now();
-    let ctx = build_jest_run_context(repo_root, args)?;
+    let ctx = build_jest_run_context(repo_root, args, session)?;
     let per_project_results = project_run::run_projects(project_run::RunProjectsArgs {
         repo_root,
         args,
@@ -181,11 +196,18 @@ pub fn run_jest(repo_root: &Path, args: &ParsedArgs) -> Result<i32, RunError> {
         selection_paths_abs: &ctx.selection_paths_abs,
         name_pattern_only_for_discovery: ctx.name_pattern_only_for_discovery,
         out_json_base: &ctx.out_json_base,
+        coverage_root: &ctx.coverage_root,
         mode: ctx.mode,
     })?;
     let aggregated = aggregate_project_runs(per_project_results);
     print_jest_run_output(repo_root, args, &ctx.directness_rank, &aggregated);
-    let exit = maybe_collect_coverage(repo_root, args, &ctx.selection_paths_abs, &aggregated)?;
+    let exit = maybe_collect_coverage(
+        repo_root,
+        &ctx.coverage_root,
+        args,
+        &ctx.selection_paths_abs,
+        &aggregated,
+    )?;
     let counts = build_jest_run_trace_counts(&ctx);
     write_jest_run_trace(repo_root, args, started_at, &ctx.jest_bin, counts, exit);
     Ok(exit)
@@ -427,6 +449,7 @@ fn print_from_raw_output(
 
 fn maybe_collect_coverage(
     repo_root: &Path,
+    coverage_root: &Path,
     args: &ParsedArgs,
     selection_paths_abs: &[String],
     aggregated: &AggregatedProjectRuns,
@@ -436,6 +459,7 @@ fn maybe_collect_coverage(
     }
     coverage::collect_and_print_coverage(coverage::CollectCoverageArgs {
         repo_root,
+        coverage_root,
         args,
         selection_paths_abs,
         coverage_failure_lines: &aggregated.coverage_failure_lines,

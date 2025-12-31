@@ -48,16 +48,18 @@ fn main() {
     }
     let (runner, argv) = extract_runner(&argv0);
     let cwd = std::env::current_dir().unwrap_or_else(|_| std::path::PathBuf::from("."));
-    let repo_root = headlamp::config::find_repo_root(&cwd);
-    let parsed = build_parsed_args(&repo_root, &argv);
+    let config_root = headlamp::config::find_repo_root(&cwd);
+    let parsed = build_parsed_args(&config_root, &argv);
+    let run_root = resolve_run_root(runner, &cwd, &parsed);
     apply_ci_env(&parsed);
     validate_watch_ci(&parsed);
-    maybe_print_verbose_startup(runner, &repo_root, &parsed);
-    let mut run_once_closure = || run_once(runner, &repo_root, &parsed);
+    maybe_print_verbose_startup(runner, &run_root, &parsed);
+    let user_cache_dir_was_set = std::env::var_os("HEADLAMP_CACHE_DIR").is_some();
+    let mut run_once_closure = || run_once(runner, &run_root, &parsed, user_cache_dir_was_set);
     let code = if parsed.watch {
         {
             headlamp::watch::run_polling_watch_loop(
-                &repo_root,
+                &run_root,
                 std::time::Duration::from_millis(800),
                 parsed.verbose,
                 &mut run_once_closure,
@@ -67,6 +69,30 @@ fn main() {
         run_once_closure()
     };
     std::process::exit(code);
+}
+
+fn resolve_run_root(
+    runner: Runner,
+    cwd: &std::path::Path,
+    parsed: &headlamp::args::ParsedArgs,
+) -> std::path::PathBuf {
+    let workspace_override = parsed
+        .workspace_root
+        .as_ref()
+        .map(|s| s.trim())
+        .filter(|s| !s.is_empty())
+        .map(std::path::PathBuf::from)
+        .map(|p| if p.is_absolute() { p } else { cwd.join(p) });
+
+    if let Some(p) = workspace_override {
+        return p;
+    }
+
+    match runner {
+        Runner::Pytest => headlamp::project::markers::find_pyproject_toml_root(cwd)
+            .unwrap_or_else(|| cwd.to_path_buf()),
+        _ => headlamp::config::find_repo_root(cwd),
+    }
 }
 
 fn should_print_help(argv0: &[String]) -> bool {
@@ -117,15 +143,25 @@ fn run_once(
     runner: Runner,
     repo_root: &std::path::Path,
     parsed: &headlamp::args::ParsedArgs,
+    user_cache_dir_was_set: bool,
 ) -> i32 {
+    let session = match headlamp::session::RunSession::new(parsed.keep_artifacts) {
+        Ok(session) => session,
+        Err(err) => return render_run_error(repo_root, parsed, runner, err),
+    };
+    if !parsed.keep_artifacts && !user_cache_dir_was_set {
+        let cache_dir = session.subdir("cache");
+        let _ = std::fs::create_dir_all(&cache_dir);
+        unsafe { std::env::set_var("HEADLAMP_CACHE_DIR", cache_dir) };
+    }
     match runner {
-        Runner::Jest => headlamp::jest::run_jest(repo_root, parsed)
+        Runner::Jest => headlamp::jest::run_jest(repo_root, parsed, &session)
             .unwrap_or_else(|err| render_run_error(repo_root, parsed, runner, err)),
-        Runner::Pytest => headlamp::pytest::run_pytest(repo_root, parsed)
+        Runner::Pytest => headlamp::pytest::run_pytest(repo_root, parsed, &session)
             .unwrap_or_else(|err| render_run_error(repo_root, parsed, runner, err)),
-        Runner::CargoTest => headlamp::cargo::run_cargo_test(repo_root, parsed)
+        Runner::CargoTest => headlamp::cargo::run_cargo_test(repo_root, parsed, &session)
             .unwrap_or_else(|err| render_run_error(repo_root, parsed, runner, err)),
-        Runner::CargoNextest => headlamp::cargo::run_cargo_nextest(repo_root, parsed)
+        Runner::CargoNextest => headlamp::cargo::run_cargo_nextest(repo_root, parsed, &session)
             .unwrap_or_else(|err| render_run_error(repo_root, parsed, runner, err)),
     }
 }

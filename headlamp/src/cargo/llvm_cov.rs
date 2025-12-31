@@ -22,8 +22,13 @@ use super::paths::{
 };
 use super::runner_args::{build_llvm_cov_nextest_run_args, build_llvm_cov_test_run_args};
 
-fn purge_llvm_cov_profile_artifacts(repo_root: &Path) {
-    let root = headlamp_cargo_target_dir_for_duct(repo_root).join("llvm-cov-target");
+fn purge_llvm_cov_profile_artifacts(
+    repo_root: &Path,
+    args: &ParsedArgs,
+    session: &crate::session::RunSession,
+) {
+    let root = headlamp_cargo_target_dir_for_duct(args.keep_artifacts, repo_root, session)
+        .join("llvm-cov-target");
     fn purge_dir(dir: &Path) {
         let Ok(entries) = std::fs::read_dir(dir) else {
             return;
@@ -55,6 +60,7 @@ fn purge_llvm_cov_profile_artifacts(repo_root: &Path) {
 pub(super) fn finish_coverage_after_test_run(
     repo_root: &Path,
     args: &ParsedArgs,
+    session: &crate::session::RunSession,
     exit_code: i32,
     _extra_cargo_args: &[String],
 ) -> Result<i32, RunError> {
@@ -64,11 +70,11 @@ pub(super) fn finish_coverage_after_test_run(
     {
         let _span = profile::span("cargo llvm-cov report (lcov+json)");
         let report_scope_args = extract_llvm_cov_report_scope_args(&args.runner_args);
-        run_cargo_llvm_cov_report_lcov(repo_root, &report_scope_args)?;
-        run_cargo_llvm_cov_report_json(repo_root, &report_scope_args)?;
+        run_cargo_llvm_cov_report_lcov(repo_root, args, session, &report_scope_args)?;
+        run_cargo_llvm_cov_report_json(repo_root, args, session, &report_scope_args)?;
     }
     if args.coverage_ui != CoverageUi::Jest {
-        let thresholds_failed = coverage::print_lcov(repo_root, args);
+        let thresholds_failed = coverage::print_lcov(repo_root, args, session);
         let normalized = normalize_runner_exit_code(exit_code);
         return Ok(if normalized == 0 && thresholds_failed {
             1
@@ -86,6 +92,7 @@ fn normalize_runner_exit_code(exit_code: i32) -> i32 {
 pub(super) fn run_cargo_llvm_cov_test_and_render(
     repo_root: &Path,
     args: &ParsedArgs,
+    session: &crate::session::RunSession,
     extra_cargo_args: &[String],
 ) -> Result<i32, RunError> {
     let mode = live_progress_mode(
@@ -101,17 +108,17 @@ pub(super) fn run_cargo_llvm_cov_test_and_render(
     if reuse_instrumented_build {
         // When reusing the instrumented target dir, cargo-llvm-cov can leave old profraw/profdata around.
         // Purge only those artifacts (fast) while keeping compiled instrumented objects.
-        purge_llvm_cov_profile_artifacts(repo_root);
+        purge_llvm_cov_profile_artifacts(repo_root, args, session);
     }
     let mut cmd = std::process::Command::new("cargo");
     cmd.args(build_cargo_llvm_cov_command_args(
         enable_branch_coverage,
         use_nightly,
         reuse_instrumented_build,
-        &build_llvm_cov_test_run_args(args, extra_cargo_args, reuse_instrumented_build),
+        &build_llvm_cov_test_run_args(args, session, extra_cargo_args, reuse_instrumented_build),
     ));
     cmd.current_dir(repo_root);
-    apply_headlamp_cargo_target_dir(&mut cmd, repo_root);
+    apply_headlamp_cargo_target_dir(&mut cmd, args.keep_artifacts, repo_root, session);
     cmd.env("RUST_BACKTRACE", "1");
     cmd.env("RUST_LIB_BACKTRACE", "1");
 
@@ -147,6 +154,7 @@ pub(super) fn run_cargo_llvm_cov_test_and_render(
 pub(super) fn run_cargo_llvm_cov_nextest_and_render(
     repo_root: &Path,
     args: &ParsedArgs,
+    session: &crate::session::RunSession,
     extra_cargo_args: &[String],
 ) -> Result<i32, RunError> {
     let mode = live_progress_mode(
@@ -160,17 +168,17 @@ pub(super) fn run_cargo_llvm_cov_nextest_and_render(
     let enable_branch_coverage = use_nightly;
     let reuse_instrumented_build = !args.ci;
     if reuse_instrumented_build {
-        purge_llvm_cov_profile_artifacts(repo_root);
+        purge_llvm_cov_profile_artifacts(repo_root, args, session);
     }
     let mut cmd = std::process::Command::new("cargo");
     cmd.args(build_cargo_llvm_cov_command_args(
         enable_branch_coverage,
         use_nightly,
         reuse_instrumented_build,
-        &build_llvm_cov_nextest_run_args(args, extra_cargo_args, reuse_instrumented_build),
+        &build_llvm_cov_nextest_run_args(args, session, extra_cargo_args, reuse_instrumented_build),
     ));
     cmd.current_dir(repo_root);
-    apply_headlamp_cargo_target_dir(&mut cmd, repo_root);
+    apply_headlamp_cargo_target_dir(&mut cmd, args.keep_artifacts, repo_root, session);
     cmd.env("NEXTEST_EXPERIMENTAL_LIBTEST_JSON", "1");
     cmd.env("RUST_BACKTRACE", "1");
     cmd.env("RUST_LIB_BACKTRACE", "1");
@@ -249,16 +257,27 @@ fn extract_llvm_cov_report_scope_args(runner_args: &[String]) -> Vec<String> {
 
 fn run_cargo_llvm_cov_report_lcov(
     repo_root: &Path,
+    args: &ParsedArgs,
+    session: &crate::session::RunSession,
     report_scope_args: &[String],
 ) -> Result<(), RunError> {
-    let cargo_target_dir = headlamp_cargo_target_dir_for_duct(repo_root);
+    let cargo_target_dir =
+        headlamp_cargo_target_dir_for_duct(args.keep_artifacts, repo_root, session);
     let use_nightly = can_use_nightly(repo_root);
     let enable_branch_coverage = use_nightly;
+    let out_path = if args.keep_artifacts {
+        repo_root.join("coverage").join("lcov.info")
+    } else {
+        session.subdir("coverage").join("rust").join("lcov.info")
+    };
+    if let Some(parent) = out_path.parent() {
+        std::fs::create_dir_all(parent).map_err(RunError::Io)?;
+    }
     let mut subcommand_args: Vec<String> = vec![
         "report".to_string(),
         "--lcov".to_string(),
         "--output-path".to_string(),
-        "coverage/lcov.info".to_string(),
+        out_path.to_string_lossy().to_string(),
         "--color".to_string(),
         "never".to_string(),
     ];
@@ -292,16 +311,30 @@ fn run_cargo_llvm_cov_report_lcov(
 
 fn run_cargo_llvm_cov_report_json(
     repo_root: &Path,
+    args: &ParsedArgs,
+    session: &crate::session::RunSession,
     report_scope_args: &[String],
 ) -> Result<(), RunError> {
-    let cargo_target_dir = headlamp_cargo_target_dir_for_duct(repo_root);
+    let cargo_target_dir =
+        headlamp_cargo_target_dir_for_duct(args.keep_artifacts, repo_root, session);
     let use_nightly = can_use_nightly(repo_root);
     let enable_branch_coverage = use_nightly;
+    let out_path = if args.keep_artifacts {
+        repo_root.join("coverage").join("coverage.json")
+    } else {
+        session
+            .subdir("coverage")
+            .join("rust")
+            .join("coverage.json")
+    };
+    if let Some(parent) = out_path.parent() {
+        std::fs::create_dir_all(parent).map_err(RunError::Io)?;
+    }
     let mut subcommand_args: Vec<String> = vec![
         "report".to_string(),
         "--json".to_string(),
         "--output-path".to_string(),
-        "coverage/coverage.json".to_string(),
+        out_path.to_string_lossy().to_string(),
         "--color".to_string(),
         "never".to_string(),
     ];

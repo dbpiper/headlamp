@@ -8,6 +8,15 @@ use clap::Parser;
 )]
 pub(super) struct HeadlampCli {
     #[arg(
+        long = "keepArtifacts",
+        default_value_t = false,
+        num_args = 0..=1,
+        default_missing_value = "true",
+        value_parser = clap::value_parser!(bool)
+    )]
+    pub(super) keep_artifacts: bool,
+
+    #[arg(
         long = "coverage",
         default_value_t = false,
         num_args = 0..=1,

@@ -351,11 +351,27 @@ pub fn read_repo_lcov_filtered(
     includes: &[String],
     excludes: &[String],
 ) -> Option<CoverageReport> {
-    let lcov = repo_root.join("coverage").join("lcov.info");
-    if !lcov.exists() {
+    read_lcov_filtered_from_path(
+        repo_root,
+        &repo_root.join("coverage").join("lcov.info"),
+        includes,
+        excludes,
+    )
+}
+
+pub fn read_lcov_filtered_from_path(
+    repo_root: &Path,
+    lcov_path: &Path,
+    includes: &[String],
+    excludes: &[String],
+) -> Option<CoverageReport> {
+    if !lcov_path.exists() {
         return None;
     }
-    let reports = read_lcov_file(&lcov).ok().into_iter().collect::<Vec<_>>();
+    let reports = read_lcov_file(lcov_path)
+        .ok()
+        .into_iter()
+        .collect::<Vec<_>>();
     let merged = merge_reports(&reports, repo_root);
     let resolved = resolve_lcov_paths_to_root(merged, repo_root);
     Some(filter_report(resolved, repo_root, includes, excludes))

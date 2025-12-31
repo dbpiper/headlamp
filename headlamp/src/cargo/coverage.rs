@@ -4,18 +4,22 @@ use duct::cmd as duct_cmd;
 
 use headlamp_core::args::ParsedArgs;
 use headlamp_core::coverage::istanbul_pretty::format_istanbul_pretty_from_lcov_report;
-use headlamp_core::coverage::lcov::read_repo_lcov_filtered;
+use headlamp_core::coverage::lcov::read_lcov_filtered_from_path;
 use headlamp_core::coverage::print::PrintOpts;
 
 use super::paths::headlamp_cargo_target_dir_for_duct;
 use crate::profile;
 
-pub(super) fn has_cargo_nextest(repo_root: &Path) -> bool {
+pub(super) fn has_cargo_nextest(
+    repo_root: &Path,
+    args: &ParsedArgs,
+    session: &crate::session::RunSession,
+) -> bool {
     duct_cmd("cargo", ["nextest", "--version"])
         .dir(repo_root)
         .env(
             "CARGO_TARGET_DIR",
-            headlamp_cargo_target_dir_for_duct(repo_root),
+            headlamp_cargo_target_dir_for_duct(args.keep_artifacts, repo_root, session),
         )
         .stdout_capture()
         .stderr_capture()
@@ -25,12 +29,16 @@ pub(super) fn has_cargo_nextest(repo_root: &Path) -> bool {
         .is_some_and(|o| o.status.success())
 }
 
-pub(super) fn has_cargo_llvm_cov(repo_root: &Path) -> bool {
+pub(super) fn has_cargo_llvm_cov(
+    repo_root: &Path,
+    args: &ParsedArgs,
+    session: &crate::session::RunSession,
+) -> bool {
     duct_cmd("cargo", ["llvm-cov", "--version"])
         .dir(repo_root)
         .env(
             "CARGO_TARGET_DIR",
-            headlamp_cargo_target_dir_for_duct(repo_root),
+            headlamp_cargo_target_dir_for_duct(args.keep_artifacts, repo_root, session),
         )
         .stdout_capture()
         .stderr_capture()
@@ -40,17 +48,42 @@ pub(super) fn has_cargo_llvm_cov(repo_root: &Path) -> bool {
         .is_some_and(|o| o.status.success())
 }
 
-pub(super) fn print_lcov(repo_root: &Path, args: &ParsedArgs) -> bool {
+pub(super) fn print_lcov(
+    repo_root: &Path,
+    args: &ParsedArgs,
+    session: &crate::session::RunSession,
+) -> bool {
+    let lcov_path = if args.keep_artifacts {
+        repo_root.join("coverage").join("lcov.info")
+    } else {
+        session.subdir("coverage").join("rust").join("lcov.info")
+    };
+    let llvm_cov_json_path = if args.keep_artifacts {
+        repo_root.join("coverage").join("coverage.json")
+    } else {
+        session
+            .subdir("coverage")
+            .join("rust")
+            .join("coverage.json")
+    };
     let filtered = {
         let _span = profile::span("read lcov + glob filter");
-        read_repo_lcov_filtered(repo_root, &args.include_globs, &args.exclude_globs)
+        read_lcov_filtered_from_path(
+            repo_root,
+            &lcov_path,
+            &args.include_globs,
+            &args.exclude_globs,
+        )
     };
     let Some(filtered) = filtered else {
         return false;
     };
     let filtered = {
         let _span = profile::span("apply statement hits (llvm-cov json)");
-        match crate::coverage::llvm_cov_json::read_repo_llvm_cov_json_statement_hits(repo_root) {
+        match crate::coverage::llvm_cov_json::read_llvm_cov_json_statement_hits_from_path(
+            repo_root,
+            &llvm_cov_json_path,
+        ) {
             Some(statement_hits_by_path) => crate::coverage::model::apply_statement_hits_to_report(
                 filtered,
                 statement_hits_by_path,

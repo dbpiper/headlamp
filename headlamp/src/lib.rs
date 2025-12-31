@@ -22,6 +22,7 @@ pub mod pytest_select;
 pub(crate) mod pythonpath;
 pub mod run;
 mod seed_match;
+pub mod session;
 pub mod streaming;
 pub mod watch;
 
@@ -47,7 +48,13 @@ mod cargo_select_test;
 #[cfg(test)]
 mod git_test;
 #[cfg(test)]
+mod pytest_artifacts_test;
+#[cfg(test)]
+mod pytest_coverage_test;
+#[cfg(test)]
 mod pytest_location_test;
+#[cfg(test)]
+mod pytest_timing_test;
 #[cfg(test)]
 mod pythonpath_test;
 

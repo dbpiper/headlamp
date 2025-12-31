@@ -57,13 +57,18 @@ pub(crate) fn build_jest_threshold_report(
     }
 }
 
-pub(super) fn coverage_dir_for_config(cfg_path: &Path) -> String {
+pub(super) fn coverage_dir_for_config_in_root(cfg_path: &Path, coverage_root: &Path) -> PathBuf {
+    coverage_root
+        .join("jest")
+        .join(coverage_dir_suffix_for_config(cfg_path))
+}
+
+fn coverage_dir_suffix_for_config(cfg_path: &Path) -> String {
     let base = cfg_path
         .file_name()
         .and_then(|n| n.to_str())
         .unwrap_or("default");
-    let safe = base
-        .chars()
+    base.chars()
         .map(|c| {
             if c.is_ascii_alphanumeric() || matches!(c, '.' | '_' | '-') {
                 c
@@ -71,8 +76,7 @@ pub(super) fn coverage_dir_for_config(cfg_path: &Path) -> String {
                 '_'
             }
         })
-        .collect::<String>();
-    format!("coverage/jest/{safe}")
+        .collect::<String>()
 }
 
 pub(super) fn collect_coverage_from_args(
@@ -190,6 +194,7 @@ pub(crate) fn should_print_coverage_threshold_failure_summary(
 
 pub(super) struct CollectCoverageArgs<'a> {
     pub(super) repo_root: &'a Path,
+    pub(super) coverage_root: &'a Path,
     pub(super) args: &'a ParsedArgs,
     pub(super) selection_paths_abs: &'a [String],
     pub(super) coverage_failure_lines: &'a IndexSet<String>,
@@ -202,8 +207,8 @@ struct CoverageInputs {
     resolved_for_fallback_render: Option<CoverageReport>,
 }
 
-fn collect_coverage_inputs(repo_root: &Path) -> CoverageInputs {
-    let jest_cov_dir = repo_root.join("coverage").join("jest");
+fn collect_coverage_inputs(repo_root: &Path, coverage_root: &Path) -> CoverageInputs {
+    let jest_cov_dir = coverage_root.join("jest");
     let json_tree = read_istanbul_coverage_tree(&jest_cov_dir);
     let json_reports = json_tree
         .into_iter()
@@ -212,7 +217,7 @@ fn collect_coverage_inputs(repo_root: &Path) -> CoverageInputs {
     let merged_json =
         (!json_reports.is_empty()).then(|| merge_istanbul_reports(&json_reports, repo_root));
 
-    let lcov_candidates = collect_lcov_candidates(repo_root, &jest_cov_dir);
+    let lcov_candidates = collect_lcov_candidates(coverage_root, &jest_cov_dir);
     let reports = lcov_candidates
         .iter()
         .filter(|path| path.exists())
@@ -233,8 +238,8 @@ fn collect_coverage_inputs(repo_root: &Path) -> CoverageInputs {
     }
 }
 
-fn collect_lcov_candidates(repo_root: &Path, jest_cov_dir: &Path) -> Vec<PathBuf> {
-    let mut lcov_candidates: Vec<PathBuf> = vec![repo_root.join("coverage").join("lcov.info")];
+fn collect_lcov_candidates(coverage_root: &Path, jest_cov_dir: &Path) -> Vec<PathBuf> {
+    let mut lcov_candidates: Vec<PathBuf> = vec![coverage_root.join("lcov.info")];
     if jest_cov_dir.exists() {
         WalkBuilder::new(jest_cov_dir)
             .hidden(false)
@@ -312,13 +317,14 @@ fn apply_thresholds_and_exit_code(
 pub(super) fn collect_and_print_coverage(args: CollectCoverageArgs<'_>) -> Result<i32, RunError> {
     let CollectCoverageArgs {
         repo_root,
+        coverage_root,
         args,
         selection_paths_abs,
         coverage_failure_lines,
         exit_code,
     } = args;
 
-    let inputs = collect_coverage_inputs(repo_root);
+    let inputs = collect_coverage_inputs(repo_root, coverage_root);
     maybe_print_coverage(repo_root, args, selection_paths_abs, &inputs);
     let final_exit = apply_thresholds_and_exit_code(
         args,

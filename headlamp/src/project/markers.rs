@@ -45,6 +45,25 @@ pub fn find_project_root(start_path: &Path) -> Option<ProjectRoot> {
     }
 }
 
+pub fn find_pyproject_toml_root(start_path: &Path) -> Option<PathBuf> {
+    let mut cursor = if start_path.is_dir() {
+        start_path.to_path_buf()
+    } else {
+        start_path.parent()?.to_path_buf()
+    };
+
+    loop {
+        if is_file(&cursor.join("pyproject.toml")) {
+            return Some(cursor);
+        }
+        cursor = cursor.parent()?.to_path_buf();
+    }
+}
+
 fn is_file(path: &Path) -> bool {
     std::fs::metadata(path).ok().is_some_and(|m| m.is_file())
 }
+
+#[cfg(test)]
+#[path = "markers_pyproject_test.rs"]
+mod markers_pyproject_test;

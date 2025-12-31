@@ -85,12 +85,18 @@ pub(super) fn base_flag(t: &str) -> &str {
 }
 
 pub(super) fn is_test_like_token(candidate: &str) -> bool {
+    if candidate.starts_with('-') {
+        return false;
+    }
     let normalized = normalize_token_path_text(candidate);
     let lower = normalized.to_ascii_lowercase();
     TEST_LIKE_GLOBSET.is_match(Path::new(&lower))
 }
 
 pub(super) fn is_path_like(candidate: &str) -> bool {
+    if candidate.starts_with('-') {
+        return false;
+    }
     let normalized = normalize_token_path_text(candidate);
     let normalized = normalized.as_ref();
     let has_sep = normalized.contains('/');

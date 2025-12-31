@@ -6,8 +6,17 @@ use serde_json::Value;
 pub fn read_repo_coveragepy_json_statement_totals(
     repo_root: &Path,
 ) -> Option<BTreeMap<String, (u32, u32)>> {
-    let json_path = repo_root.join("coverage").join("coverage.json");
-    let raw = std::fs::read_to_string(&json_path).ok()?;
+    read_coveragepy_json_statement_totals_from_path(
+        repo_root,
+        &repo_root.join("coverage").join("coverage.json"),
+    )
+}
+
+pub fn read_coveragepy_json_statement_totals_from_path(
+    repo_root: &Path,
+    json_path: &Path,
+) -> Option<BTreeMap<String, (u32, u32)>> {
+    let raw = std::fs::read_to_string(json_path).ok()?;
     parse_coveragepy_json_statement_totals(&raw, repo_root).ok()
 }
 

@@ -2,10 +2,6 @@ use std::path::{Path, PathBuf};
 use std::process::Command;
 
 use headlamp_core::args::ParsedArgs;
-use headlamp_core::coverage::istanbul_pretty::format_istanbul_pretty_from_lcov_report;
-use headlamp_core::coverage::lcov::read_repo_lcov_filtered;
-use headlamp_core::coverage::model::apply_statement_totals_to_report;
-use headlamp_core::coverage::print::PrintOpts;
 use headlamp_core::format::ctx::make_ctx;
 use headlamp_core::format::vitest::render_vitest_from_test_model;
 use headlamp_core::test_model::{TestLocation, TestRunModel};
@@ -21,17 +17,34 @@ use crate::streaming::run_streaming_capture_tail_merged;
 const PYTEST_PLUGIN_BYTES: &[u8] = include_bytes!("../assets/pytest/headlamp_pytest_plugin.py");
 
 mod adapter;
+pub(crate) mod coverage;
 use adapter::PytestAdapter;
 
-pub fn run_pytest(repo_root: &Path, args: &ParsedArgs) -> Result<i32, RunError> {
+pub fn run_pytest(
+    repo_root: &Path,
+    args: &ParsedArgs,
+    session: &crate::session::RunSession,
+) -> Result<i32, RunError> {
     let started_at = std::time::Instant::now();
+    let started_at_unix_ms = std::time::SystemTime::now()
+        .duration_since(std::time::UNIX_EPOCH)
+        .map(|duration| duration.as_millis() as u64)
+        .unwrap_or(0);
     run_bootstrap_if_configured(repo_root, args)?;
     let selected = resolve_pytest_selection(repo_root, args)?;
     let pytest_bin = pytest_bin();
-    let (_tmp, pythonpath) = setup_pytest_plugin(repo_root)?;
-    let cmd_args = build_pytest_cmd_args(args, &selected);
-    let (exit_code, model) =
-        run_pytest_streaming(repo_root, args, pytest_bin, cmd_args, pythonpath)?;
+    let (_tmp, pythonpath) = setup_pytest_plugin(repo_root, session)?;
+    let cmd_args = build_pytest_cmd_args(args, session, &selected);
+    if args.collect_coverage {
+        coverage::ensure_cov_report_output_directories(repo_root, &cmd_args)?;
+    }
+    let (exit_code, mut model) =
+        run_pytest_streaming(repo_root, args, session, pytest_bin, cmd_args, pythonpath)?;
+    apply_run_timing_to_model(
+        &mut model,
+        started_at_unix_ms,
+        started_at.elapsed().as_millis() as u64,
+    );
     maybe_print_rendered_pytest_run(repo_root, args, exit_code, &model);
     if args.coverage_abort_on_failure && exit_code != 0 {
         headlamp_core::diagnostics_trace::maybe_write_run_trace(
@@ -48,7 +61,7 @@ pub fn run_pytest(repo_root: &Path, args: &ParsedArgs) -> Result<i32, RunError> 
         );
         return Ok(exit_code);
     }
-    let final_exit = maybe_collect_pytest_coverage(repo_root, args, exit_code)?;
+    let final_exit = coverage::maybe_collect_pytest_coverage(repo_root, args, session, exit_code)?;
     headlamp_core::diagnostics_trace::maybe_write_run_trace(
         repo_root,
         "pytest",
@@ -77,8 +90,11 @@ fn pytest_bin() -> &'static str {
     cfg!(windows).then_some("pytest.exe").unwrap_or("pytest")
 }
 
-fn setup_pytest_plugin(repo_root: &Path) -> Result<(PathBuf, String), RunError> {
-    let tmp = std::env::temp_dir().join("headlamp").join("pytest");
+fn setup_pytest_plugin(
+    repo_root: &Path,
+    session: &crate::session::RunSession,
+) -> Result<(PathBuf, String), RunError> {
+    let tmp = session.subdir("pytest");
     let _plugin_path = write_asset(&tmp.join("headlamp_pytest_plugin.py"), PYTEST_PLUGIN_BYTES)?;
     let pythonpath = crate::pythonpath::build_pytest_pythonpath(
         repo_root,
@@ -88,7 +104,11 @@ fn setup_pytest_plugin(repo_root: &Path) -> Result<(PathBuf, String), RunError> 
     Ok((tmp, pythonpath))
 }
 
-fn build_pytest_cmd_args(args: &ParsedArgs, selected: &[String]) -> Vec<String> {
+pub(crate) fn build_pytest_cmd_args(
+    args: &ParsedArgs,
+    session: &crate::session::RunSession,
+    selected: &[String],
+) -> Vec<String> {
     let mut cmd_args: Vec<String> = vec![
         "-p".to_string(),
         "headlamp_pytest_plugin".to_string(),
@@ -97,12 +117,25 @@ fn build_pytest_cmd_args(args: &ParsedArgs, selected: &[String]) -> Vec<String> 
         "--no-summary".to_string(),
         "-q".to_string(),
     ];
-    cmd_args.extend(args.runner_args.iter().cloned());
+    if !args.keep_artifacts {
+        cmd_args.push("-p".to_string());
+        cmd_args.push("no:cacheprovider".to_string());
+    }
+    cmd_args.extend(rewrite_pytest_runner_args_for_no_artifacts(args, session));
     cmd_args.extend(selected.iter().cloned());
     let has_cov = args.runner_args.iter().any(|a| a.starts_with("--cov"));
-    if args.collect_coverage && !has_cov {
-        cmd_args.push("--cov=.".to_string());
-        cmd_args.push("--cov-report=lcov:coverage/lcov.info".to_string());
+    if args.collect_coverage {
+        let has_lcov_report = cmd_args.iter().any(|a| a.starts_with("--cov-report=lcov:"))
+            || cmd_args
+                .windows(2)
+                .any(|w| w[0] == "--cov-report" && w[1].starts_with("lcov:"));
+        if !has_cov {
+            cmd_args.push("--cov=.".to_string());
+        }
+        if !has_lcov_report {
+            let lcov_path = coverage::pytest_lcov_path(args.keep_artifacts, session);
+            cmd_args.push(format!("--cov-report=lcov:{}", lcov_path.to_string_lossy()));
+        }
     }
     cmd_args
 }
@@ -110,6 +143,7 @@ fn build_pytest_cmd_args(args: &ParsedArgs, selected: &[String]) -> Vec<String> 
 fn run_pytest_streaming(
     repo_root: &Path,
     args: &ParsedArgs,
+    session: &crate::session::RunSession,
     pytest_bin: &str,
     cmd_args: Vec<String>,
     pythonpath: String,
@@ -125,6 +159,13 @@ fn run_pytest_streaming(
         .current_dir(repo_root)
         .env("CI", "1")
         .env("PYTHONPATH", pythonpath);
+    if args.collect_coverage && !args.keep_artifacts {
+        let coverage_data_path = coverage::pytest_coverage_data_path(session);
+        command.env("COVERAGE_FILE", coverage_data_path.as_os_str());
+    }
+    if !args.keep_artifacts {
+        command.env("PYTHONDONTWRITEBYTECODE", "1");
+    }
     let mut adapter = PytestAdapter::new(args.show_logs, args.ci);
     let (exit_code, _tail) =
         run_streaming_capture_tail_merged(command, &live_progress, &mut adapter, 1024 * 1024)?;
@@ -151,93 +192,14 @@ fn maybe_print_rendered_pytest_run(
     (!rendered.trim().is_empty()).then(|| println!("{rendered}"));
 }
 
-fn maybe_collect_pytest_coverage(
-    repo_root: &Path,
-    args: &ParsedArgs,
-    exit_code: i32,
-) -> Result<i32, RunError> {
-    if !args.collect_coverage {
-        return Ok(exit_code);
-    }
-    let _ = run_coveragepy_json_report(repo_root);
-    let Some(filtered) =
-        read_repo_lcov_filtered(repo_root, &args.include_globs, &args.exclude_globs)
-    else {
-        return Ok(exit_code);
-    };
-    let filtered = augment_with_coveragepy_statement_totals(repo_root, filtered);
-    let print_opts =
-        PrintOpts::for_run(args, headlamp_core::format::terminal::is_output_terminal());
-    let threshold_failure_lines = args.coverage_thresholds.as_ref().map(|thresholds| {
-        headlamp_core::coverage::thresholds::threshold_failure_lines(
-            thresholds,
-            headlamp_core::coverage::thresholds::compute_totals_from_report(&filtered),
-        )
-    });
-    let pretty = format_istanbul_pretty_from_lcov_report(
-        repo_root,
-        filtered,
-        &print_opts,
-        &[],
-        &args.include_globs,
-        &args.exclude_globs,
-        args.coverage_detail,
-    );
-    if args.coverage_ui != headlamp_core::config::CoverageUi::Jest {
-        println!("{pretty}");
-    }
-    let thresholds_failed = threshold_failure_lines.is_some_and(|lines| {
-        if lines.is_empty() {
-            return false;
-        }
-        headlamp_core::coverage::thresholds::print_threshold_failure_summary(&lines);
-        true
-    });
-    Ok(if exit_code == 0 && thresholds_failed {
-        1
-    } else {
-        exit_code
-    })
-}
-
-fn augment_with_coveragepy_statement_totals(
-    repo_root: &Path,
-    filtered: crate::coverage::model::CoverageReport,
-) -> crate::coverage::model::CoverageReport {
-    match crate::coverage::coveragepy_json::read_repo_coveragepy_json_statement_totals(repo_root)
-        .as_ref()
-    {
-        Some(statement_totals_by_path) => {
-            apply_statement_totals_to_report(filtered, statement_totals_by_path)
-        }
-        None => filtered,
-    }
-}
-
-fn run_coveragepy_json_report(repo_root: &Path) -> Result<(), RunError> {
-    let python_bin = if cfg!(windows) {
-        "python.exe"
-    } else {
-        "python"
-    };
-    let status = Command::new(python_bin)
-        .args([
-            "-m",
-            "coverage",
-            "json",
-            "-q",
-            "-o",
-            "coverage/coverage.json",
-        ])
-        .current_dir(repo_root)
-        .status()
-        .map_err(|e| RunError::Io(std::io::Error::other(e.to_string())))?;
-    status
-        .success()
-        .then_some(())
-        .ok_or_else(|| RunError::CommandFailed {
-            message: "python -m coverage json failed".to_string(),
-        })
+pub(crate) fn apply_run_timing_to_model(
+    model: &mut TestRunModel,
+    started_at_unix_ms: u64,
+    elapsed_ms: u64,
+) {
+    model.start_time = started_at_unix_ms;
+    model.aggregated.start_time = started_at_unix_ms;
+    model.aggregated.run_time_ms = Some(elapsed_ms);
 }
 
 pub(crate) fn infer_test_location_from_pytest_longrepr(
@@ -280,6 +242,36 @@ fn write_asset(path: &Path, bytes: &[u8]) -> Result<String, RunError> {
     }
     std::fs::write(path, bytes).map_err(RunError::Io)?;
     Ok(path.to_string_lossy().to_string())
+}
+
+fn rewrite_pytest_runner_args_for_no_artifacts(
+    args: &ParsedArgs,
+    session: &crate::session::RunSession,
+) -> Vec<String> {
+    if args.keep_artifacts {
+        return args.runner_args.to_vec();
+    }
+    let lcov_path = coverage::pytest_lcov_path(false, session);
+    let lcov_value = format!("lcov:{}", lcov_path.to_string_lossy());
+    let mut rewritten: Vec<String> = vec![];
+    let mut iter = args.runner_args.iter().peekable();
+    while let Some(token) = iter.next() {
+        if let Some(_old) = token.strip_prefix("--cov-report=lcov:") {
+            rewritten.push(format!("--cov-report={}", lcov_value));
+            continue;
+        }
+        if token.as_str() == "--cov-report"
+            && let Some(next) = iter.peek()
+            && next.starts_with("lcov:")
+        {
+            let _ = iter.next();
+            rewritten.push("--cov-report".to_string());
+            rewritten.push(lcov_value.clone());
+            continue;
+        }
+        rewritten.push(token.clone());
+    }
+    rewritten
 }
 
 fn resolve_pytest_selection(repo_root: &Path, args: &ParsedArgs) -> Result<Vec<String>, RunError> {

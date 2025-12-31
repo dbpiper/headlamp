@@ -2,6 +2,7 @@ use headlamp_core::args::ParsedArgs;
 
 pub(super) fn build_llvm_cov_test_run_args(
     args: &ParsedArgs,
+    session: &crate::session::RunSession,
     extra_cargo_args: &[String],
     write_lcov_report_to_file: bool,
 ) -> Vec<String> {
@@ -18,7 +19,7 @@ pub(super) fn build_llvm_cov_test_run_args(
         cmd_args.extend([
             "--lcov".to_string(),
             "--output-path".to_string(),
-            "coverage/lcov.info".to_string(),
+            lcov_output_path_token(args.keep_artifacts, session),
         ]);
     } else {
         cmd_args.push("--no-report".to_string());
@@ -50,6 +51,7 @@ pub(super) fn build_llvm_cov_test_run_args(
 
 pub(super) fn build_llvm_cov_nextest_run_args(
     args: &ParsedArgs,
+    session: &crate::session::RunSession,
     extra_cargo_args: &[String],
     write_lcov_report_to_file: bool,
 ) -> Vec<String> {
@@ -64,7 +66,12 @@ pub(super) fn build_llvm_cov_nextest_run_args(
     let is_interactive = is_interactive_nextest_progress(args);
 
     let mut cmd_args: Vec<String> = vec!["nextest".to_string()];
-    extend_llvm_cov_report_mode_args(&mut cmd_args, write_lcov_report_to_file);
+    extend_llvm_cov_report_mode_args(
+        &mut cmd_args,
+        write_lcov_report_to_file,
+        args.keep_artifacts,
+        session,
+    );
     cmd_args.extend(extra_cargo_args.iter().cloned());
     cmd_args.extend(nextest_options);
     extend_nextest_common_args(
@@ -94,15 +101,33 @@ fn is_interactive_nextest_progress(args: &ParsedArgs) -> bool {
     ) == crate::live_progress::LiveProgressMode::Interactive
 }
 
-fn extend_llvm_cov_report_mode_args(cmd_args: &mut Vec<String>, write_lcov_report_to_file: bool) {
+fn extend_llvm_cov_report_mode_args(
+    cmd_args: &mut Vec<String>,
+    write_lcov_report_to_file: bool,
+    keep_artifacts: bool,
+    session: &crate::session::RunSession,
+) {
     if write_lcov_report_to_file {
         cmd_args.extend([
             "--lcov".to_string(),
             "--output-path".to_string(),
-            "coverage/lcov.info".to_string(),
+            lcov_output_path_token(keep_artifacts, session),
         ]);
     } else {
         cmd_args.push("--no-report".to_string());
+    }
+}
+
+fn lcov_output_path_token(keep_artifacts: bool, session: &crate::session::RunSession) -> String {
+    if keep_artifacts {
+        "coverage/lcov.info".to_string()
+    } else {
+        session
+            .subdir("coverage")
+            .join("rust")
+            .join("lcov.info")
+            .to_string_lossy()
+            .to_string()
     }
 }
 

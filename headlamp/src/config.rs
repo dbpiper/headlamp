@@ -84,6 +84,8 @@ pub struct HeadlampConfig {
     pub vitest_args: Option<Vec<String>>,
     pub sequential: Option<bool>,
 
+    pub keep_artifacts: Option<bool>,
+
     pub watch: Option<bool>,
     pub ci: Option<bool>,
     pub verbose: Option<bool>,

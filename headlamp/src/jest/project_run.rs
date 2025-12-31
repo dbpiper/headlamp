@@ -14,8 +14,8 @@ use crate::streaming::run_streaming_capture_tail;
 
 use super::bridge::{config_token, filter_bridge_for_name_pattern_only};
 use super::coverage::{
-    collect_coverage_from_args, coverage_dir_for_config, ensure_watchman_disabled_by_default,
-    extract_coverage_failure_lines,
+    collect_coverage_from_args, coverage_dir_for_config_in_root,
+    ensure_watchman_disabled_by_default, extract_coverage_failure_lines,
 };
 use super::streaming::merge_console_entries_into_bridge_json;
 
@@ -30,6 +30,7 @@ struct RunProjectContext<'a> {
     selection_paths_abs: &'a [String],
     name_pattern_only_for_discovery: bool,
     out_json_base: &'a Path,
+    coverage_root: &'a Path,
 }
 
 #[derive(Debug)]
@@ -54,6 +55,7 @@ pub(super) struct RunProjectsArgs<'a> {
     pub(super) selection_paths_abs: &'a [String],
     pub(super) name_pattern_only_for_discovery: bool,
     pub(super) out_json_base: &'a Path,
+    pub(super) coverage_root: &'a Path,
     pub(super) mode: LiveProgressMode,
 }
 
@@ -69,6 +71,7 @@ pub(super) fn run_projects(args: RunProjectsArgs<'_>) -> Result<Vec<ProjectRunOu
         selection_paths_abs,
         name_pattern_only_for_discovery,
         out_json_base,
+        coverage_root,
         mode,
     } = args;
 
@@ -84,6 +87,7 @@ pub(super) fn run_projects(args: RunProjectsArgs<'_>) -> Result<Vec<ProjectRunOu
         selection_paths_abs,
         name_pattern_only_for_discovery,
         out_json_base,
+        coverage_root,
     };
     let per_project_results = run_parallel_stride(project_configs, stride, |cfg_path, index| {
         run_project_for_config(&ctx, &live_progress, cfg_path, index)
@@ -238,7 +242,7 @@ fn append_coverage_flags(cmd_args: &mut Vec<String>, cfg_path: &Path, ctx: &RunP
     });
     cmd_args.push(format!(
         "--coverageDirectory={}",
-        coverage_dir_for_config(cfg_path)
+        coverage_dir_for_config_in_root(cfg_path, ctx.coverage_root).to_string_lossy()
     ));
     cmd_args.extend(collect_coverage_from_args(
         ctx.repo_root,

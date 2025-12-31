@@ -7,6 +7,8 @@ pub struct ParsedArgs {
     pub selection_paths: Vec<String>,
     pub selection_specified: bool,
 
+    pub keep_artifacts: bool,
+
     pub watch: bool,
     pub ci: bool,
     pub verbose: bool,

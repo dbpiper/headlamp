@@ -33,6 +33,7 @@ struct CommonArgs {
     watch: bool,
     verbose: bool,
     no_cache: bool,
+    keep_artifacts: bool,
     bootstrap_command: Option<String>,
     coverage_ui: CoverageUi,
     include_globs: Vec<String>,
@@ -88,6 +89,7 @@ fn parse_common_flags(parsed_cli: &HeadlampCli, is_tty: bool) -> CommonArgs {
         watch: !ci && (parsed_cli.watch || parsed_cli.watch_all),
         verbose: parsed_cli.verbose,
         no_cache: parsed_cli.no_cache,
+        keep_artifacts: parsed_cli.keep_artifacts,
         bootstrap_command: parsed_cli.bootstrap_command.clone(),
         coverage_ui: coverage_ui_from_cli(parsed_cli),
         include_globs: parsed_cli.coverage_include.clone(),
@@ -172,6 +174,7 @@ fn build_parsed_args(common: CommonArgs, selection: SelectionParse) -> ParsedArg
             .into_iter()
             .collect::<Vec<_>>(),
         selection_specified: selection.selection_specified,
+        keep_artifacts: common.keep_artifacts,
         watch: common.watch,
         ci: common.ci,
         verbose: common.verbose,

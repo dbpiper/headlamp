@@ -68,6 +68,35 @@ fn derive_args_splits_intermixed_headlamp_flags_from_runner_args() {
 }
 
 #[test]
+fn artifacts_are_ephemeral_by_default() {
+    let cfg = HeadlampConfig::default();
+    let argv: Vec<String> = vec![];
+    let parsed = derive_args(&config_tokens(&cfg, &argv), &argv, true);
+    assert!(!parsed.keep_artifacts);
+}
+
+#[test]
+fn keep_artifacts_can_be_enabled_by_cli_flag() {
+    let cfg = HeadlampConfig::default();
+    let argv = vec!["--keepArtifacts".to_string()];
+    let parsed = derive_args(&config_tokens(&cfg, &argv), &argv, true);
+    assert!(parsed.keep_artifacts);
+}
+
+#[test]
+fn keep_artifacts_can_be_enabled_by_config() {
+    let cfg = HeadlampConfig {
+        keep_artifacts: Some(true),
+        ..Default::default()
+    };
+    let argv: Vec<String> = vec![];
+    let cfg_tokens = config_tokens(&cfg, &argv);
+    assert!(cfg_tokens.iter().any(|t| t == "--keepArtifacts"));
+    let parsed = derive_args(&cfg_tokens, &argv, true);
+    assert!(parsed.keep_artifacts);
+}
+
+#[test]
 fn derive_args_changed_optional_value_does_not_consume_next_flag() {
     let cfg = HeadlampConfig::default();
     let argv = vec![
@@ -81,6 +110,36 @@ fn derive_args_changed_optional_value_does_not_consume_next_flag() {
     assert_eq!(parsed.changed, Some(headlamp::config::ChangedMode::All));
     assert!(parsed.show_logs);
     assert!(parsed.runner_args.iter().any(|t| t == "-t"));
+}
+
+#[test]
+fn derive_args_does_not_treat_runner_flags_with_slashes_as_selection_paths() {
+    let cfg = HeadlampConfig::default();
+    let argv = vec![
+        "--coverage".to_string(),
+        "--".to_string(),
+        "--cov=src/models".to_string(),
+        "--cov-report=term-missing".to_string(),
+        "--cov-report=lcov:coverage/lcov.info".to_string(),
+        "-p".to_string(),
+        "deal".to_string(),
+    ];
+    let parsed = derive_args(&config_tokens(&cfg, &argv), &argv, true);
+    assert!(parsed.collect_coverage);
+    assert!(parsed.selection_specified);
+    assert!(
+        !parsed
+            .selection_paths
+            .iter()
+            .any(|p| p.starts_with("--cov"))
+    );
+    assert!(parsed.runner_args.iter().any(|t| t == "--cov=src/models"));
+    assert!(
+        parsed
+            .runner_args
+            .iter()
+            .any(|t| t == "--cov-report=lcov:coverage/lcov.info")
+    );
 }
 
 #[test]

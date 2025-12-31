@@ -6,8 +6,17 @@ use serde::Deserialize;
 pub fn read_repo_llvm_cov_json_statement_hits(
     repo_root: &Path,
 ) -> Option<BTreeMap<String, BTreeMap<String, u32>>> {
-    let json_path = repo_root.join("coverage").join("coverage.json");
-    let raw = std::fs::read_to_string(&json_path).ok()?;
+    read_llvm_cov_json_statement_hits_from_path(
+        repo_root,
+        &repo_root.join("coverage").join("coverage.json"),
+    )
+}
+
+pub fn read_llvm_cov_json_statement_hits_from_path(
+    repo_root: &Path,
+    json_path: &Path,
+) -> Option<BTreeMap<String, BTreeMap<String, u32>>> {
+    let raw = std::fs::read_to_string(json_path).ok()?;
     parse_llvm_cov_json_statement_hits(&raw, repo_root).ok()
 }
 
@@ -77,6 +86,23 @@ pub fn read_repo_llvm_cov_json_statement_totals(
     repo_root: &Path,
 ) -> Option<BTreeMap<String, (u32, u32)>> {
     let hits = read_repo_llvm_cov_json_statement_hits(repo_root)?;
+    Some(
+        hits.iter()
+            .map(|(path, by_id)| {
+                let total = (by_id.len() as u64).min(u64::from(u32::MAX)) as u32;
+                let covered = (by_id.values().filter(|h| **h > 0).count() as u64)
+                    .min(u64::from(u32::MAX)) as u32;
+                (path.clone(), (total, covered))
+            })
+            .collect::<BTreeMap<_, _>>(),
+    )
+}
+
+pub fn read_llvm_cov_json_statement_totals_from_path(
+    repo_root: &Path,
+    json_path: &Path,
+) -> Option<BTreeMap<String, (u32, u32)>> {
+    let hits = read_llvm_cov_json_statement_hits_from_path(repo_root, json_path)?;
     Some(
         hits.iter()
             .map(|(path, by_id)| {
