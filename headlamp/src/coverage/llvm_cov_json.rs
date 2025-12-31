@@ -3,9 +3,11 @@ use std::path::Path;
 
 use serde::de::{DeserializeSeed, IgnoredAny, MapAccess, SeqAccess, Visitor};
 
+use super::statement_id::statement_id_from_line_col;
+
 pub fn read_repo_llvm_cov_json_statement_hits(
     repo_root: &Path,
-) -> Option<HashMap<String, HashMap<String, u32>>> {
+) -> Option<HashMap<String, HashMap<u64, u32>>> {
     read_llvm_cov_json_statement_hits_from_path(
         repo_root,
         &repo_root.join("coverage").join("coverage.json"),
@@ -15,16 +17,23 @@ pub fn read_repo_llvm_cov_json_statement_hits(
 pub fn read_llvm_cov_json_statement_hits_from_path(
     repo_root: &Path,
     json_path: &Path,
-) -> Option<HashMap<String, HashMap<String, u32>>> {
-    let raw = std::fs::read_to_string(json_path).ok()?;
-    parse_llvm_cov_json_statement_hits(&raw, repo_root).ok()
+) -> Option<HashMap<String, HashMap<u64, u32>>> {
+    let raw = std::fs::read(json_path).ok()?;
+    parse_llvm_cov_json_statement_hits_bytes(&raw, repo_root).ok()
 }
 
 pub fn parse_llvm_cov_json_statement_hits(
     text: &str,
     repo_root: &Path,
-) -> Result<HashMap<String, HashMap<String, u32>>, String> {
-    parse_llvm_cov_json_statement_hits_serde(text, repo_root)
+) -> Result<HashMap<String, HashMap<u64, u32>>, String> {
+    parse_llvm_cov_json_statement_hits_serde(text.as_bytes(), repo_root)
+}
+
+fn parse_llvm_cov_json_statement_hits_bytes(
+    bytes: &[u8],
+    repo_root: &Path,
+) -> Result<HashMap<String, HashMap<u64, u32>>, String> {
+    parse_llvm_cov_json_statement_hits_serde(bytes, repo_root)
 }
 
 pub fn read_repo_llvm_cov_json_statement_totals(
@@ -77,12 +86,12 @@ pub fn parse_llvm_cov_json_statement_totals(
 }
 
 fn parse_llvm_cov_json_statement_hits_serde(
-    text: &str,
+    bytes: &[u8],
     repo_root: &Path,
-) -> Result<HashMap<String, HashMap<String, u32>>, String> {
+) -> Result<HashMap<String, HashMap<u64, u32>>, String> {
     struct RootSeed<'a> {
         repo_root: &'a Path,
-        hits_by_path: &'a mut HashMap<String, HashMap<String, u32>>,
+        hits_by_path: &'a mut HashMap<String, HashMap<u64, u32>>,
     }
 
     impl<'de> DeserializeSeed<'de> for RootSeed<'_> {
@@ -100,7 +109,7 @@ fn parse_llvm_cov_json_statement_hits_serde(
 
     struct AnyValueVisitor<'a> {
         repo_root: &'a Path,
-        hits_by_path: &'a mut HashMap<String, HashMap<String, u32>>,
+        hits_by_path: &'a mut HashMap<String, HashMap<u64, u32>>,
     }
 
     impl<'de> Visitor<'de> for AnyValueVisitor<'_> {
@@ -197,7 +206,7 @@ fn parse_llvm_cov_json_statement_hits_serde(
 
     struct FilesSeed<'a> {
         repo_root: &'a Path,
-        hits_by_path: &'a mut HashMap<String, HashMap<String, u32>>,
+        hits_by_path: &'a mut HashMap<String, HashMap<u64, u32>>,
     }
 
     impl<'de> DeserializeSeed<'de> for FilesSeed<'_> {
@@ -215,7 +224,7 @@ fn parse_llvm_cov_json_statement_hits_serde(
 
     struct FilesVisitor<'a> {
         repo_root: &'a Path,
-        hits_by_path: &'a mut HashMap<String, HashMap<String, u32>>,
+        hits_by_path: &'a mut HashMap<String, HashMap<u64, u32>>,
     }
 
     impl<'de> Visitor<'de> for FilesVisitor<'_> {
@@ -240,7 +249,7 @@ fn parse_llvm_cov_json_statement_hits_serde(
 
     struct FileSeed<'a> {
         repo_root: &'a Path,
-        hits_by_path: &'a mut HashMap<String, HashMap<String, u32>>,
+        hits_by_path: &'a mut HashMap<String, HashMap<u64, u32>>,
     }
 
     impl<'de> DeserializeSeed<'de> for FileSeed<'_> {
@@ -258,7 +267,7 @@ fn parse_llvm_cov_json_statement_hits_serde(
 
     struct FileVisitor<'a> {
         repo_root: &'a Path,
-        hits_by_path: &'a mut HashMap<String, HashMap<String, u32>>,
+        hits_by_path: &'a mut HashMap<String, HashMap<u64, u32>>,
     }
 
     impl<'de> Visitor<'de> for FileVisitor<'_> {
@@ -272,7 +281,7 @@ fn parse_llvm_cov_json_statement_hits_serde(
             A: MapAccess<'de>,
         {
             let mut filename: Option<String> = None;
-            let mut pending: Option<HashMap<String, u32>> = None;
+            let mut pending: Option<HashMap<u64, u32>> = None;
             while let Some(key) = map.next_key::<std::borrow::Cow<'de, str>>()? {
                 match key.as_ref() {
                     "filename" => {
@@ -285,7 +294,7 @@ fn parse_llvm_cov_json_statement_hits_serde(
                             let entry = self.hits_by_path.entry(normalized).or_default();
                             map.next_value_seed(SegmentsSeed { target: entry })?;
                         } else {
-                            let mut tmp: HashMap<String, u32> = HashMap::new();
+                            let mut tmp: HashMap<u64, u32> = HashMap::new();
                             map.next_value_seed(SegmentsSeed { target: &mut tmp })?;
                             pending = Some(tmp);
                         }
@@ -298,8 +307,8 @@ fn parse_llvm_cov_json_statement_hits_serde(
             if let (Some(name), Some(mut tmp)) = (filename, pending) {
                 let normalized = crate::coverage::lcov::normalize_lcov_path(&name, self.repo_root);
                 let entry = self.hits_by_path.entry(normalized).or_default();
-                tmp.drain().for_each(|(id, hit)| {
-                    insert_max(entry, &id, hit);
+                tmp.drain().for_each(|(statement_id, hit)| {
+                    insert_max(entry, statement_id, hit);
                 });
             }
             Ok(())
@@ -307,7 +316,7 @@ fn parse_llvm_cov_json_statement_hits_serde(
     }
 
     struct SegmentsSeed<'a> {
-        target: &'a mut HashMap<String, u32>,
+        target: &'a mut HashMap<u64, u32>,
     }
 
     impl<'de> DeserializeSeed<'de> for SegmentsSeed<'_> {
@@ -323,7 +332,7 @@ fn parse_llvm_cov_json_statement_hits_serde(
     }
 
     struct SegmentsVisitor<'a> {
-        target: &'a mut HashMap<String, u32>,
+        target: &'a mut HashMap<u64, u32>,
     }
 
     impl<'de> Visitor<'de> for SegmentsVisitor<'_> {
@@ -346,7 +355,7 @@ fn parse_llvm_cov_json_statement_hits_serde(
     }
 
     struct SegmentEntrySeed<'a> {
-        target: &'a mut HashMap<String, u32>,
+        target: &'a mut HashMap<u64, u32>,
     }
 
     impl<'de> DeserializeSeed<'de> for SegmentEntrySeed<'_> {
@@ -362,7 +371,7 @@ fn parse_llvm_cov_json_statement_hits_serde(
     }
 
     struct SegmentEntryVisitor<'a> {
-        target: &'a mut HashMap<String, u32>,
+        target: &'a mut HashMap<u64, u32>,
     }
 
     impl<'de> Visitor<'de> for SegmentEntryVisitor<'_> {
@@ -400,24 +409,23 @@ fn parse_llvm_cov_json_statement_hits_serde(
                 let line_u32 = (line.min(u64::from(u32::MAX))) as u32;
                 let col_u32 = (col.min(u64::from(u32::MAX))) as u32;
                 let hit_u32 = (hit.min(u64::from(u32::MAX))) as u32;
-                let id = format!("{line_u32}:{col_u32}");
-                insert_max(self.target, &id, hit_u32);
+                let statement_id = statement_id_from_line_col(line_u32, col_u32);
+                insert_max(self.target, statement_id, hit_u32);
             }
             Ok(())
         }
     }
 
-    fn insert_max(target: &mut HashMap<String, u32>, id: &str, hit: u32) {
-        match target.get(id).copied() {
-            Some(prev) if prev >= hit => {}
-            _ => {
-                target.insert(id.to_string(), hit);
-            }
+    fn insert_max(target: &mut HashMap<u64, u32>, statement_id: u64, hit: u32) {
+        match target.get(&statement_id).copied() {
+            Some(prev) if prev >= hit => return,
+            _ => {}
         }
+        target.insert(statement_id, hit);
     }
 
-    let mut hits_by_path: HashMap<String, HashMap<String, u32>> = HashMap::new();
-    let mut deserializer = serde_json::Deserializer::from_str(text);
+    let mut hits_by_path: HashMap<String, HashMap<u64, u32>> = HashMap::new();
+    let mut deserializer = serde_json::Deserializer::from_slice(bytes);
     RootSeed {
         repo_root,
         hits_by_path: &mut hits_by_path,

@@ -2,6 +2,8 @@ use super::model::{
     Counts, FileSummary, FullFileCoverage, MissedBranch, MissedFunction, UncoveredRange,
 };
 
+use crate::coverage::statement_id::statement_id_line;
+
 fn format_coverage_function_name(raw: &str) -> String {
     fn strip_bracketed_disambiguators(text: &str) -> String {
         let mut out = String::with_capacity(text.len());
@@ -120,18 +122,17 @@ pub(super) fn compute_uncovered_blocks(file: &FullFileCoverage) -> Vec<Uncovered
                 }
                 continue;
             }
-            if let Some(line) = parse_statement_line_prefix(id) {
-                if line > 0 {
-                    match single_line {
-                        None => {
-                            single_line = Some(line);
-                            out.push(line);
-                        }
-                        Some(existing) if existing == line => {}
-                        Some(_existing) => {
-                            has_multiple_lines = true;
-                            out.push(line);
-                        }
+            let line = statement_id_line(*id);
+            if line > 0 {
+                match single_line {
+                    None => {
+                        single_line = Some(line);
+                        out.push(line);
+                    }
+                    Some(existing) if existing == line => {}
+                    Some(_existing) => {
+                        has_multiple_lines = true;
+                        out.push(line);
                     }
                 }
             }
@@ -166,28 +167,6 @@ pub(super) fn compute_uncovered_blocks(file: &FullFileCoverage) -> Vec<Uncovered
             .then_with(|| a.start.cmp(&b.start))
     });
     ranges
-}
-
-fn parse_statement_line_prefix(id: &str) -> Option<u32> {
-    let bytes = id.as_bytes();
-    let mut index = 0usize;
-    let mut value: u32 = 0;
-    let mut any = false;
-    while index < bytes.len() {
-        let byte = bytes[index];
-        if byte == b':' {
-            break;
-        }
-        if !byte.is_ascii_digit() {
-            return None;
-        }
-        any = true;
-        value = value
-            .saturating_mul(10)
-            .saturating_add((byte - b'0') as u32);
-        index += 1;
-    }
-    any.then_some(value)
 }
 
 pub(super) fn missed_functions(file: &FullFileCoverage) -> Vec<MissedFunction> {

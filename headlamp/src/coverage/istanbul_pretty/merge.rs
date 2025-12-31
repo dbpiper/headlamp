@@ -114,16 +114,26 @@ fn merge_statement_hits_and_map(
         return;
     };
     for (id, hit_count) in statement_hits {
+        let Ok(statement_id) = id.parse::<u64>() else {
+            continue;
+        };
         let add = (*hit_count).min(u64::from(u32::MAX)) as u32;
-        let prev = target.statement_hits.get(id).copied().unwrap_or(0);
+        let prev = target
+            .statement_hits
+            .get(&statement_id)
+            .copied()
+            .unwrap_or(0);
         target
             .statement_hits
-            .insert(id.to_string(), prev.saturating_add(add));
+            .insert(statement_id, prev.saturating_add(add));
     }
     let Some(statement_map) = statement_map else {
         return;
     };
     for (id, loc) in statement_map {
+        let Ok(statement_id) = id.parse::<u64>() else {
+            continue;
+        };
         let start = loc.start.as_ref().and_then(|l| l.line).unwrap_or(0) as u32;
         let end = loc
             .end
@@ -133,17 +143,16 @@ fn merge_statement_hits_and_map(
         if start == 0 {
             continue;
         }
-        if !target.statement_map.contains_key(id) {
-            target
-                .statement_map
-                .insert(id.to_string(), (start, end.max(start)));
-        }
+        target
+            .statement_map
+            .entry(statement_id)
+            .or_insert_with(|| (start, end.max(start)));
     }
 }
 
 fn derive_line_hits_from_statements(
-    statement_hits: &BTreeMap<String, u32>,
-    statement_map: &BTreeMap<String, (u32, u32)>,
+    statement_hits: &BTreeMap<u64, u32>,
+    statement_map: &BTreeMap<u64, (u32, u32)>,
 ) -> BTreeMap<u32, u32> {
     statement_hits
         .iter()

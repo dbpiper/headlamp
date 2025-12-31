@@ -67,7 +67,7 @@ pub fn read_istanbul_coverage_tree(root: &Path) -> Vec<(PathBuf, CoverageReport)
 
 pub fn merge_istanbul_reports(reports: &[CoverageReport], root: &Path) -> CoverageReport {
     let mut by_file: BTreeMap<String, BTreeMap<u32, u32>> = BTreeMap::new();
-    let mut statement_hits_by_file: BTreeMap<String, BTreeMap<String, u32>> = BTreeMap::new();
+    let mut statement_hits_by_file: BTreeMap<String, BTreeMap<u64, u32>> = BTreeMap::new();
     for report in reports {
         for file in &report.files {
             let abs = super::lcov::normalize_lcov_path(&file.path, root);
@@ -81,10 +81,8 @@ pub fn merge_istanbul_reports(reports: &[CoverageReport], root: &Path) -> Covera
                 let statement_entry = statement_hits_by_file.entry(abs.clone()).or_default();
                 for (statement_id, statement_hit_count) in statement_hits {
                     let prev = statement_entry.get(statement_id).copied().unwrap_or(0);
-                    statement_entry.insert(
-                        statement_id.clone(),
-                        prev.saturating_add(*statement_hit_count),
-                    );
+                    statement_entry
+                        .insert(*statement_id, prev.saturating_add(*statement_hit_count));
                 }
             }
         }
@@ -228,13 +226,14 @@ fn extract_line_hits(file_record: &IstanbulFileRecord) -> Result<BTreeMap<u32, u
     Ok(hits)
 }
 
-fn extract_statement_hits(file_record: &IstanbulFileRecord) -> Option<BTreeMap<String, u32>> {
+fn extract_statement_hits(file_record: &IstanbulFileRecord) -> Option<BTreeMap<u64, u32>> {
     file_record.s.as_ref().map(|statement_hits_raw| {
         statement_hits_raw
             .iter()
-            .map(|(id, hit_count)| {
+            .filter_map(|(id_text, hit_count)| {
+                let statement_id = id_text.parse::<u64>().ok()?;
                 let add = (*hit_count).min(u64::from(u32::MAX)) as u32;
-                (id.clone(), add)
+                Some((statement_id, add))
             })
             .collect::<BTreeMap<_, _>>()
     })

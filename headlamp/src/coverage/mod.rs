@@ -5,6 +5,7 @@ pub mod lcov;
 pub mod llvm_cov_json;
 pub mod model;
 pub mod print;
+pub mod statement_id;
 pub mod thresholds;
 
 #[cfg(test)]

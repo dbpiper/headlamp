@@ -13,7 +13,7 @@ pub struct FileCoverage {
     pub lines_covered: u32,
     pub statements_total: Option<u32>,
     pub statements_covered: Option<u32>,
-    pub statement_hits: Option<BTreeMap<String, u32>>,
+    pub statement_hits: Option<BTreeMap<u64, u32>>,
     pub uncovered_lines: Vec<u32>,
     pub line_hits: BTreeMap<u32, u32>,
     pub function_hits: BTreeMap<String, u32>,
@@ -86,7 +86,7 @@ pub fn apply_statement_totals_to_report(
 
 pub fn apply_statement_hits_to_report(
     report: CoverageReport,
-    mut statement_hits_by_path: HashMap<String, HashMap<String, u32>>,
+    mut statement_hits_by_path: HashMap<String, HashMap<u64, u32>>,
 ) -> CoverageReport {
     let files = report
         .files

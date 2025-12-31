@@ -5,6 +5,7 @@ use std::time::{Duration, Instant};
 use headlamp::coverage::istanbul_pretty::format_istanbul_pretty_from_lcov_report;
 use headlamp::coverage::model::{CoverageReport, FileCoverage};
 use headlamp::coverage::print::PrintOpts;
+use headlamp::coverage::statement_id::statement_id_from_line_col;
 
 fn mk_line_hits(lines: std::ops::RangeInclusive<u32>) -> BTreeMap<u32, u32> {
     lines
@@ -19,7 +20,7 @@ fn mk_large_report_at_path(repo_root: &Path, file_count: usize) -> CoverageRepor
             let abs_path = repo_root.join("src").join(format!("file_{index}.rs"));
             let line_hits = mk_line_hits(1..=200);
             let statement_hits = (0..200u32)
-                .map(|col| (format!("1:{col}"), col % 2))
+                .map(|col| (statement_id_from_line_col(1, col), col % 2))
                 .collect::<BTreeMap<_, _>>();
             FileCoverage {
                 path: abs_path.to_string_lossy().to_string(),

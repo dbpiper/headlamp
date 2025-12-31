@@ -4,6 +4,7 @@ use crate::coverage::istanbul_pretty::analysis::file_summary;
 use crate::coverage::istanbul_pretty::api::lcov_report_to_full_file_coverage;
 use crate::coverage::lcov::parse_lcov_text;
 use crate::coverage::model::{CoverageReport, FileCoverage};
+use crate::coverage::statement_id::statement_id_from_line_col;
 use std::collections::BTreeMap;
 
 #[test]
@@ -62,8 +63,8 @@ fn lcov_to_full_file_coverage_uses_statement_hits_when_present() {
             statements_total: Some(2),
             statements_covered: Some(1),
             statement_hits: Some(BTreeMap::from([
-                ("10:1".to_string(), 0),
-                ("10:2".to_string(), 1),
+                (statement_id_from_line_col(10, 1), 0),
+                (statement_id_from_line_col(10, 2), 1),
             ])),
             uncovered_lines: vec![],
             line_hits: BTreeMap::from([(10, 1)]),

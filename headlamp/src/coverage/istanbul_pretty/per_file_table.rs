@@ -92,10 +92,23 @@ static ARC_LABEL_FUNC: LazyLock<Arc<str>> = LazyLock::new(|| Arc::from("Func"));
 static ARC_LABEL_BRANCHES: LazyLock<Arc<str>> = LazyLock::new(|| Arc::from("Branches"));
 static ARC_LABEL_BRANCH: LazyLock<Arc<str>> = LazyLock::new(|| Arc::from("Branch"));
 static ARC_NA: LazyLock<Arc<str>> = LazyLock::new(|| Arc::from("N/A"));
+static ARC_PCT_0: LazyLock<Arc<str>> = LazyLock::new(|| Arc::from("0.0%"));
+static ARC_PCT_100: LazyLock<Arc<str>> = LazyLock::new(|| Arc::from("100.0%"));
 static ARC_HOTSPOTS_NOTE: LazyLock<Arc<str>> =
     LazyLock::new(|| Arc::from("(largest uncovered ranges)"));
 static ARC_FUNCTIONS_NOTE: LazyLock<Arc<str>> = LazyLock::new(|| Arc::from("(never executed)"));
 static ARC_BRANCHES_NOTE: LazyLock<Arc<str>> = LazyLock::new(|| Arc::from("(paths with 0 hits)"));
+
+fn pct_text(pct: f64) -> Arc<str> {
+    let tenths = (pct * 10.0).round() as i64;
+    if tenths == 0 {
+        return ARC_PCT_0.clone();
+    }
+    if tenths == 1000 {
+        return ARC_PCT_100.clone();
+    }
+    Arc::from(format!("{:.1}%", (tenths as f64) / 10.0))
+}
 
 pub(super) struct PerFileCompositeTableInput<'a> {
     pub(super) file: &'a FullFileCoverage,
@@ -155,12 +168,12 @@ pub(super) fn write_per_file_composite_table(
     let l_pct = summary.lines.pct();
     let f_pct = summary.functions.pct();
     let b_pct = summary.branches.pct();
-    let l_pct_text: Arc<str> = Arc::from(format!("{l_pct:.1}%"));
-    let f_pct_text: Arc<str> = Arc::from(format!("{f_pct:.1}%"));
+    let l_pct_text: Arc<str> = pct_text(l_pct);
+    let f_pct_text: Arc<str> = pct_text(f_pct);
     let b_pct_text: Arc<str> = if summary.branches.total == 0 {
         ARC_NA.clone()
     } else {
-        Arc::from(format!("{b_pct:.1}%"))
+        pct_text(b_pct)
     };
     rows.push([
         cell(shortened_file_text.clone()),

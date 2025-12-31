@@ -1,0 +1,10 @@
+[test-groups.coverage_perf]
+max-threads = 1
+
+[profile.default]
+
+[[profile.default.overrides]]
+# Keep performance-sensitive coverage tests always-on, but run them in isolation to avoid
+# cross-test CPU contention causing false failures.
+filter = 'test(coverage_pipeline_for_250_files_completes_under_time_budget)|test(coverage_pretty_from_lcov_large_report_completes_under_one_second)|test(coverage_pretty_runtime_scales_approximately_linearly_in_file_count)'
+test-group = 'coverage_perf'

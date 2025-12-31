@@ -29,11 +29,7 @@ fn build_jest_threshold_report_prefers_istanbul_statement_totals_over_lcov_line_
             lines_covered: 1,
             statements_total: Some(2),
             statements_covered: Some(1),
-            statement_hits: Some(
-                [("0".to_string(), 1u32), ("1".to_string(), 0u32)]
-                    .into_iter()
-                    .collect(),
-            ),
+            statement_hits: Some([(0u64, 1u32), (1u64, 0u32)].into_iter().collect()),
             uncovered_lines: vec![],
             line_hits: [(10u32, 1u32)].into_iter().collect(),
             function_hits: BTreeMap::new(),

@@ -1,4 +1,5 @@
 use crate::coverage::llvm_cov_json::parse_llvm_cov_json_statement_totals;
+use crate::coverage::statement_id::statement_id_from_line_col;
 
 #[test]
 fn parse_llvm_cov_json_statement_totals_counts_region_entries_as_statements() {
@@ -93,6 +94,12 @@ fn parse_llvm_cov_json_statement_hits_creates_stable_ids_from_line_and_col() {
     )
     .expect("hits");
     let by_id = hits.get("/repo/src/a.rs").expect("file present");
-    assert_eq!(by_id.get("10:1").copied(), Some(0));
-    assert_eq!(by_id.get("10:2").copied(), Some(3));
+    assert_eq!(
+        by_id.get(&statement_id_from_line_col(10, 1)).copied(),
+        Some(0)
+    );
+    assert_eq!(
+        by_id.get(&statement_id_from_line_col(10, 2)).copied(),
+        Some(3)
+    );
 }

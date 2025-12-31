@@ -108,8 +108,8 @@ pub(super) struct FullFileCoverage {
     #[allow(dead_code)]
     pub(super) abs_path: String,
     pub(super) rel_path: String,
-    pub(super) statement_hits: BTreeMap<String, u32>,
-    pub(super) statement_map: BTreeMap<String, (u32, u32)>,
+    pub(super) statement_hits: BTreeMap<u64, u32>,
+    pub(super) statement_map: BTreeMap<u64, (u32, u32)>,
     pub(super) function_hits: BTreeMap<String, u32>,
     pub(super) function_map: BTreeMap<String, (String, u32)>,
     pub(super) branch_hits: BTreeMap<String, Vec<u32>>,
