@@ -124,7 +124,7 @@ fn coverage_pretty_from_lcov_large_report_completes_under_one_second() {
     };
 
     let started_at = Instant::now();
-    let pretty = format_istanbul_pretty_from_lcov_report(
+    let pretty_final = format_istanbul_pretty_from_lcov_report(
         &repo_root,
         report,
         &print_opts,
@@ -133,15 +133,14 @@ fn coverage_pretty_from_lcov_large_report_completes_under_one_second() {
         &[],
         None,
     );
-    let elapsed = started_at.elapsed();
-
+    let elapsed_final = started_at.elapsed();
     assert!(
-        elapsed < Duration::from_millis(1500),
-        "pretty formatting took {elapsed:?} for {} files",
+        elapsed_final < Duration::from_millis(1500),
+        "pretty formatting took {elapsed_final:?} for {} files",
         file_count
     );
     assert!(
-        pretty.contains("Coverage summary"),
+        pretty_final.contains("Coverage summary"),
         "sanity: output should include summary block"
     );
 }

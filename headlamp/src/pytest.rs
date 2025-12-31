@@ -5,8 +5,8 @@ use headlamp_core::args::ParsedArgs;
 use headlamp_core::format::ctx::make_ctx;
 use headlamp_core::format::vitest::render_vitest_from_test_model;
 use headlamp_core::test_model::{TestLocation, TestRunModel};
-use once_cell::sync::Lazy;
 use regex::Regex;
+use std::sync::LazyLock;
 
 use crate::git::changed_files;
 use crate::live_progress;
@@ -206,10 +206,10 @@ pub(crate) fn infer_test_location_from_pytest_longrepr(
     nodeid_file: &str,
     longrepr: &str,
 ) -> Option<TestLocation> {
-    static PY_FILE_LINE_RE: Lazy<Regex> =
-        Lazy::new(|| Regex::new(r#"^\s*File\s+"([^"]+)",\s+line\s+(\d+)(?:,|$)"#).unwrap());
-    static PY_PATH_COLON_LINE_RE: Lazy<Regex> =
-        Lazy::new(|| Regex::new(r#"^\s*([^:\s]+):(\d+):\s*"#).unwrap());
+    static PY_FILE_LINE_RE: LazyLock<Regex> =
+        LazyLock::new(|| Regex::new(r#"^\s*File\s+"([^"]+)",\s+line\s+(\d+)(?:,|$)"#).unwrap());
+    static PY_PATH_COLON_LINE_RE: LazyLock<Regex> =
+        LazyLock::new(|| Regex::new(r#"^\s*([^:\s]+):(\d+):\s*"#).unwrap());
     let needle = nodeid_file.replace('\\', "/");
     longrepr.lines().find_map(|line| {
         PY_FILE_LINE_RE

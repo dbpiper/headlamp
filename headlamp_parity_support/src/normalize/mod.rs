@@ -121,6 +121,7 @@ pub fn normalize_tty_ui_with_meta(text: String, root: &Path) -> (String, Normali
     } else {
         (common::trim_leading_blank_lines(&final_block), false)
     };
+    let normalized = normalize_tty_footer_spacing(&normalized);
 
     let (last_failed_tests_line, last_test_files_line, last_box_table_top_line) =
         common::compute_render_indices(&normalized);
@@ -157,4 +158,33 @@ fn normalize_time_line_tty(raw: &str) -> String {
     } else {
         format!("{leading_ws}Time      <DURATION>")
     }
+}
+
+fn normalize_tty_footer_spacing(text: &str) -> String {
+    let lines = text.lines().collect::<Vec<_>>();
+    let mut out: Vec<&str> = Vec::with_capacity(lines.len());
+
+    let mut index = 0usize;
+    while index < lines.len() {
+        if index > 0 && index + 1 < lines.len() {
+            let current_is_blank = headlamp::format::stacks::strip_ansi_simple(lines[index])
+                .trim()
+                .is_empty();
+            if current_is_blank {
+                let prev = headlamp::format::stacks::strip_ansi_simple(lines[index - 1]);
+                let next = headlamp::format::stacks::strip_ansi_simple(lines[index + 1]);
+                let prev_is_tests = prev.trim_start().starts_with("Tests");
+                let next_is_time = next.trim_start().starts_with("Time ");
+                if prev_is_tests && next_is_time {
+                    index += 1;
+                    continue;
+                }
+            }
+        }
+
+        out.push(lines[index]);
+        index += 1;
+    }
+
+    out.join("\n")
 }

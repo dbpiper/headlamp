@@ -1,15 +1,16 @@
 use std::path::{Path, PathBuf};
 use std::sync::Arc;
+use std::sync::LazyLock;
 
 use dashmap::DashMap;
 use ignore::WalkBuilder;
-use once_cell::sync::Lazy;
 use path_slash::PathExt;
 use regex::Regex;
 
-static RESOLVED_PATH_CACHE: Lazy<DashMap<String, Option<Arc<str>>>> = Lazy::new(DashMap::new);
-static RUST_PANICKED_AT_RE: Lazy<Regex> =
-    Lazy::new(|| Regex::new(r#"panicked at (?:[^:]+: )?([^:\s]+):(\d+):(\d+):?$"#).unwrap());
+static RESOLVED_PATH_CACHE: LazyLock<DashMap<String, Option<Arc<str>>>> =
+    LazyLock::new(DashMap::new);
+static RUST_PANICKED_AT_RE: LazyLock<Regex> =
+    LazyLock::new(|| Regex::new(r#"panicked at (?:[^:]+: )?([^:\s]+):(\d+):(\d+):?$"#).unwrap());
 
 pub fn resolve_existing_path_best_effort(cwd: &str, raw_file: &str) -> Option<String> {
     let key = format!("{cwd}\n{raw_file}");

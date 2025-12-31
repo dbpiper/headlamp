@@ -1,11 +1,11 @@
-use std::collections::BTreeMap;
+use std::collections::HashMap;
 use std::path::Path;
 
-use serde::Deserialize;
+use serde::de::{DeserializeSeed, IgnoredAny, MapAccess, SeqAccess, Visitor};
 
 pub fn read_repo_llvm_cov_json_statement_hits(
     repo_root: &Path,
-) -> Option<BTreeMap<String, BTreeMap<String, u32>>> {
+) -> Option<HashMap<String, HashMap<String, u32>>> {
     read_llvm_cov_json_statement_hits_from_path(
         repo_root,
         &repo_root.join("coverage").join("coverage.json"),
@@ -15,7 +15,7 @@ pub fn read_repo_llvm_cov_json_statement_hits(
 pub fn read_llvm_cov_json_statement_hits_from_path(
     repo_root: &Path,
     json_path: &Path,
-) -> Option<BTreeMap<String, BTreeMap<String, u32>>> {
+) -> Option<HashMap<String, HashMap<String, u32>>> {
     let raw = std::fs::read_to_string(json_path).ok()?;
     parse_llvm_cov_json_statement_hits(&raw, repo_root).ok()
 }
@@ -23,68 +23,13 @@ pub fn read_llvm_cov_json_statement_hits_from_path(
 pub fn parse_llvm_cov_json_statement_hits(
     text: &str,
     repo_root: &Path,
-) -> Result<BTreeMap<String, BTreeMap<String, u32>>, String> {
-    #[derive(Debug, Deserialize)]
-    struct Root {
-        data: Vec<Datum>,
-    }
-
-    #[derive(Debug, Deserialize)]
-    struct Datum {
-        files: Vec<FileRecord>,
-    }
-
-    #[derive(Debug, Deserialize)]
-    struct FileRecord {
-        filename: String,
-        segments: Vec<(u64, u64, u64, bool, bool, bool)>,
-    }
-
-    let root: Root = serde_json::from_str(text).map_err(|e| e.to_string())?;
-
-    let mut unit_hits_by_path: BTreeMap<String, BTreeMap<(u32, u32), u32>> = BTreeMap::new();
-
-    root.data
-        .into_iter()
-        .flat_map(|datum| datum.files.into_iter())
-        .for_each(|file| {
-            let path = crate::coverage::lcov::normalize_lcov_path(&file.filename, repo_root);
-            let entry = unit_hits_by_path.entry(path).or_default();
-            file.segments
-                .into_iter()
-                .filter_map(parse_region_entry_unit)
-                .for_each(|((line, col), hit_count)| {
-                    let prev = entry.get(&(line, col)).copied().unwrap_or(0);
-                    entry.insert((line, col), prev.max(hit_count));
-                });
-        });
-
-    Ok(unit_hits_by_path
-        .into_iter()
-        .map(|(path, units)| {
-            let by_id = units
-                .into_iter()
-                .map(|((line, col), hit)| (format!("{line}:{col}"), hit))
-                .collect::<BTreeMap<_, _>>();
-            (path, by_id)
-        })
-        .collect::<BTreeMap<_, _>>())
-}
-
-fn parse_region_entry_unit(
-    segment: (u64, u64, u64, bool, bool, bool),
-) -> Option<((u32, u32), u32)> {
-    let (line, col, hit_count, has_count, is_region_entry, is_gap_region) = segment;
-    let line_u32 = line.min(u64::from(u32::MAX)) as u32;
-    let col_u32 = col.min(u64::from(u32::MAX)) as u32;
-    let hit_u32 = hit_count.min(u64::from(u32::MAX)) as u32;
-    (has_count && is_region_entry && !is_gap_region && line_u32 > 0)
-        .then_some(((line_u32, col_u32), hit_u32))
+) -> Result<HashMap<String, HashMap<String, u32>>, String> {
+    parse_llvm_cov_json_statement_hits_serde(text, repo_root)
 }
 
 pub fn read_repo_llvm_cov_json_statement_totals(
     repo_root: &Path,
-) -> Option<BTreeMap<String, (u32, u32)>> {
+) -> Option<HashMap<String, (u32, u32)>> {
     let hits = read_repo_llvm_cov_json_statement_hits(repo_root)?;
     Some(
         hits.iter()
@@ -92,16 +37,16 @@ pub fn read_repo_llvm_cov_json_statement_totals(
                 let total = (by_id.len() as u64).min(u64::from(u32::MAX)) as u32;
                 let covered = (by_id.values().filter(|h| **h > 0).count() as u64)
                     .min(u64::from(u32::MAX)) as u32;
-                (path.clone(), (total, covered))
+                (path.to_string(), (total, covered))
             })
-            .collect::<BTreeMap<_, _>>(),
+            .collect::<HashMap<_, _>>(),
     )
 }
 
 pub fn read_llvm_cov_json_statement_totals_from_path(
     repo_root: &Path,
     json_path: &Path,
-) -> Option<BTreeMap<String, (u32, u32)>> {
+) -> Option<HashMap<String, (u32, u32)>> {
     let hits = read_llvm_cov_json_statement_hits_from_path(repo_root, json_path)?;
     Some(
         hits.iter()
@@ -109,16 +54,16 @@ pub fn read_llvm_cov_json_statement_totals_from_path(
                 let total = (by_id.len() as u64).min(u64::from(u32::MAX)) as u32;
                 let covered = (by_id.values().filter(|h| **h > 0).count() as u64)
                     .min(u64::from(u32::MAX)) as u32;
-                (path.clone(), (total, covered))
+                (path.to_string(), (total, covered))
             })
-            .collect::<BTreeMap<_, _>>(),
+            .collect::<HashMap<_, _>>(),
     )
 }
 
 pub fn parse_llvm_cov_json_statement_totals(
     text: &str,
     repo_root: &Path,
-) -> Result<BTreeMap<String, (u32, u32)>, String> {
+) -> Result<HashMap<String, (u32, u32)>, String> {
     let hits = parse_llvm_cov_json_statement_hits(text, repo_root)?;
     Ok(hits
         .into_iter()
@@ -128,5 +73,356 @@ pub fn parse_llvm_cov_json_statement_totals(
                 (by_id.values().filter(|h| **h > 0).count() as u64).min(u64::from(u32::MAX)) as u32;
             (path, (total, covered))
         })
-        .collect::<BTreeMap<_, _>>())
+        .collect::<HashMap<_, _>>())
+}
+
+fn parse_llvm_cov_json_statement_hits_serde(
+    text: &str,
+    repo_root: &Path,
+) -> Result<HashMap<String, HashMap<String, u32>>, String> {
+    struct RootSeed<'a> {
+        repo_root: &'a Path,
+        hits_by_path: &'a mut HashMap<String, HashMap<String, u32>>,
+    }
+
+    impl<'de> DeserializeSeed<'de> for RootSeed<'_> {
+        type Value = ();
+        fn deserialize<D>(self, deserializer: D) -> Result<Self::Value, D::Error>
+        where
+            D: serde::Deserializer<'de>,
+        {
+            deserializer.deserialize_any(AnyValueVisitor {
+                repo_root: self.repo_root,
+                hits_by_path: self.hits_by_path,
+            })
+        }
+    }
+
+    struct AnyValueVisitor<'a> {
+        repo_root: &'a Path,
+        hits_by_path: &'a mut HashMap<String, HashMap<String, u32>>,
+    }
+
+    impl<'de> Visitor<'de> for AnyValueVisitor<'_> {
+        type Value = ();
+        fn expecting(&self, formatter: &mut std::fmt::Formatter) -> std::fmt::Result {
+            formatter.write_str("any JSON value")
+        }
+
+        fn visit_map<A>(self, mut map: A) -> Result<Self::Value, A::Error>
+        where
+            A: MapAccess<'de>,
+        {
+            while let Some(key) = map.next_key::<std::borrow::Cow<'de, str>>()? {
+                match key.as_ref() {
+                    "files" => {
+                        map.next_value_seed(FilesSeed {
+                            repo_root: self.repo_root,
+                            hits_by_path: self.hits_by_path,
+                        })?;
+                    }
+                    _ => {
+                        map.next_value_seed(RootSeed {
+                            repo_root: self.repo_root,
+                            hits_by_path: self.hits_by_path,
+                        })?;
+                    }
+                }
+            }
+            Ok(())
+        }
+
+        fn visit_seq<A>(self, mut seq: A) -> Result<Self::Value, A::Error>
+        where
+            A: SeqAccess<'de>,
+        {
+            while (seq.next_element_seed(RootSeed {
+                repo_root: self.repo_root,
+                hits_by_path: self.hits_by_path,
+            })?)
+            .is_some()
+            {}
+            Ok(())
+        }
+
+        fn visit_bool<E>(self, _v: bool) -> Result<Self::Value, E>
+        where
+            E: serde::de::Error,
+        {
+            Ok(())
+        }
+        fn visit_i64<E>(self, _v: i64) -> Result<Self::Value, E>
+        where
+            E: serde::de::Error,
+        {
+            Ok(())
+        }
+        fn visit_u64<E>(self, _v: u64) -> Result<Self::Value, E>
+        where
+            E: serde::de::Error,
+        {
+            Ok(())
+        }
+        fn visit_f64<E>(self, _v: f64) -> Result<Self::Value, E>
+        where
+            E: serde::de::Error,
+        {
+            Ok(())
+        }
+        fn visit_str<E>(self, _v: &str) -> Result<Self::Value, E>
+        where
+            E: serde::de::Error,
+        {
+            Ok(())
+        }
+        fn visit_string<E>(self, _v: String) -> Result<Self::Value, E>
+        where
+            E: serde::de::Error,
+        {
+            Ok(())
+        }
+        fn visit_none<E>(self) -> Result<Self::Value, E>
+        where
+            E: serde::de::Error,
+        {
+            Ok(())
+        }
+        fn visit_unit<E>(self) -> Result<Self::Value, E>
+        where
+            E: serde::de::Error,
+        {
+            Ok(())
+        }
+    }
+
+    struct FilesSeed<'a> {
+        repo_root: &'a Path,
+        hits_by_path: &'a mut HashMap<String, HashMap<String, u32>>,
+    }
+
+    impl<'de> DeserializeSeed<'de> for FilesSeed<'_> {
+        type Value = ();
+        fn deserialize<D>(self, deserializer: D) -> Result<Self::Value, D::Error>
+        where
+            D: serde::Deserializer<'de>,
+        {
+            deserializer.deserialize_any(FilesVisitor {
+                repo_root: self.repo_root,
+                hits_by_path: self.hits_by_path,
+            })
+        }
+    }
+
+    struct FilesVisitor<'a> {
+        repo_root: &'a Path,
+        hits_by_path: &'a mut HashMap<String, HashMap<String, u32>>,
+    }
+
+    impl<'de> Visitor<'de> for FilesVisitor<'_> {
+        type Value = ();
+        fn expecting(&self, formatter: &mut std::fmt::Formatter) -> std::fmt::Result {
+            formatter.write_str("files array")
+        }
+
+        fn visit_seq<A>(self, mut seq: A) -> Result<Self::Value, A::Error>
+        where
+            A: SeqAccess<'de>,
+        {
+            while (seq.next_element_seed(FileSeed {
+                repo_root: self.repo_root,
+                hits_by_path: self.hits_by_path,
+            })?)
+            .is_some()
+            {}
+            Ok(())
+        }
+    }
+
+    struct FileSeed<'a> {
+        repo_root: &'a Path,
+        hits_by_path: &'a mut HashMap<String, HashMap<String, u32>>,
+    }
+
+    impl<'de> DeserializeSeed<'de> for FileSeed<'_> {
+        type Value = ();
+        fn deserialize<D>(self, deserializer: D) -> Result<Self::Value, D::Error>
+        where
+            D: serde::Deserializer<'de>,
+        {
+            deserializer.deserialize_any(FileVisitor {
+                repo_root: self.repo_root,
+                hits_by_path: self.hits_by_path,
+            })
+        }
+    }
+
+    struct FileVisitor<'a> {
+        repo_root: &'a Path,
+        hits_by_path: &'a mut HashMap<String, HashMap<String, u32>>,
+    }
+
+    impl<'de> Visitor<'de> for FileVisitor<'_> {
+        type Value = ();
+        fn expecting(&self, formatter: &mut std::fmt::Formatter) -> std::fmt::Result {
+            formatter.write_str("file object")
+        }
+
+        fn visit_map<A>(self, mut map: A) -> Result<Self::Value, A::Error>
+        where
+            A: MapAccess<'de>,
+        {
+            let mut filename: Option<String> = None;
+            let mut pending: Option<HashMap<String, u32>> = None;
+            while let Some(key) = map.next_key::<std::borrow::Cow<'de, str>>()? {
+                match key.as_ref() {
+                    "filename" => {
+                        filename = Some(map.next_value::<String>()?);
+                    }
+                    "segments" => {
+                        if let Some(name) = filename.as_deref() {
+                            let normalized =
+                                crate::coverage::lcov::normalize_lcov_path(name, self.repo_root);
+                            let entry = self.hits_by_path.entry(normalized).or_default();
+                            map.next_value_seed(SegmentsSeed { target: entry })?;
+                        } else {
+                            let mut tmp: HashMap<String, u32> = HashMap::new();
+                            map.next_value_seed(SegmentsSeed { target: &mut tmp })?;
+                            pending = Some(tmp);
+                        }
+                    }
+                    _ => {
+                        map.next_value::<IgnoredAny>()?;
+                    }
+                }
+            }
+            if let (Some(name), Some(mut tmp)) = (filename, pending) {
+                let normalized = crate::coverage::lcov::normalize_lcov_path(&name, self.repo_root);
+                let entry = self.hits_by_path.entry(normalized).or_default();
+                tmp.drain().for_each(|(id, hit)| {
+                    insert_max(entry, &id, hit);
+                });
+            }
+            Ok(())
+        }
+    }
+
+    struct SegmentsSeed<'a> {
+        target: &'a mut HashMap<String, u32>,
+    }
+
+    impl<'de> DeserializeSeed<'de> for SegmentsSeed<'_> {
+        type Value = ();
+        fn deserialize<D>(self, deserializer: D) -> Result<Self::Value, D::Error>
+        where
+            D: serde::Deserializer<'de>,
+        {
+            deserializer.deserialize_any(SegmentsVisitor {
+                target: self.target,
+            })
+        }
+    }
+
+    struct SegmentsVisitor<'a> {
+        target: &'a mut HashMap<String, u32>,
+    }
+
+    impl<'de> Visitor<'de> for SegmentsVisitor<'_> {
+        type Value = ();
+        fn expecting(&self, formatter: &mut std::fmt::Formatter) -> std::fmt::Result {
+            formatter.write_str("segments array")
+        }
+
+        fn visit_seq<A>(self, mut seq: A) -> Result<Self::Value, A::Error>
+        where
+            A: SeqAccess<'de>,
+        {
+            while (seq.next_element_seed(SegmentEntrySeed {
+                target: self.target,
+            })?)
+            .is_some()
+            {}
+            Ok(())
+        }
+    }
+
+    struct SegmentEntrySeed<'a> {
+        target: &'a mut HashMap<String, u32>,
+    }
+
+    impl<'de> DeserializeSeed<'de> for SegmentEntrySeed<'_> {
+        type Value = ();
+        fn deserialize<D>(self, deserializer: D) -> Result<Self::Value, D::Error>
+        where
+            D: serde::Deserializer<'de>,
+        {
+            deserializer.deserialize_any(SegmentEntryVisitor {
+                target: self.target,
+            })
+        }
+    }
+
+    struct SegmentEntryVisitor<'a> {
+        target: &'a mut HashMap<String, u32>,
+    }
+
+    impl<'de> Visitor<'de> for SegmentEntryVisitor<'_> {
+        type Value = ();
+        fn expecting(&self, formatter: &mut std::fmt::Formatter) -> std::fmt::Result {
+            formatter.write_str("segment entry array")
+        }
+
+        fn visit_seq<A>(self, mut seq: A) -> Result<Self::Value, A::Error>
+        where
+            A: SeqAccess<'de>,
+        {
+            let Some(line) = seq.next_element::<u64>()? else {
+                return Ok(());
+            };
+            let Some(col) = seq.next_element::<u64>()? else {
+                return Ok(());
+            };
+            let Some(hit) = seq.next_element::<u64>()? else {
+                return Ok(());
+            };
+            let Some(has_count) = seq.next_element::<bool>()? else {
+                return Ok(());
+            };
+            let Some(is_region_entry) = seq.next_element::<bool>()? else {
+                return Ok(());
+            };
+            let Some(is_gap_region) = seq.next_element::<bool>()? else {
+                return Ok(());
+            };
+
+            while seq.next_element::<IgnoredAny>()?.is_some() {}
+
+            if has_count && is_region_entry && !is_gap_region && line > 0 {
+                let line_u32 = (line.min(u64::from(u32::MAX))) as u32;
+                let col_u32 = (col.min(u64::from(u32::MAX))) as u32;
+                let hit_u32 = (hit.min(u64::from(u32::MAX))) as u32;
+                let id = format!("{line_u32}:{col_u32}");
+                insert_max(self.target, &id, hit_u32);
+            }
+            Ok(())
+        }
+    }
+
+    fn insert_max(target: &mut HashMap<String, u32>, id: &str, hit: u32) {
+        match target.get(id).copied() {
+            Some(prev) if prev >= hit => {}
+            _ => {
+                target.insert(id.to_string(), hit);
+            }
+        }
+    }
+
+    let mut hits_by_path: HashMap<String, HashMap<String, u32>> = HashMap::new();
+    let mut deserializer = serde_json::Deserializer::from_str(text);
+    RootSeed {
+        repo_root,
+        hits_by_path: &mut hits_by_path,
+    }
+    .deserialize(&mut deserializer)
+    .map_err(|e| e.to_string())?;
+    Ok(hits_by_path)
 }

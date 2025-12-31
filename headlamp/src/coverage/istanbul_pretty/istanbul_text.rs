@@ -1,14 +1,46 @@
 use std::collections::BTreeMap;
-use std::path::Path;
 
-use path_slash::PathExt;
-
-use super::analysis::file_summary;
 use super::bars::tint_pct;
 use super::model::{Counts, FileSummary, FullFileCoverage};
 
-pub(super) fn render_istanbul_text_report(files: &[FullFileCoverage], max_cols: usize) -> String {
-    let mut rows: Vec<(String, FileSummary, String)> = files
+pub(super) fn render_istanbul_text_report_with_totals_from_summaries(
+    files: &[FullFileCoverage],
+    summaries: &[FileSummary],
+    max_cols: usize,
+) -> (String, FileSummary) {
+    let rows: Vec<(String, FileSummary, String)> = files
+        .iter()
+        .zip(summaries.iter())
+        .map(|(file, summary)| {
+            let uncovered = render_uncovered_line_numbers(&file.line_hits);
+            let rel: std::borrow::Cow<'_, str> = if file.rel_path.contains('\\') {
+                std::borrow::Cow::Owned(file.rel_path.replace('\\', "/"))
+            } else {
+                std::borrow::Cow::Borrowed(file.rel_path.as_str())
+            };
+            let base = rel
+                .rsplit_once('/')
+                .map(|(_dir, name)| name)
+                .unwrap_or(rel.as_ref())
+                .to_string();
+            (base, summary.clone(), uncovered)
+        })
+        .collect();
+    render_istanbul_text_report_with_totals_from_rows(rows, max_cols)
+}
+
+#[cfg(test)]
+pub(super) fn render_istanbul_text_report_with_totals(
+    files: &[FullFileCoverage],
+    max_cols: usize,
+) -> (String, FileSummary) {
+    use std::path::Path;
+
+    use path_slash::PathExt;
+
+    use super::analysis::file_summary;
+
+    let rows: Vec<(String, FileSummary, String)> = files
         .iter()
         .map(|file| {
             let summary = file_summary(file);
@@ -22,7 +54,14 @@ pub(super) fn render_istanbul_text_report(files: &[FullFileCoverage], max_cols: 
             (base, summary, uncovered)
         })
         .collect();
+    render_istanbul_text_report_with_totals_from_rows(rows, max_cols)
+}
 
+fn render_istanbul_text_report_with_totals_from_rows(
+    mut rows: Vec<(String, FileSummary, String)>,
+    max_cols: usize,
+) -> (String, FileSummary) {
+    let total_rows = rows.len();
     rows.sort_by(|a, b| a.0.cmp(&b.0));
 
     let max_name_len = rows
@@ -76,9 +115,17 @@ pub(super) fn render_istanbul_text_report(files: &[FullFileCoverage], max_cols: 
         "{:<header_file_width$} | % Stmts | % Branch | % Funcs | % Lines |{uncovered_header_cell}",
         "File"
     );
-    let mut out: Vec<String> = vec![dash.to_string(), header.to_string(), dash.to_string()];
+    let approx_line_width = file_width + 1 + 9 + 1 + 10 + 1 + 9 + 1 + 9 + 1 + missing_width;
+    let mut report = String::with_capacity(approx_line_width.saturating_mul(rows.len() + 6));
 
-    out.push(render_istanbul_text_row(
+    report.push_str(&dash);
+    report.push('\n');
+    report.push_str(&header);
+    report.push('\n');
+    report.push_str(&dash);
+    report.push('\n');
+
+    report.push_str(&render_istanbul_text_row(
         "All files",
         totals.statements,
         totals.branches,
@@ -91,9 +138,10 @@ pub(super) fn render_istanbul_text_report(files: &[FullFileCoverage], max_cols: 
             missing_width,
         },
     ));
+    report.push('\n');
 
-    for (name, summary, uncovered) in rows {
-        out.push(render_istanbul_text_row(
+    for (index, (name, summary, uncovered)) in rows.into_iter().enumerate() {
+        report.push_str(&render_istanbul_text_row(
             &name,
             summary.statements,
             summary.branches,
@@ -106,49 +154,16 @@ pub(super) fn render_istanbul_text_report(files: &[FullFileCoverage], max_cols: 
                 missing_width,
             },
         ));
+        if index + 1 < total_rows {
+            report.push('\n');
+        }
     }
-
-    out.push(dash.to_string());
-    out.into_iter()
-        .filter(|line| !line.is_empty())
-        .collect::<Vec<_>>()
-        .join("\n")
+    report.push('\n');
+    report.push_str(&dash);
+    (report, totals)
 }
 
-pub(super) fn render_istanbul_text_summary(files: &[FullFileCoverage]) -> String {
-    let totals = files.iter().fold(
-        FileSummary {
-            statements: Counts {
-                covered: 0,
-                total: 0,
-            },
-            branches: Counts {
-                covered: 0,
-                total: 0,
-            },
-            functions: Counts {
-                covered: 0,
-                total: 0,
-            },
-            lines: Counts {
-                covered: 0,
-                total: 0,
-            },
-        },
-        |mut acc, file| {
-            let s = file_summary(file);
-            acc.statements.covered = acc.statements.covered.saturating_add(s.statements.covered);
-            acc.statements.total = acc.statements.total.saturating_add(s.statements.total);
-            acc.branches.covered = acc.branches.covered.saturating_add(s.branches.covered);
-            acc.branches.total = acc.branches.total.saturating_add(s.branches.total);
-            acc.functions.covered = acc.functions.covered.saturating_add(s.functions.covered);
-            acc.functions.total = acc.functions.total.saturating_add(s.functions.total);
-            acc.lines.covered = acc.lines.covered.saturating_add(s.lines.covered);
-            acc.lines.total = acc.lines.total.saturating_add(s.lines.total);
-            acc
-        },
-    );
-
+pub(super) fn render_istanbul_text_summary_from_totals(totals: FileSummary) -> String {
     let top = "=============================== Coverage summary ===============================";
     let bot = "================================================================================";
     [
@@ -193,6 +208,10 @@ fn format_summary_line(label: &str, counts: Counts) -> String {
 }
 
 fn render_uncovered_line_numbers(line_hits: &BTreeMap<u32, u32>) -> String {
+    let any_uncovered = line_hits.values().any(|hit| *hit == 0);
+    if !any_uncovered {
+        return String::new();
+    }
     let mut uncovered_lines = line_hits
         .iter()
         .filter_map(|(ln, hit)| (*hit == 0).then_some(*ln))

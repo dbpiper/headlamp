@@ -42,10 +42,17 @@ fn main() {
         .then(print_terminal_debug)
         .unwrap_or(());
     let argv0 = std::env::args().skip(1).collect::<Vec<_>>();
-    if should_print_help(&argv0) {
-        print_help();
-        return;
-    }
+    match early_exit_before_double_dash(&argv0) {
+        Some(EarlyExit::Help) => {
+            print_help();
+            return;
+        }
+        Some(EarlyExit::Version) => {
+            print_version();
+            return;
+        }
+        None => {}
+    };
     let (runner, argv) = extract_runner(&argv0);
     let cwd = std::env::current_dir().unwrap_or_else(|_| std::path::PathBuf::from("."));
     let config_root = headlamp::config::find_repo_root(&cwd);
@@ -95,8 +102,26 @@ fn resolve_run_root(
     }
 }
 
-fn should_print_help(argv0: &[String]) -> bool {
-    argv0.iter().any(|t| t == "--help" || t == "-h")
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum EarlyExit {
+    Help,
+    Version,
+}
+
+fn early_exit_before_double_dash(argv: &[String]) -> Option<EarlyExit> {
+    argv.iter()
+        .take_while(|t| t.as_str() != "--")
+        .find_map(|t| {
+            Some(match t.as_str() {
+                "-h" | "--help" => EarlyExit::Help,
+                "-V" | "--version" => EarlyExit::Version,
+                _ => return None,
+            })
+        })
+}
+
+fn print_version() {
+    println!("{}", env!("CARGO_PKG_VERSION"));
 }
 
 fn build_parsed_args(repo_root: &std::path::Path, argv: &[String]) -> headlamp::args::ParsedArgs {

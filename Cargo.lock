@@ -554,7 +554,6 @@ dependencies = [
  "insta",
  "json5",
  "lcov",
- "once_cell",
  "os_pipe",
  "oxc_allocator",
  "oxc_ast",

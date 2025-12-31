@@ -1,20 +1,20 @@
-use super::analysis::{
-    composite_bar_pct, compute_uncovered_blocks, file_summary, missed_branches, missed_functions,
-};
+use super::analysis::composite_bar_pct;
 use super::model::FullFileCoverage;
-use super::table::{ColumnSpec, Decor, cell, cell_with};
+use super::path_shorten::shorten_path_preserving_filename;
+use super::table::{
+    Cell, ColumnSpec, Decor, TableFrame, build_table_frame, cell, cell_with, compute_column_widths,
+    write_table_with_frame_const,
+};
+use std::sync::Arc;
+use std::sync::LazyLock;
 
-pub(super) fn render_per_file_composite_table(
-    file: &FullFileCoverage,
-    max_rows: usize,
-    total_width: usize,
-    max_hotspots: Option<u32>,
-    tty: bool,
-) -> Vec<String> {
-    let rows_avail = 40usize;
-    let table_budget = 14usize.max(max_rows.min(rows_avail + 8));
-    let row_budget = 6usize.max(table_budget.saturating_sub(6));
+pub(super) struct PerFileTableLayout {
+    pub(super) columns: Vec<ColumnSpec>,
+    pub(super) widths: Vec<usize>,
+    pub(super) frame: TableFrame,
+}
 
+pub(super) fn build_per_file_table_layout(total_width: usize) -> PerFileTableLayout {
     let total = if total_width > 20 { total_width } else { 100 };
     let file_max = 32usize.max(((total as f64) * 0.42).floor() as usize);
     let detail_max = 20usize.max(((total as f64) * 0.22).floor() as usize);
@@ -70,136 +70,203 @@ pub(super) fn render_per_file_composite_table(
             align_right: false,
         },
     ];
+    let widths = compute_column_widths(total_width, &columns);
+    let frame = build_table_frame(&columns, &widths);
+    PerFileTableLayout {
+        columns,
+        widths,
+        frame,
+    }
+}
 
-    let summary = file_summary(file);
-    let blocks = compute_uncovered_blocks(file);
-    let miss_fns = missed_functions(file);
-    let misses = missed_branches(file);
+static ARC_DASH: LazyLock<Arc<str>> = LazyLock::new(|| Arc::from("—"));
+static ARC_EMPTY: LazyLock<Arc<str>> = LazyLock::new(|| Arc::from(""));
+static ARC_LABEL_LINE: LazyLock<Arc<str>> = LazyLock::new(|| Arc::from("Line"));
+static ARC_LABEL_UNCOVERED: LazyLock<Arc<str>> = LazyLock::new(|| Arc::from("uncovered"));
+static ARC_LABEL_SUMMARY: LazyLock<Arc<str>> = LazyLock::new(|| Arc::from("Summary"));
+static ARC_LABEL_TOTALS: LazyLock<Arc<str>> = LazyLock::new(|| Arc::from("Totals"));
+static ARC_LABEL_HOTSPOTS: LazyLock<Arc<str>> = LazyLock::new(|| Arc::from("Hotspots"));
+static ARC_LABEL_HOTSPOT: LazyLock<Arc<str>> = LazyLock::new(|| Arc::from("Hotspot"));
+static ARC_LABEL_FUNCTIONS: LazyLock<Arc<str>> = LazyLock::new(|| Arc::from("Functions"));
+static ARC_LABEL_FUNC: LazyLock<Arc<str>> = LazyLock::new(|| Arc::from("Func"));
+static ARC_LABEL_BRANCHES: LazyLock<Arc<str>> = LazyLock::new(|| Arc::from("Branches"));
+static ARC_LABEL_BRANCH: LazyLock<Arc<str>> = LazyLock::new(|| Arc::from("Branch"));
+static ARC_NA: LazyLock<Arc<str>> = LazyLock::new(|| Arc::from("N/A"));
+static ARC_HOTSPOTS_NOTE: LazyLock<Arc<str>> =
+    LazyLock::new(|| Arc::from("(largest uncovered ranges)"));
+static ARC_FUNCTIONS_NOTE: LazyLock<Arc<str>> = LazyLock::new(|| Arc::from("(never executed)"));
+static ARC_BRANCHES_NOTE: LazyLock<Arc<str>> = LazyLock::new(|| Arc::from("(paths with 0 hits)"));
 
-    let mut rows: Vec<Vec<super::table::Cell>> = vec![];
+pub(super) struct PerFileCompositeTableInput<'a> {
+    pub(super) file: &'a FullFileCoverage,
+    pub(super) summary: &'a super::model::FileSummary,
+    pub(super) blocks: &'a [super::model::UncoveredRange],
+    pub(super) missed_functions: &'a [super::model::MissedFunction],
+    pub(super) missed_branches: &'a [super::model::MissedBranch],
+    pub(super) max_rows: usize,
+    pub(super) layout: &'a PerFileTableLayout,
+    pub(super) max_hotspots: Option<u32>,
+    pub(super) tty: bool,
+}
 
-    let rel = file.rel_path.clone();
-    let dash = "—".to_string();
+pub(super) fn write_per_file_composite_table(
+    out: &mut String,
+    input: &PerFileCompositeTableInput<'_>,
+) {
+    let PerFileCompositeTableInput {
+        file,
+        summary,
+        blocks,
+        missed_functions,
+        missed_branches,
+        max_rows,
+        layout,
+        max_hotspots,
+        tty,
+    } = input;
+    let max_rows = *max_rows;
+    let max_hotspots = *max_hotspots;
+    let tty = *tty;
+    let rows_avail = 40usize;
+    let table_budget = 14usize.max(max_rows.min(rows_avail + 8));
+    let row_budget = 6usize.max(table_budget.saturating_sub(6));
+
+    let mut rows: Vec<[Cell; 8]> = Vec::with_capacity(32);
+
+    let file_col_width = layout.widths.first().copied().unwrap_or(28);
+    let shortened_file_text: Arc<str> = Arc::from(shorten_path_preserving_filename(
+        file.rel_path.as_str(),
+        file_col_width,
+    ));
+    let dash = ARC_DASH.clone();
+    let empty = ARC_EMPTY.clone();
+    let label_line = ARC_LABEL_LINE.clone();
+    let label_uncovered = ARC_LABEL_UNCOVERED.clone();
+    let blank_row: [Cell; 8] = [
+        cell(empty.clone()),
+        cell(empty.clone()),
+        cell(empty.clone()),
+        cell(empty.clone()),
+        cell(empty.clone()),
+        cell(empty.clone()),
+        cell(empty.clone()),
+        cell(empty.clone()),
+    ];
     let l_pct = summary.lines.pct();
     let f_pct = summary.functions.pct();
     let b_pct = summary.branches.pct();
-    let b_pct_label = if summary.branches.total == 0 {
-        "N/A".to_string()
+    let l_pct_text: Arc<str> = Arc::from(format!("{l_pct:.1}%"));
+    let f_pct_text: Arc<str> = Arc::from(format!("{f_pct:.1}%"));
+    let b_pct_text: Arc<str> = if summary.branches.total == 0 {
+        ARC_NA.clone()
     } else {
-        format!("{b_pct:.1}%")
+        Arc::from(format!("{b_pct:.1}%"))
     };
-    rows.push(vec![
-        cell_with(rel.clone(), Decor::ShortenPath { rel: rel.clone() }),
-        cell_with("Summary", Decor::Bold),
+    rows.push([
+        cell(shortened_file_text.clone()),
+        cell_with(ARC_LABEL_SUMMARY.clone(), Decor::Bold),
         cell(dash.clone()),
-        cell_with(format!("{l_pct:.1}%"), Decor::TintPct { pct: l_pct }),
+        cell_with(l_pct_text.clone(), Decor::TintPct { pct: l_pct }),
         cell_with(
-            String::new(),
+            empty.clone(),
             Decor::Bar {
-                pct: composite_bar_pct(&summary, &blocks),
+                pct: composite_bar_pct(summary, blocks),
             },
         ),
-        cell_with(format!("{f_pct:.1}%"), Decor::TintPct { pct: f_pct }),
-        cell_with(b_pct_label, Decor::TintPct { pct: b_pct }),
-        cell(""),
+        cell_with(f_pct_text.clone(), Decor::TintPct { pct: f_pct }),
+        cell_with(b_pct_text.clone(), Decor::TintPct { pct: b_pct }),
+        cell(empty.clone()),
     ]);
-    rows.push(vec![
-        cell_with(rel.clone(), Decor::DimShortenPath { rel: rel.clone() }),
-        cell_with("Totals", Decor::Dim),
-        cell_with("—", Decor::Dim),
-        cell_with(format!("{l_pct:.1}%"), Decor::Dim),
-        cell_with(String::new(), Decor::Dim),
-        cell_with(format!("{f_pct:.1}%"), Decor::Dim),
-        cell_with(
-            if summary.branches.total == 0 {
-                "N/A".to_string()
-            } else {
-                format!("{b_pct:.1}%")
-            },
-            Decor::Dim,
-        ),
-        cell(""),
+    rows.push([
+        cell_with(shortened_file_text.clone(), Decor::Dim),
+        cell_with(ARC_LABEL_TOTALS.clone(), Decor::Dim),
+        cell_with(dash.clone(), Decor::Dim),
+        cell_with(l_pct_text.clone(), Decor::Dim),
+        cell_with(empty.clone(), Decor::Dim),
+        cell_with(f_pct_text.clone(), Decor::Dim),
+        cell_with(b_pct_text.clone(), Decor::Dim),
+        cell(empty.clone()),
     ]);
 
-    if !blocks.is_empty() || !miss_fns.is_empty() || !misses.is_empty() {
+    if !blocks.is_empty() || !missed_functions.is_empty() || !missed_branches.is_empty() {
         let want_hs = max_hotspots
             .map(|n| (n.max(1) as usize).min(blocks.len()))
             .unwrap_or_else(|| ((row_budget as f64) * 0.45).ceil() as usize)
             .min(blocks.len());
         if want_hs > 0 {
-            rows.push(vec![
-                cell_with(rel.clone(), Decor::DimShortenPath { rel: rel.clone() }),
-                cell_with("Hotspots", Decor::Dim),
-                cell_with("", Decor::Dim),
-                cell_with("", Decor::Dim),
-                cell_with("", Decor::Dim),
-                cell_with("", Decor::Dim),
-                cell_with("", Decor::Dim),
-                cell_with("(largest uncovered ranges)", Decor::Dim),
+            rows.push([
+                cell_with(shortened_file_text.clone(), Decor::Dim),
+                cell_with(ARC_LABEL_HOTSPOTS.clone(), Decor::Dim),
+                cell_with(empty.clone(), Decor::Dim),
+                cell_with(empty.clone(), Decor::Dim),
+                cell_with(empty.clone(), Decor::Dim),
+                cell_with(empty.clone(), Decor::Dim),
+                cell_with(empty.clone(), Decor::Dim),
+                cell_with(ARC_HOTSPOTS_NOTE.clone(), Decor::Dim),
             ]);
             for hotspot in blocks.iter().take(want_hs) {
-                rows.push(vec![
-                    cell_with(rel.clone(), Decor::ShortenPath { rel: rel.clone() }),
-                    cell("Hotspot"),
+                rows.push([
+                    cell(shortened_file_text.clone()),
+                    cell(ARC_LABEL_HOTSPOT.clone()),
                     cell(format!("L{}–L{}", hotspot.start, hotspot.end)),
-                    cell(""),
-                    cell(""),
-                    cell(""),
-                    cell(""),
+                    cell(empty.clone()),
+                    cell(empty.clone()),
+                    cell(empty.clone()),
+                    cell(empty.clone()),
                     cell(format!("{} lines", hotspot.end - hotspot.start + 1)),
                 ]);
             }
         }
 
         let want_fn = ((row_budget as f64) * 0.25).ceil() as usize;
-        let want_fn = want_fn.min(miss_fns.len());
+        let want_fn = want_fn.min(missed_functions.len());
         if want_fn > 0 {
-            rows.push(vec![
-                cell_with(rel.clone(), Decor::DimShortenPath { rel: rel.clone() }),
-                cell_with("Functions", Decor::Dim),
-                cell_with("", Decor::Dim),
-                cell_with("", Decor::Dim),
-                cell_with("", Decor::Dim),
-                cell_with("", Decor::Dim),
-                cell_with("", Decor::Dim),
-                cell_with("(never executed)", Decor::Dim),
+            rows.push([
+                cell_with(shortened_file_text.clone(), Decor::Dim),
+                cell_with(ARC_LABEL_FUNCTIONS.clone(), Decor::Dim),
+                cell_with(empty.clone(), Decor::Dim),
+                cell_with(empty.clone(), Decor::Dim),
+                cell_with(empty.clone(), Decor::Dim),
+                cell_with(empty.clone(), Decor::Dim),
+                cell_with(empty.clone(), Decor::Dim),
+                cell_with(ARC_FUNCTIONS_NOTE.clone(), Decor::Dim),
             ]);
-            for missed in miss_fns.iter().take(want_fn) {
-                rows.push(vec![
-                    cell_with(rel.clone(), Decor::ShortenPath { rel: rel.clone() }),
-                    cell("Func"),
+            for missed in missed_functions.iter().take(want_fn) {
+                rows.push([
+                    cell(shortened_file_text.clone()),
+                    cell(ARC_LABEL_FUNC.clone()),
                     cell(format!("L{}", missed.line)),
-                    cell(""),
-                    cell(""),
-                    cell(""),
-                    cell(""),
+                    cell(empty.clone()),
+                    cell(empty.clone()),
+                    cell(empty.clone()),
+                    cell(empty.clone()),
                     cell(missed.name.clone()),
                 ]);
             }
         }
 
         let want_br = ((row_budget as f64) * 0.2).ceil() as usize;
-        let want_br = want_br.min(misses.len());
+        let want_br = want_br.min(missed_branches.len());
         if want_br > 0 {
-            rows.push(vec![
-                cell_with(rel.clone(), Decor::DimShortenPath { rel: rel.clone() }),
-                cell_with("Branches", Decor::Dim),
-                cell_with("", Decor::Dim),
-                cell_with("", Decor::Dim),
-                cell_with("", Decor::Dim),
-                cell_with("", Decor::Dim),
-                cell_with("", Decor::Dim),
-                cell_with("(paths with 0 hits)", Decor::Dim),
+            rows.push([
+                cell_with(shortened_file_text.clone(), Decor::Dim),
+                cell_with(ARC_LABEL_BRANCHES.clone(), Decor::Dim),
+                cell_with(empty.clone(), Decor::Dim),
+                cell_with(empty.clone(), Decor::Dim),
+                cell_with(empty.clone(), Decor::Dim),
+                cell_with(empty.clone(), Decor::Dim),
+                cell_with(empty.clone(), Decor::Dim),
+                cell_with(ARC_BRANCHES_NOTE.clone(), Decor::Dim),
             ]);
-            for missed in misses.iter().take(want_br) {
-                rows.push(vec![
-                    cell_with(rel.clone(), Decor::ShortenPath { rel: rel.clone() }),
-                    cell("Branch"),
+            for missed in missed_branches.iter().take(want_br) {
+                rows.push([
+                    cell(shortened_file_text.clone()),
+                    cell(ARC_LABEL_BRANCH.clone()),
                     cell(format!("L{}", missed.line)),
-                    cell(""),
-                    cell(""),
-                    cell(""),
-                    cell(""),
+                    cell(empty.clone()),
+                    cell(empty.clone()),
+                    cell(empty.clone()),
+                    cell(empty.clone()),
                     cell(format!(
                         "#{} missed [{}]",
                         missed.id,
@@ -220,34 +287,60 @@ pub(super) fn render_per_file_composite_table(
             row_budget
         };
         if rows.len() < target {
-            let line_queue = blocks
-                .iter()
-                .flat_map(|range| (range.start..=range.end).collect::<Vec<_>>())
-                .take(5000)
-                .collect::<Vec<_>>();
-            let mut iter = line_queue.into_iter();
+            let mut iter = uncovered_lines_iter(blocks).take(5000);
             while rows.len() < target {
                 match iter.next() {
-                    Some(ln) => rows.push(vec![
-                        cell_with(rel.clone(), Decor::ShortenPath { rel: rel.clone() }),
-                        cell("Line"),
+                    Some(ln) => rows.push([
+                        cell(shortened_file_text.clone()),
+                        cell(label_line.clone()),
                         cell(format!("L{ln}")),
-                        cell(""),
-                        cell(""),
-                        cell(""),
-                        cell(""),
-                        cell("uncovered"),
+                        cell(empty.clone()),
+                        cell(empty.clone()),
+                        cell(empty.clone()),
+                        cell(empty.clone()),
+                        cell(label_uncovered.clone()),
                     ]),
                     None => {
-                        rows.push((0..8).map(|_| cell("")).collect());
+                        rows.push(blank_row.clone());
                     }
                 }
             }
         }
     }
 
-    super::table::render_table(total_width, &columns, &rows)
-        .lines()
-        .map(|line| line.to_string())
-        .collect::<Vec<_>>()
+    write_table_with_frame_const::<8>(out, &layout.frame, &layout.columns, &layout.widths, &rows);
+}
+
+fn uncovered_lines_iter(blocks: &[super::model::UncoveredRange]) -> impl Iterator<Item = u32> + '_ {
+    struct It<'a> {
+        blocks: &'a [super::model::UncoveredRange],
+        block_index: usize,
+        next_line: Option<u32>,
+    }
+
+    impl<'a> Iterator for It<'a> {
+        type Item = u32;
+        fn next(&mut self) -> Option<Self::Item> {
+            loop {
+                if self.block_index >= self.blocks.len() {
+                    return None;
+                }
+                let block = &self.blocks[self.block_index];
+                let current = self.next_line.unwrap_or(block.start);
+                if current > block.end {
+                    self.block_index += 1;
+                    self.next_line = None;
+                    continue;
+                }
+                self.next_line = Some(current.saturating_add(1));
+                return Some(current);
+            }
+        }
+    }
+
+    It {
+        blocks,
+        block_index: 0,
+        next_line: None,
+    }
 }

@@ -2,7 +2,7 @@ use std::collections::BTreeMap;
 
 use crate::format::stacks::strip_ansi_simple;
 
-use super::istanbul_text::render_istanbul_text_report;
+use super::istanbul_text::render_istanbul_text_report_with_totals;
 use super::model::FullFileCoverage;
 
 fn make_file_with_long_uncovered_list() -> FullFileCoverage {
@@ -28,7 +28,8 @@ fn make_file_with_long_uncovered_list() -> FullFileCoverage {
 
 #[test]
 fn istanbul_text_report_truncates_uncovered_column_to_avoid_overflow() {
-    let report = render_istanbul_text_report(&[make_file_with_long_uncovered_list()], 95);
+    let (report, _totals) =
+        render_istanbul_text_report_with_totals(&[make_file_with_long_uncovered_list()], 95);
     let lines = report.lines().map(strip_ansi_simple).collect::<Vec<_>>();
     let max_width = lines
         .iter()

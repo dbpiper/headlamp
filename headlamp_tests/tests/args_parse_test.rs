@@ -6,7 +6,7 @@ fn derives_basic_flags_and_selection() {
     let cfg = HeadlampConfig::default();
     let argv = vec![
         "--coverage".to_string(),
-        "--onlyFailures".to_string(),
+        "--only-failures".to_string(),
         "src/foo.ts".to_string(),
         "-t".to_string(),
         "UserCard".to_string(),
@@ -26,6 +26,14 @@ fn derives_basic_flags_and_selection() {
 
 #[test]
 fn parses_coverage_detail_values() {
+    let cfg = HeadlampConfig::default();
+    let argv = vec!["--coverage-detail=all".to_string()];
+    let parsed = derive_args(&config_tokens(&cfg, &argv), &argv, true);
+    assert_eq!(parsed.coverage_detail, Some(CoverageDetail::All));
+}
+
+#[test]
+fn parses_coverage_detail_values_via_legacy_flag() {
     let cfg = HeadlampConfig::default();
     let argv = vec!["--coverage.detail=all".to_string()];
     let parsed = derive_args(&config_tokens(&cfg, &argv), &argv, true);
@@ -56,7 +64,7 @@ fn derive_args_splits_intermixed_headlamp_flags_from_runner_args() {
         "UserCard".to_string(),
         "--coverage".to_string(),
         "src/foo.ts".to_string(),
-        "--showLogs".to_string(),
+        "--show-logs".to_string(),
     ];
     let cfg_tokens = config_tokens(&cfg, &argv);
     let parsed = derive_args(&cfg_tokens, &argv, true);
@@ -78,6 +86,14 @@ fn artifacts_are_ephemeral_by_default() {
 #[test]
 fn keep_artifacts_can_be_enabled_by_cli_flag() {
     let cfg = HeadlampConfig::default();
+    let argv = vec!["--keep-artifacts".to_string()];
+    let parsed = derive_args(&config_tokens(&cfg, &argv), &argv, true);
+    assert!(parsed.keep_artifacts);
+}
+
+#[test]
+fn keep_artifacts_can_be_enabled_by_legacy_cli_flag() {
+    let cfg = HeadlampConfig::default();
     let argv = vec!["--keepArtifacts".to_string()];
     let parsed = derive_args(&config_tokens(&cfg, &argv), &argv, true);
     assert!(parsed.keep_artifacts);
@@ -91,7 +107,7 @@ fn keep_artifacts_can_be_enabled_by_config() {
     };
     let argv: Vec<String> = vec![];
     let cfg_tokens = config_tokens(&cfg, &argv);
-    assert!(cfg_tokens.iter().any(|t| t == "--keepArtifacts"));
+    assert!(cfg_tokens.iter().any(|t| t == "--keep-artifacts"));
     let parsed = derive_args(&cfg_tokens, &argv, true);
     assert!(parsed.keep_artifacts);
 }
@@ -101,7 +117,7 @@ fn derive_args_changed_optional_value_does_not_consume_next_flag() {
     let cfg = HeadlampConfig::default();
     let argv = vec![
         "--changed".to_string(),
-        "--showLogs".to_string(),
+        "--show-logs".to_string(),
         "-t".to_string(),
         "UserCard".to_string(),
     ];
@@ -214,7 +230,7 @@ fn derive_args_boolean_flags_can_consume_false_as_lookahead() {
     let argv = vec![
         "--sequential".to_string(),
         "false".to_string(),
-        "--coverage.abortOnFailure".to_string(),
+        "--coverage-abort-on-failure".to_string(),
         "false".to_string(),
         "-t".to_string(),
         "UserCard".to_string(),

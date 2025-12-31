@@ -1,4 +1,4 @@
-use once_cell::sync::Lazy;
+use std::sync::LazyLock;
 
 use crate::config::{CoverageMode, CoverageUi, HeadlampConfig};
 
@@ -6,88 +6,135 @@ use super::helpers::{
     base_flag, changed_mode_to_string, depth_for_mode, parse_changed_mode_string,
 };
 
-static HEADLAMP_FLAGS: Lazy<std::collections::HashSet<&'static str>> = Lazy::new(|| {
+static HEADLAMP_FLAGS: LazyLock<std::collections::HashSet<&'static str>> = LazyLock::new(|| {
     [
+        "--keep-artifacts",
         "--keepArtifacts",
         "--coverage",
+        "--coverage-abort-on-failure",
         "--coverage.abortOnFailure",
         "--coverage-ui",
         "--coverageUi",
+        "--coverage-detail",
         "--coverage.detail",
+        "--coverage-show-code",
         "--coverage.showCode",
+        "--coverage-mode",
         "--coverage.mode",
+        "--coverage-compact",
         "--coverage.compact",
+        "--coverage-max-files",
         "--coverage.maxFiles",
+        "--coverage-max-hotspots",
         "--coverage.maxHotspots",
+        "--coverage-thresholds-lines",
         "--coverage.thresholds.lines",
+        "--coverage-thresholds-functions",
         "--coverage.thresholds.functions",
+        "--coverage-thresholds-branches",
         "--coverage.thresholds.branches",
+        "--coverage-thresholds-statements",
         "--coverage.thresholds.statements",
+        "--coverage-page-fit",
         "--coverage.pageFit",
+        "--coverage-include",
         "--coverage.include",
+        "--coverage-exclude",
         "--coverage.exclude",
+        "--coverage-editor",
         "--coverage.editor",
+        "--coverage-root",
         "--coverage.root",
+        "--only-failures",
         "--onlyFailures",
+        "--show-logs",
         "--showLogs",
         "--sequential",
         "--watch",
+        "--watch-all",
         "--watchAll",
         "--ci",
         "--verbose",
         "--no-cache",
         "--noCache",
+        "--bootstrap-command",
         "--bootstrapCommand",
         "--changed",
+        "--changed-depth",
         "--changed.depth",
+        "--dependency-language",
         "--dependencyLanguage",
     ]
     .into_iter()
     .collect()
 });
 
-static TAKES_VALUE: Lazy<std::collections::HashSet<&'static str>> = Lazy::new(|| {
+static TAKES_VALUE: LazyLock<std::collections::HashSet<&'static str>> = LazyLock::new(|| {
     [
+        "--bootstrap-command",
         "--bootstrapCommand",
         "--coverage-ui",
         "--coverageUi",
+        "--coverage-detail",
         "--coverage.detail",
+        "--coverage-show-code",
         "--coverage.showCode",
+        "--coverage-mode",
         "--coverage.mode",
+        "--coverage-max-files",
         "--coverage.maxFiles",
+        "--coverage-max-hotspots",
         "--coverage.maxHotspots",
+        "--coverage-thresholds-lines",
         "--coverage.thresholds.lines",
+        "--coverage-thresholds-functions",
         "--coverage.thresholds.functions",
+        "--coverage-thresholds-branches",
         "--coverage.thresholds.branches",
+        "--coverage-thresholds-statements",
         "--coverage.thresholds.statements",
+        "--coverage-page-fit",
         "--coverage.pageFit",
+        "--coverage-include",
         "--coverage.include",
+        "--coverage-exclude",
         "--coverage.exclude",
+        "--coverage-editor",
         "--coverage.editor",
+        "--coverage-root",
         "--coverage.root",
         "--changed",
+        "--changed-depth",
         "--changed.depth",
+        "--dependency-language",
         "--dependencyLanguage",
     ]
     .into_iter()
     .collect()
 });
 
-static BOOL_FLAGS: Lazy<std::collections::HashSet<&'static str>> = Lazy::new(|| {
+static BOOL_FLAGS: LazyLock<std::collections::HashSet<&'static str>> = LazyLock::new(|| {
     [
+        "--keep-artifacts",
         "--keepArtifacts",
         "--coverage",
+        "--coverage-abort-on-failure",
         "--coverage.abortOnFailure",
+        "--only-failures",
         "--onlyFailures",
+        "--show-logs",
         "--showLogs",
         "--sequential",
         "--watch",
+        "--watch-all",
         "--watchAll",
         "--ci",
         "--verbose",
         "--no-cache",
         "--noCache",
+        "--coverage-show-code",
         "--coverage.showCode",
+        "--coverage-page-fit",
         "--coverage.pageFit",
     ]
     .into_iter()
@@ -105,8 +152,8 @@ pub fn config_tokens(cfg: &HeadlampConfig, argv: &[String]) -> Vec<String> {
 fn append_basic_config_tokens(tokens: &mut Vec<String>, cfg: &HeadlampConfig) {
     trimmed(cfg.bootstrap_command.as_deref())
         .into_iter()
-        .for_each(|cmd| tokens.push(format!("--bootstrapCommand={cmd}")));
-    push_bool_flag(tokens, cfg.keep_artifacts == Some(true), "--keepArtifacts");
+        .for_each(|cmd| tokens.push(format!("--bootstrap-command={cmd}")));
+    push_bool_flag(tokens, cfg.keep_artifacts == Some(true), "--keep-artifacts");
     push_bool_flag(tokens, cfg.sequential == Some(true), "--sequential");
     push_bool_flag(tokens, cfg.watch == Some(true), "--watch");
     push_bool_flag(tokens, cfg.ci == Some(true), "--ci");
@@ -155,45 +202,45 @@ fn append_coverage_behavior_tokens(
         .and_then(|o| o.abort_on_failure)
         .or(cfg.coverage_abort_on_failure);
     abort.into_iter().for_each(|v| {
-        tokens.push(format!("--coverage.abortOnFailure={}", bool_str(v)));
+        tokens.push(format!("--coverage-abort-on-failure={}", bool_str(v)));
     });
 
     let mode = coverage_obj.and_then(|o| o.mode).or(cfg.coverage_mode);
     mode.into_iter()
-        .for_each(|m| tokens.push(format!("--coverage.mode={}", coverage_mode_str(m))));
+        .for_each(|m| tokens.push(format!("--coverage-mode={}", coverage_mode_str(m))));
 
     let page_fit = coverage_obj
         .and_then(|o| o.page_fit)
         .or(cfg.coverage_page_fit);
     page_fit
         .into_iter()
-        .for_each(|v| tokens.push(format!("--coverage.pageFit={}", bool_str(v))));
+        .for_each(|v| tokens.push(format!("--coverage-page-fit={}", bool_str(v))));
 
     cfg.coverage_ui
         .into_iter()
         .for_each(|ui| tokens.push(format!("--coverage-ui={}", coverage_ui_str(ui))));
     trimmed(cfg.editor_cmd.as_deref())
         .into_iter()
-        .for_each(|editor| tokens.push(format!("--coverage.editor={editor}")));
+        .for_each(|editor| tokens.push(format!("--coverage-editor={editor}")));
     cfg.include
         .as_ref()
         .filter(|v| !v.is_empty())
         .into_iter()
-        .for_each(|include| tokens.push(format!("--coverage.include={}", include.join(","))));
+        .for_each(|include| tokens.push(format!("--coverage-include={}", include.join(","))));
     cfg.exclude
         .as_ref()
         .filter(|v| !v.is_empty())
         .into_iter()
-        .for_each(|exclude| tokens.push(format!("--coverage.exclude={}", exclude.join(","))));
+        .for_each(|exclude| tokens.push(format!("--coverage-exclude={}", exclude.join(","))));
     cfg.coverage_max_files
         .into_iter()
-        .for_each(|max_files| tokens.push(format!("--coverage.maxFiles={max_files}")));
+        .for_each(|max_files| tokens.push(format!("--coverage-max-files={max_files}")));
     cfg.coverage_max_hotspots
         .into_iter()
-        .for_each(|max_hotspots| tokens.push(format!("--coverage.maxHotspots={max_hotspots}")));
+        .for_each(|max_hotspots| tokens.push(format!("--coverage-max-hotspots={max_hotspots}")));
     cfg.coverage_show_code
         .into_iter()
-        .for_each(|show| tokens.push(format!("--coverage.showCode={}", bool_str(show))));
+        .for_each(|show| tokens.push(format!("--coverage-show-code={}", bool_str(show))));
 }
 
 fn append_coverage_threshold_tokens(
@@ -206,15 +253,15 @@ fn append_coverage_threshold_tokens(
     thresholds
         .lines
         .into_iter()
-        .for_each(|v| tokens.push(format!("--coverage.thresholds.lines={v}")));
+        .for_each(|v| tokens.push(format!("--coverage-thresholds-lines={v}")));
     thresholds.functions.into_iter().for_each(|v| {
-        tokens.push(format!("--coverage.thresholds.functions={v}"));
+        tokens.push(format!("--coverage-thresholds-functions={v}"));
     });
     thresholds.branches.into_iter().for_each(|v| {
-        tokens.push(format!("--coverage.thresholds.branches={v}"));
+        tokens.push(format!("--coverage-thresholds-branches={v}"));
     });
     thresholds.statements.into_iter().for_each(|v| {
-        tokens.push(format!("--coverage.thresholds.statements={v}"));
+        tokens.push(format!("--coverage-thresholds-statements={v}"));
     });
 }
 
@@ -224,13 +271,13 @@ fn append_coverage_detail_token(tokens: &mut Vec<String>, cfg: &HeadlampConfig) 
     };
     match detail {
         serde_json::Value::String(s) if s == "all" => {
-            tokens.push("--coverage.detail=all".to_string())
+            tokens.push("--coverage-detail=all".to_string())
         }
         serde_json::Value::String(s) if s == "auto" => {
-            tokens.push("--coverage.detail=auto".to_string())
+            tokens.push("--coverage-detail=auto".to_string())
         }
         serde_json::Value::Number(n) if n.as_u64().is_some() => {
-            tokens.push(format!("--coverage.detail={}", n.as_u64().unwrap()))
+            tokens.push(format!("--coverage-detail={}", n.as_u64().unwrap()))
         }
         _ => {}
     }
@@ -264,7 +311,7 @@ fn append_changed_config_tokens(tokens: &mut Vec<String>, cfg: &HeadlampConfig, 
     override_depth
         .or(default_depth)
         .into_iter()
-        .for_each(|depth| tokens.push(format!("--changed.depth={depth}")));
+        .for_each(|depth| tokens.push(format!("--changed-depth={depth}")));
     if changed_from_cli.is_none() {
         tokens.push(format!("--changed={}", changed_mode_to_string(mode)));
     }

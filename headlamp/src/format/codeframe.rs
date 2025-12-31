@@ -1,19 +1,19 @@
 use std::fs;
 use std::path::Path;
 use std::sync::Arc;
+use std::sync::LazyLock;
 
 use dashmap::DashMap;
-use once_cell::sync::Lazy;
 use path_slash::PathExt;
 use regex::Regex;
 
 use crate::format::colors;
 use crate::format::{ansi, stacks};
 
-static SOURCE_CACHE: Lazy<DashMap<String, Arc<Vec<String>>>> = Lazy::new(DashMap::new);
+static SOURCE_CACHE: LazyLock<DashMap<String, Arc<Vec<String>>>> = LazyLock::new(DashMap::new);
 
 pub fn find_code_frame_start(lines: &[String]) -> Option<usize> {
-    static RE: Lazy<Regex> = Lazy::new(|| Regex::new(r"^\s*(>?\s*\d+\s*\|)").unwrap());
+    static RE: LazyLock<Regex> = LazyLock::new(|| Regex::new(r"^\s*(>?\s*\d+\s*\|)").unwrap());
     lines
         .iter()
         .position(|line| RE.is_match(&stacks::strip_ansi_simple(line)))
@@ -38,9 +38,11 @@ fn read_source(file: &str) -> Arc<Vec<String>> {
 
 fn render_inline_code_frame(lines: &[String], start: usize) -> Vec<String> {
     let mut out: Vec<String> = vec![];
-    static CARET_RE: Lazy<Regex> = Lazy::new(|| Regex::new(r"^\s*\^+\s*$").unwrap());
-    static PTR_RE: Lazy<Regex> = Lazy::new(|| Regex::new(r"^\s*>(\s*\d+)\s*\|\s?(.*)$").unwrap());
-    static NOR_RE: Lazy<Regex> = Lazy::new(|| Regex::new(r"^\s*(\d+)\s*\|\s?(.*)$").unwrap());
+    static CARET_RE: LazyLock<Regex> = LazyLock::new(|| Regex::new(r"^\s*\^+\s*$").unwrap());
+    static PTR_RE: LazyLock<Regex> =
+        LazyLock::new(|| Regex::new(r"^\s*>(\s*\d+)\s*\|\s?(.*)$").unwrap());
+    static NOR_RE: LazyLock<Regex> =
+        LazyLock::new(|| Regex::new(r"^\s*(\d+)\s*\|\s?(.*)$").unwrap());
     for i in start..lines.len() {
         let raw = lines
             .get(i)

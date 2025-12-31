@@ -1,15 +1,21 @@
+use std::borrow::Cow;
 use std::path::Path;
 
 pub fn shorten_path_preserving_filename(rel_path: &str, max_width: usize) -> String {
     if max_width == 0 {
         return String::new();
     }
-    let normalized = rel_path.replace('\\', "/");
-    if visible_width(&normalized) <= max_width {
-        return normalized;
+    let normalized: Cow<'_, str> = if rel_path.contains('\\') {
+        Cow::Owned(rel_path.replace('\\', "/"))
+    } else {
+        Cow::Borrowed(rel_path)
+    };
+    if visible_width(normalized.as_ref()) <= max_width {
+        return normalized.into_owned();
     }
 
     let ellipsis = "…";
+    let normalized = normalized.into_owned();
     let parts = normalized.split('/').collect::<Vec<_>>();
     let base = parts.last().copied().unwrap_or("");
     let dirs = parts[..parts.len().saturating_sub(1)].to_vec();

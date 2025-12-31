@@ -2,13 +2,13 @@ use std::borrow::Cow;
 use std::path::Path;
 
 use globset::{Glob, GlobSet, GlobSetBuilder};
-use once_cell::sync::Lazy;
+use std::sync::LazyLock;
 
 use crate::config::{ChangedMode, CoverageMode, CoverageUi};
 
 use super::types::CoverageDetail;
 
-static TEST_LIKE_GLOBSET: Lazy<GlobSet> = Lazy::new(|| {
+static TEST_LIKE_GLOBSET: LazyLock<GlobSet> = LazyLock::new(|| {
     let mut b = GlobSetBuilder::new();
     ["**/tests/**", "**/*.{test,spec}.{ts,tsx,js,jsx}"]
         .into_iter()

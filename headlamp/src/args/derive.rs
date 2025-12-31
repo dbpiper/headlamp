@@ -119,7 +119,6 @@ fn coverage_ui_from_cli(parsed_cli: &HeadlampCli) -> CoverageUi {
     parsed_cli
         .coverage_ui
         .as_deref()
-        .or(parsed_cli.coverage_ui_alt.as_deref())
         .map(parse_coverage_ui)
         .unwrap_or(CoverageUi::Both)
 }
@@ -128,7 +127,6 @@ fn dependency_language_from_cli(parsed_cli: &HeadlampCli) -> Option<DependencyLa
     parsed_cli
         .dependency_language
         .as_deref()
-        .or(parsed_cli.dependency_language_alt.as_deref())
         .and_then(DependencyLanguageId::parse)
 }
 

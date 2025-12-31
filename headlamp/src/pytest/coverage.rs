@@ -107,10 +107,14 @@ fn run_coveragepy_json_report(
         "python"
     };
     let out_path_string = out_path.to_string_lossy().to_string();
+    let coverage_data_path = coverage_data_path_for_args(repo_root, args, session);
     let status = Command::new(python_bin)
         .args(["-m", "coverage", "json", "-q", "-o"])
         .arg(out_path_string)
         .current_dir(repo_root)
+        .env("COVERAGE_FILE", coverage_data_path.as_os_str())
+        .stdout(std::process::Stdio::null())
+        .stderr(std::process::Stdio::null())
         .status()
         .map_err(|e| RunError::Io(std::io::Error::other(e.to_string())))?;
     status

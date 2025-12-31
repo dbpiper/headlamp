@@ -2,16 +2,16 @@ use std::path::{Path, PathBuf};
 
 use git2::{DiffDelta, DiffOptions, Repository, Status, StatusOptions};
 use indexmap::IndexMap;
-use once_cell::sync::Lazy;
 use path_slash::PathExt;
 use regex::Regex;
 use semver::Version;
+use std::sync::LazyLock;
 
 use headlamp_core::config::ChangedMode;
 
 use crate::run::RunError;
 
-static SEMVER_IN_TAG_NAME: Lazy<Regex> = Lazy::new(|| {
+static SEMVER_IN_TAG_NAME: LazyLock<Regex> = LazyLock::new(|| {
     Regex::new(
         r"(?:^|[^0-9A-Za-z])v?(?P<ver>\d+\.\d+\.\d+(?:-[0-9A-Za-z.-]+)?(?:\+[0-9A-Za-z.-]+)?)",
     )

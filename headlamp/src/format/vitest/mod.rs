@@ -2,16 +2,17 @@ use crate::format::bridge_console::parse_bridge_console;
 use crate::format::ctx::Ctx;
 use crate::format::fns::{build_file_badge_line, build_per_file_overview, render_run_line};
 use crate::test_model::TestRunModel;
-use once_cell::sync::Lazy;
 use path_slash::PathExt;
 use regex::Regex;
+use std::sync::LazyLock;
 
 mod assertions;
 mod console;
 mod file_failure;
 mod footer;
 
-static CODE_FRAME_LINE_RE: Lazy<Regex> = Lazy::new(|| Regex::new(r"^\s*(>?\s*\d+\s*\|)").unwrap());
+static CODE_FRAME_LINE_RE: LazyLock<Regex> =
+    LazyLock::new(|| Regex::new(r"^\s*(>?\s*\d+\s*\|)").unwrap());
 
 pub fn render_vitest_from_test_model(
     data: &TestRunModel,

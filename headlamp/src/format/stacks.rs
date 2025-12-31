@@ -1,5 +1,5 @@
-use once_cell::sync::Lazy;
 use regex::Regex;
+use std::sync::LazyLock;
 
 use crate::format::ansi;
 
@@ -8,15 +8,16 @@ pub fn strip_ansi_simple(text: &str) -> String {
 }
 
 pub fn is_stack_line(line: &str) -> bool {
-    static JS_STACK_RE: Lazy<Regex> = Lazy::new(|| Regex::new(r"\s+at\s+").unwrap());
-    static JS_STACK_RE_BOL: Lazy<Regex> = Lazy::new(|| Regex::new(r"^at\s+").unwrap());
-    static PY_TRACE_RE: Lazy<Regex> =
-        Lazy::new(|| Regex::new(r#"^\s*File\s+"[^"]+",\s+line\s+\d+(,|$)"#).unwrap());
-    static PY_TRACE_HEADER_RE: Lazy<Regex> =
-        Lazy::new(|| Regex::new(r"^\s*Traceback\s+\(most recent call last\):\s*$").unwrap());
-    static RUST_BACKTRACE_HEADER_RE: Lazy<Regex> =
-        Lazy::new(|| Regex::new(r"^\s*stack backtrace:\s*$").unwrap());
-    static RUST_BACKTRACE_FRAME_RE: Lazy<Regex> = Lazy::new(|| Regex::new(r"^\s*\d+:\s+").unwrap());
+    static JS_STACK_RE: LazyLock<Regex> = LazyLock::new(|| Regex::new(r"\s+at\s+").unwrap());
+    static JS_STACK_RE_BOL: LazyLock<Regex> = LazyLock::new(|| Regex::new(r"^at\s+").unwrap());
+    static PY_TRACE_RE: LazyLock<Regex> =
+        LazyLock::new(|| Regex::new(r#"^\s*File\s+"[^"]+",\s+line\s+\d+(,|$)"#).unwrap());
+    static PY_TRACE_HEADER_RE: LazyLock<Regex> =
+        LazyLock::new(|| Regex::new(r"^\s*Traceback\s+\(most recent call last\):\s*$").unwrap());
+    static RUST_BACKTRACE_HEADER_RE: LazyLock<Regex> =
+        LazyLock::new(|| Regex::new(r"^\s*stack backtrace:\s*$").unwrap());
+    static RUST_BACKTRACE_FRAME_RE: LazyLock<Regex> =
+        LazyLock::new(|| Regex::new(r"^\s*\d+:\s+").unwrap());
 
     JS_STACK_RE.is_match(line)
         || JS_STACK_RE_BOL.is_match(line)

@@ -17,3 +17,6 @@ mod istanbul_text_test;
 
 #[cfg(test)]
 mod api_lcov_test;
+
+#[cfg(test)]
+mod perf_breakdown_test;

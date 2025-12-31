@@ -1,7 +1,7 @@
 use std::path::Path;
 
-use once_cell::sync::Lazy;
 use regex::Regex;
+use std::sync::LazyLock;
 
 use headlamp_core::test_model::{TestRunAggregated, TestRunModel};
 
@@ -31,8 +31,8 @@ struct SplitSuiteParts {
     non_failed_tests: Vec<headlamp_core::test_model::TestCaseResult>,
 }
 
-static RUST_PANIC_AT_RE: Lazy<Regex> =
-    Lazy::new(|| Regex::new(r#"panicked at (?:[^:]+: )?([^:\s]+:\d+:\d+)"#).unwrap());
+static RUST_PANIC_AT_RE: LazyLock<Regex> =
+    LazyLock::new(|| Regex::new(r#"panicked at (?:[^:]+: )?([^:\s]+:\d+:\d+)"#).unwrap());
 
 pub(crate) fn empty_test_run_model_for_exit_code(exit_code: i32) -> TestRunModel {
     let success = exit_code == 0;

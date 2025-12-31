@@ -95,12 +95,55 @@ pub(super) fn compute_uncovered_blocks(file: &FullFileCoverage) -> Vec<Uncovered
             .filter_map(|(line, hit)| (*hit == 0).then_some(*line))
             .collect::<Vec<_>>()
     } else {
-        file.statement_hits
-            .iter()
-            .filter(|(_id, hit)| **hit == 0)
-            .filter_map(|(id, _)| statement_line_range_for_id(file, id))
-            .flat_map(|(start, end)| (start..=end).collect::<Vec<_>>())
-            .collect::<Vec<_>>()
+        let mut out: Vec<u32> = Vec::with_capacity(file.statement_hits.len().min(4096));
+        let mut single_line: Option<u32> = None;
+        let mut has_multiple_lines = false;
+        for (id, hit) in &file.statement_hits {
+            if *hit != 0 {
+                continue;
+            }
+            if let Some((start, end)) = file.statement_map.get(id).copied() {
+                let from = start.max(1);
+                let to = end.max(from);
+                for line in from..=to {
+                    match single_line {
+                        None => {
+                            single_line = Some(line);
+                            out.push(line);
+                        }
+                        Some(existing) if existing == line => {}
+                        Some(_existing) => {
+                            has_multiple_lines = true;
+                            out.push(line);
+                        }
+                    }
+                }
+                continue;
+            }
+            if let Some(line) = parse_statement_line_prefix(id) {
+                if line > 0 {
+                    match single_line {
+                        None => {
+                            single_line = Some(line);
+                            out.push(line);
+                        }
+                        Some(existing) if existing == line => {}
+                        Some(_existing) => {
+                            has_multiple_lines = true;
+                            out.push(line);
+                        }
+                    }
+                }
+            }
+        }
+        if !out.is_empty() && !has_multiple_lines {
+            let line = out[0];
+            return vec![UncoveredRange {
+                start: line,
+                end: line,
+            }];
+        }
+        out
     };
     lines.sort_unstable();
     lines.dedup();
@@ -125,15 +168,26 @@ pub(super) fn compute_uncovered_blocks(file: &FullFileCoverage) -> Vec<Uncovered
     ranges
 }
 
-fn statement_line_range_for_id(file: &FullFileCoverage, id: &str) -> Option<(u32, u32)> {
-    if let Some((start, end)) = file.statement_map.get(id).copied() {
-        let from = start.max(1);
-        let to = end.max(from);
-        return Some((from, to));
+fn parse_statement_line_prefix(id: &str) -> Option<u32> {
+    let bytes = id.as_bytes();
+    let mut index = 0usize;
+    let mut value: u32 = 0;
+    let mut any = false;
+    while index < bytes.len() {
+        let byte = bytes[index];
+        if byte == b':' {
+            break;
+        }
+        if !byte.is_ascii_digit() {
+            return None;
+        }
+        any = true;
+        value = value
+            .saturating_mul(10)
+            .saturating_add((byte - b'0') as u32);
+        index += 1;
     }
-    let (line_str, _rest) = id.split_once(':').unwrap_or((id, ""));
-    let line = line_str.parse::<u32>().ok()?;
-    (line > 0).then_some((line, line))
+    any.then_some(value)
 }
 
 pub(super) fn missed_functions(file: &FullFileCoverage) -> Vec<MissedFunction> {

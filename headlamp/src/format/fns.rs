@@ -1,12 +1,12 @@
-use once_cell::sync::Lazy;
 use regex::Regex;
+use std::sync::LazyLock;
 
 use path_slash::PathExt;
 
 use crate::format::{ansi, colors, stacks};
 
-static STACK_LOC_RE: Lazy<Regex> =
-    Lazy::new(|| Regex::new(r"\(?([^\s()]+):(\d+):(\d+)\)?$").unwrap());
+static STACK_LOC_RE: LazyLock<Regex> =
+    LazyLock::new(|| Regex::new(r"\(?([^\s()]+):(\d+):(\d+)\)?$").unwrap());
 
 pub fn draw_rule(width: usize, label: Option<&str>) -> String {
     let w = width.max(40);
@@ -107,7 +107,8 @@ pub fn color_stack_line(line: &str, project_hint: &Regex) -> String {
 
 pub fn parse_stack_location(line: &str) -> Option<(String, i64, i64)> {
     let simple = stacks::strip_ansi_simple(line);
-    static RE: Lazy<Regex> = Lazy::new(|| Regex::new(r"\(?([^\s()]+):(\d+):(\d+)\)?$").unwrap());
+    static RE: LazyLock<Regex> =
+        LazyLock::new(|| Regex::new(r"\(?([^\s()]+):(\d+):(\d+)\)?$").unwrap());
     let caps = RE.captures(&simple)?;
     let file = std::path::Path::new(caps.get(1)?.as_str())
         .to_slash_lossy()

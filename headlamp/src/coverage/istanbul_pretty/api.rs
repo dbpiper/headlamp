@@ -7,10 +7,13 @@ use crate::coverage::model::CoverageReport;
 use crate::coverage::print::PrintOpts;
 use crate::format::ansi;
 
-use super::istanbul_text::{render_istanbul_text_report, render_istanbul_text_summary};
+use super::istanbul_text::{
+    render_istanbul_text_report_with_totals_from_summaries,
+    render_istanbul_text_summary_from_totals,
+};
 use super::merge::read_and_merge_coverage_final_json;
 use super::model::FullFileCoverage;
-use super::per_file_table::render_per_file_composite_table;
+use super::per_file_table::{build_per_file_table_layout, write_per_file_composite_table};
 
 pub fn format_istanbul_pretty(
     repo_root: &Path,
@@ -133,37 +136,80 @@ fn render_pretty_output(
         included && !excluded
     });
 
-    let mut out: Vec<String> = files
+    let separator = crate::format::ansi::gray(&"─".repeat(sep_len));
+    let per_file_layout = build_per_file_table_layout(total_width);
+
+    // Build output as a single buffer. Pre-allocate using the size of the first rendered table
+    // (all per-file tables have the same geometry for a given terminal size + print opts).
+    let approx_visible_line_len =
+        per_file_layout.widths.iter().sum::<usize>() + per_file_layout.widths.len() + 1 + 80; // ANSI escape overhead (conservative).
+    let approx_lines_per_table = per_file_rows.saturating_add(8);
+    let approx_bytes_per_file =
+        (approx_visible_line_len + 1).saturating_mul(approx_lines_per_table) + separator.len() + 2;
+    let mut out = String::with_capacity(approx_bytes_per_file.saturating_mul(files.len()) + 4096);
+
+    let precomputed = files
         .iter()
-        .rev()
-        .flat_map(|file| {
-            render_per_file_composite_table(
-                file,
-                per_file_rows,
-                total_width,
-                print_opts.max_hotspots,
-                print_opts.tty,
-            )
-            .into_iter()
-            .chain([crate::format::ansi::gray(&"─".repeat(sep_len))])
-        })
+        .map(super::analysis::file_summary)
         .collect::<Vec<_>>();
+
+    let precomputed_blocks = files
+        .iter()
+        .map(super::analysis::compute_uncovered_blocks)
+        .collect::<Vec<_>>();
+    let precomputed_missed_functions = files
+        .iter()
+        .map(super::analysis::missed_functions)
+        .collect::<Vec<_>>();
+    let precomputed_missed_branches = files
+        .iter()
+        .map(super::analysis::missed_branches)
+        .collect::<Vec<_>>();
+
+    for (index, file) in files.iter().enumerate().rev() {
+        let table_input = super::per_file_table::PerFileCompositeTableInput {
+            file,
+            summary: precomputed.get(index).unwrap(),
+            blocks: precomputed_blocks.get(index).unwrap(),
+            missed_functions: precomputed_missed_functions.get(index).unwrap(),
+            missed_branches: precomputed_missed_branches.get(index).unwrap(),
+            max_rows: per_file_rows,
+            layout: &per_file_layout,
+            max_hotspots: print_opts.max_hotspots,
+            tty: print_opts.tty,
+        };
+        write_per_file_composite_table(&mut out, &table_input);
+        out.push('\n');
+        out.push_str(&separator);
+        out.push('\n');
+    }
 
     // Istanbul's text reporter uses a stable layout even on wide terminals; cap width for parity.
     let istanbul_width = total_width.min(60);
-    out.push(render_istanbul_text_report(&files, istanbul_width));
-    out.push(String::new());
-    out.push(render_istanbul_text_summary(&files));
+    let (istanbul_report, istanbul_totals) = render_istanbul_text_report_with_totals_from_summaries(
+        &files,
+        &precomputed,
+        istanbul_width,
+    );
+    out.push_str(&istanbul_report);
+    out.push('\n');
+    out.push('\n');
+    out.push_str(&render_istanbul_text_summary_from_totals(istanbul_totals));
+
     if let Some(detail) = coverage_detail
         && detail != crate::args::CoverageDetail::Auto
     {
         let detail_blocks = render_detail_blocks(&files, print_opts);
         if !detail_blocks.is_empty() {
-            out.push(detail_blocks);
+            out.push('\n');
+            out.push('\n');
+            out.push_str(&detail_blocks);
         }
     };
 
-    out.join("\n").trim_end().to_string()
+    let trimmed_len = out.trim_end().len();
+    out.truncate(trimmed_len);
+    out
 }
 
 fn detect_columns() -> usize {

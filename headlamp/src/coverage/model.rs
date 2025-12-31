@@ -1,4 +1,5 @@
 use std::collections::BTreeMap;
+use std::collections::HashMap;
 
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct CoverageReport {
@@ -85,7 +86,7 @@ pub fn apply_statement_totals_to_report(
 
 pub fn apply_statement_hits_to_report(
     report: CoverageReport,
-    mut statement_hits_by_path: BTreeMap<String, BTreeMap<String, u32>>,
+    mut statement_hits_by_path: HashMap<String, HashMap<String, u32>>,
 ) -> CoverageReport {
     let files = report
         .files
@@ -93,8 +94,9 @@ pub fn apply_statement_hits_to_report(
         .map(|file| match statement_hits_by_path.remove(&file.path) {
             Some(hits) => {
                 let total = (hits.len() as u64).min(u64::from(u32::MAX)) as u32;
-                let covered = (hits.values().filter(|h| **h > 0).count() as u64)
+                let covered = (hits.values().filter(|hit| **hit > 0).count() as u64)
                     .min(u64::from(u32::MAX)) as u32;
+                let hits = hits.into_iter().collect::<BTreeMap<_, _>>();
                 FileCoverage {
                     statements_total: Some(total),
                     statements_covered: Some(covered),

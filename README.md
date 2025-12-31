@@ -81,8 +81,13 @@ Highlights:
 - **runners**: `--runner=jest|pytest|cargo-nextest|cargo-test`
 - **changed selection**: `--changed=all|staged|unstaged|branch|lastCommit|lastRelease`
   - `lastRelease` selects changes since the previous stable SemVer release tag
-- **coverage**: `--coverage` plus `--coverage-ui`, `--coverage.detail`, thresholds, etc.
-- **artifacts** (default: none): `--keepArtifacts` to keep runner artifacts on disk
+- **coverage**: `--coverage` plus `--coverage-ui`, `--coverage-detail`, thresholds, etc.
+- **artifacts** (default: none): `--keep-artifacts` to keep runner artifacts on disk
+
+Legacy aliases (still accepted, but not recommended):
+
+- `--keepArtifacts`
+- `--coverage.detail`
 
 ## Configuration
 
@@ -162,7 +167,7 @@ By default, headlamp runs **artifact-free**: it uses an ephemeral per-run worksp
 
 If you need artifacts on disk (for example, to upload coverage reports in CI), opt out:
 
-- CLI: `--keepArtifacts`
+- CLI: `--keep-artifacts`
 - Config: `keepArtifacts: true`
 
 ## Contributing
