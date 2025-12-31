@@ -8,8 +8,6 @@ use sha1::{Digest, Sha1};
 use tempfile::NamedTempFile;
 use which::which;
 
-use git2::Repository;
-
 use crate::process::CapturedProcessOutput;
 use crate::process::run_command_capture_with_timeout;
 use crate::run::RunError;
@@ -279,10 +277,19 @@ pub fn stable_repo_key_hash_12(repo_root: &Path) -> String {
 }
 
 pub fn git_short_head(repo_root: &Path) -> Option<String> {
-    let repo = Repository::discover(repo_root).ok()?;
-    let oid = repo.head().ok()?.peel_to_commit().ok()?.id();
-    let full = oid.to_string();
-    Some(full.chars().take(8).collect())
+    let out = Command::new("git")
+        .arg("-C")
+        .arg(repo_root)
+        .args(["rev-parse", "--short=8", "HEAD"])
+        .output()
+        .ok()?;
+    out.status.success().then(|| {
+        String::from_utf8_lossy(&out.stdout)
+            .trim()
+            .chars()
+            .take(8)
+            .collect::<String>()
+    })
 }
 
 pub fn build_seed_terms_ts_like(repo_root: &Path, seeds: &[String]) -> Vec<String> {

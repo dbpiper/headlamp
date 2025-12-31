@@ -1,4 +1,5 @@
 use std::collections::BTreeMap;
+use std::collections::HashMap;
 use std::path::Path;
 
 use ignore::WalkBuilder;
@@ -76,8 +77,8 @@ fn merge_record_into_map(
         .or_insert_with(|| FullFileCoverage {
             abs_path: abs.clone(),
             rel_path: Path::new(&rel).to_slash_lossy().to_string(),
-            statement_hits: BTreeMap::new(),
-            statement_map: BTreeMap::new(),
+            statement_hits: HashMap::new(),
+            statement_map: HashMap::new(),
             function_hits: BTreeMap::new(),
             function_map: BTreeMap::new(),
             branch_hits: BTreeMap::new(),
@@ -151,8 +152,8 @@ fn merge_statement_hits_and_map(
 }
 
 fn derive_line_hits_from_statements(
-    statement_hits: &BTreeMap<u64, u32>,
-    statement_map: &BTreeMap<u64, (u32, u32)>,
+    statement_hits: &HashMap<u64, u32>,
+    statement_map: &HashMap<u64, (u32, u32)>,
 ) -> BTreeMap<u32, u32> {
     statement_hits
         .iter()

@@ -1,5 +1,4 @@
 use crate::format::console::ConsoleEntry;
-use json5;
 use serde::Deserialize;
 
 #[derive(Debug, Clone)]
@@ -165,7 +164,7 @@ fn push_plain_console_entry(
 
 fn parse_bridge_event(raw: &str) -> Option<(String, u64, &str)> {
     let json_text = raw.split("[JEST-BRIDGE-EVENT]").last().unwrap_or("").trim();
-    let meta = json5::from_str::<BridgeEventMeta>(json_text).ok()?;
+    let meta = crate::config::jsonish::parse_jsonish::<BridgeEventMeta>(json_text).ok()?;
     let event_type = meta.type_name.as_deref().unwrap_or("").to_string();
     let timestamp_ms = meta.timestamp_ms.unwrap_or_else(now_timestamp_ms);
     Some((event_type, timestamp_ms, json_text))
@@ -198,7 +197,8 @@ fn dispatch_bridge_event(
 }
 
 fn push_http_response(http: &mut Vec<HttpEvent>, timestamp_ms: u64, json_text: &str) {
-    let Ok(evt) = json5::from_str::<HttpResponseBridgeEvent>(json_text) else {
+    let Ok(evt) = crate::config::jsonish::parse_jsonish::<HttpResponseBridgeEvent>(json_text)
+    else {
         return;
     };
     http.push(http_event_from_response(
@@ -209,7 +209,8 @@ fn push_http_response(http: &mut Vec<HttpEvent>, timestamp_ms: u64, json_text: &
 }
 
 fn push_http_response_batch(http: &mut Vec<HttpEvent>, timestamp_ms: u64, json_text: &str) {
-    let Ok(evt) = json5::from_str::<HttpResponseBatchBridgeEvent>(json_text) else {
+    let Ok(evt) = crate::config::jsonish::parse_jsonish::<HttpResponseBatchBridgeEvent>(json_text)
+    else {
         return;
     };
     let test_path = evt.test_path;
@@ -234,7 +235,7 @@ fn push_http_response_batch(http: &mut Vec<HttpEvent>, timestamp_ms: u64, json_t
 }
 
 fn push_http_abort(http: &mut Vec<HttpEvent>, timestamp_ms: u64, json_text: &str) {
-    let Ok(evt) = json5::from_str::<HttpAbortBridgeEvent>(json_text) else {
+    let Ok(evt) = crate::config::jsonish::parse_jsonish::<HttpAbortBridgeEvent>(json_text) else {
         return;
     };
     http.push(HttpEvent {
@@ -277,7 +278,8 @@ fn http_event_from_response(
 }
 
 fn push_assertion_failure(assertions: &mut Vec<AssertionEvt>, json_text: &str) {
-    let Ok(evt) = json5::from_str::<AssertionFailureBridgeEvent>(json_text) else {
+    let Ok(evt) = crate::config::jsonish::parse_jsonish::<AssertionFailureBridgeEvent>(json_text)
+    else {
         return;
     };
     assertions.push(AssertionEvt {
@@ -295,7 +297,7 @@ fn push_assertion_failure(assertions: &mut Vec<AssertionEvt>, json_text: &str) {
 }
 
 fn push_console_entry(console_list: &mut Vec<ConsoleEntry>, json_text: &str) {
-    let Ok(evt) = json5::from_str::<ConsoleBridgeEvent>(json_text) else {
+    let Ok(evt) = crate::config::jsonish::parse_jsonish::<ConsoleBridgeEvent>(json_text) else {
         return;
     };
     console_list.push(ConsoleEntry {
@@ -308,7 +310,8 @@ fn push_console_entry(console_list: &mut Vec<ConsoleEntry>, json_text: &str) {
 }
 
 fn push_console_batch_entries(console_list: &mut Vec<ConsoleEntry>, json_text: &str) {
-    let Ok(evt) = json5::from_str::<ConsoleBatchBridgeEvent>(json_text) else {
+    let Ok(evt) = crate::config::jsonish::parse_jsonish::<ConsoleBatchBridgeEvent>(json_text)
+    else {
         return;
     };
     evt.entries.unwrap_or_default().into_iter().for_each(|e| {

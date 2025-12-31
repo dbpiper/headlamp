@@ -1,6 +1,5 @@
 use std::path::Path;
 
-use json5;
 use regex::Regex;
 
 use crate::format::{ansi, codeframe, colors, ctx::Ctx, fns, stacks};
@@ -355,7 +354,7 @@ fn try_bridge_fallback(raw: &str, ctx: &Ctx, only_failures: bool) -> Option<Stri
     let text = std::fs::read_to_string(&bridge_path).ok()?;
     let bridge_json: crate::format::bridge::BridgeJson =
         serde_json::from_str(&text).ok().or_else(|| {
-            json5::from_str::<serde_json::Value>(&text)
+            crate::config::jsonish::parse_jsonish_value(&text)
                 .ok()
                 .and_then(|v| serde_json::from_value::<crate::format::bridge::BridgeJson>(v).ok())
         })?;

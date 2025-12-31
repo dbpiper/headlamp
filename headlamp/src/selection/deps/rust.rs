@@ -4,15 +4,9 @@ pub fn extract_import_specs(abs_path: &Path) -> Vec<String> {
     let Ok(body) = std::fs::read_to_string(abs_path) else {
         return vec![];
     };
-    let Ok(file) = syn::parse_file(&body) else {
-        return vec![];
-    };
-
-    let mut import_specs: std::collections::BTreeSet<String> = std::collections::BTreeSet::new();
-    file.items.iter().for_each(|item| {
-        collect_specs_from_item(item, &mut import_specs);
-    });
-    import_specs.into_iter().collect::<Vec<_>>()
+    crate::rust_parse::extract_import_specs_from_source(&body)
+        .into_iter()
+        .collect::<Vec<_>>()
 }
 
 pub fn resolve_import_with_root(from_file: &Path, spec: &str, root_dir: &Path) -> Option<PathBuf> {
@@ -87,80 +81,6 @@ pub fn build_seed_terms(
             });
     });
     out.into_iter().collect()
-}
-
-fn collect_specs_from_item(item: &syn::Item, out: &mut std::collections::BTreeSet<String>) {
-    match item {
-        syn::Item::Mod(item_mod) => {
-            if item_mod.content.is_some() {
-                return;
-            }
-            if let Some(path_spec) = extract_path_attr_for_mod(&item_mod.attrs) {
-                out.insert(format!("path:{path_spec}"));
-                return;
-            }
-            let ident = item_mod.ident.to_string();
-            out.insert(format!("self::{ident}"));
-        }
-        syn::Item::Use(item_use) => {
-            let mut buffer: Vec<Vec<String>> = vec![];
-            flatten_use_tree(&item_use.tree, &mut vec![], &mut buffer);
-            buffer
-                .into_iter()
-                .filter_map(|parts| parts.join("::").into())
-                .filter(|s: &String| !s.trim().is_empty())
-                .for_each(|s| {
-                    out.insert(s);
-                });
-        }
-        _ => {}
-    }
-}
-
-fn extract_path_attr_for_mod(attrs: &[syn::Attribute]) -> Option<String> {
-    attrs
-        .iter()
-        .filter(|attr| attr.path().is_ident("path"))
-        .find_map(|attr| {
-            let Ok(meta) = attr.meta.require_name_value() else {
-                return None;
-            };
-            match &meta.value {
-                syn::Expr::Lit(expr_lit) => match &expr_lit.lit {
-                    syn::Lit::Str(lit_str) => Some(lit_str.value()),
-                    _ => None,
-                },
-                _ => None,
-            }
-        })
-}
-
-fn flatten_use_tree(tree: &syn::UseTree, prefix: &mut Vec<String>, out: &mut Vec<Vec<String>>) {
-    match tree {
-        syn::UseTree::Path(p) => {
-            prefix.push(p.ident.to_string());
-            flatten_use_tree(&p.tree, prefix, out);
-            prefix.pop();
-        }
-        syn::UseTree::Name(n) => {
-            let mut full = prefix.clone();
-            full.push(n.ident.to_string());
-            out.push(full);
-        }
-        syn::UseTree::Rename(r) => {
-            let mut full = prefix.clone();
-            full.push(r.ident.to_string());
-            out.push(full);
-        }
-        syn::UseTree::Glob(_) => {
-            out.push(prefix.clone());
-        }
-        syn::UseTree::Group(g) => {
-            g.items
-                .iter()
-                .for_each(|t| flatten_use_tree(t, prefix, out));
-        }
-    }
 }
 
 fn parse_rust_path_segments(raw: &str) -> Vec<String> {

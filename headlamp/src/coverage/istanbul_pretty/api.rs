@@ -74,7 +74,7 @@ pub(super) fn lcov_report_to_full_file_coverage(
 
             // LCOV doesn't have Istanbul statement ranges; keep this empty and fall back to parsing
             // statement IDs (or line hits) when computing hotspots.
-            let statement_map = std::collections::BTreeMap::new();
+            let statement_map = std::collections::HashMap::new();
 
             FullFileCoverage {
                 abs_path,

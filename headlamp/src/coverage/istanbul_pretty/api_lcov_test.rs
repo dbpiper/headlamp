@@ -6,6 +6,7 @@ use crate::coverage::lcov::parse_lcov_text;
 use crate::coverage::model::{CoverageReport, FileCoverage};
 use crate::coverage::statement_id::statement_id_from_line_col;
 use std::collections::BTreeMap;
+use std::collections::HashMap;
 
 #[test]
 fn lcov_to_full_file_coverage_uses_real_function_and_branch_maps() {
@@ -62,7 +63,7 @@ fn lcov_to_full_file_coverage_uses_statement_hits_when_present() {
             lines_covered: 1,
             statements_total: Some(2),
             statements_covered: Some(1),
-            statement_hits: Some(BTreeMap::from([
+            statement_hits: Some(HashMap::from([
                 (statement_id_from_line_col(10, 1), 0),
                 (statement_id_from_line_col(10, 2), 1),
             ])),

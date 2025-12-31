@@ -339,27 +339,18 @@ fn read_json_map(path: &Path) -> Option<std::collections::BTreeMap<String, Vec<S
 }
 
 fn git_test_status_hash(cwd: &Path) -> String {
-    let Ok(repo) = git2::Repository::discover(cwd) else {
+    let status_paths = git_status_porcelain_paths(cwd);
+    if status_paths.is_empty() {
         return String::new();
-    };
-
-    let mut opts = git2::StatusOptions::new();
-    opts.include_untracked(true)
-        .recurse_untracked_dirs(true)
-        .include_ignored(false);
-    let Ok(statuses) = repo.statuses(Some(&mut opts)) else {
-        return String::new();
-    };
+    }
 
     let mut classifier = headlamp_core::project::classify::ProjectClassifier::for_path(
         headlamp_core::selection::dependency_language::DependencyLanguageId::TsJs,
         cwd,
     );
 
-    let mut test_paths: Vec<String> = statuses
-        .iter()
-        .filter(|entry| entry.status() != git2::Status::CURRENT)
-        .filter_map(|entry| entry.path().map(|p| p.to_string()))
+    let mut test_paths: Vec<String> = status_paths
+        .into_iter()
         .filter(|rel| {
             let abs = cwd.join(rel);
             matches!(
@@ -381,4 +372,33 @@ fn git_test_status_hash(cwd: &Path) -> String {
     let hex = hex::encode(h.finalize());
     let short: String = hex.chars().take(8).collect();
     format!(":{short}")
+}
+
+fn git_status_porcelain_paths(cwd: &Path) -> Vec<String> {
+    let out = std::process::Command::new("git")
+        .arg("-C")
+        .arg(cwd)
+        .args(["status", "--porcelain"])
+        .output()
+        .ok();
+    let stdout = out
+        .filter(|o| o.status.success())
+        .map(|o| String::from_utf8_lossy(&o.stdout).to_string())
+        .unwrap_or_default();
+
+    stdout
+        .lines()
+        .map(str::trim)
+        .filter(|line| line.len() >= 4)
+        .filter_map(|line| line.get(3..))
+        .map(|path_part| path_part.trim())
+        .filter(|path_part| !path_part.is_empty())
+        .map(|path_part| {
+            path_part
+                .rsplit(" -> ")
+                .next()
+                .unwrap_or(path_part)
+                .to_string()
+        })
+        .collect::<Vec<_>>()
 }

@@ -1,4 +1,5 @@
 use std::collections::BTreeMap;
+use std::collections::HashMap;
 use std::path::{Path, PathBuf};
 
 use ignore::WalkBuilder;
@@ -67,7 +68,7 @@ pub fn read_istanbul_coverage_tree(root: &Path) -> Vec<(PathBuf, CoverageReport)
 
 pub fn merge_istanbul_reports(reports: &[CoverageReport], root: &Path) -> CoverageReport {
     let mut by_file: BTreeMap<String, BTreeMap<u32, u32>> = BTreeMap::new();
-    let mut statement_hits_by_file: BTreeMap<String, BTreeMap<u64, u32>> = BTreeMap::new();
+    let mut statement_hits_by_file: BTreeMap<String, HashMap<u64, u32>> = BTreeMap::new();
     for report in reports {
         for file in &report.files {
             let abs = super::lcov::normalize_lcov_path(&file.path, root);
@@ -226,7 +227,7 @@ fn extract_line_hits(file_record: &IstanbulFileRecord) -> Result<BTreeMap<u32, u
     Ok(hits)
 }
 
-fn extract_statement_hits(file_record: &IstanbulFileRecord) -> Option<BTreeMap<u64, u32>> {
+fn extract_statement_hits(file_record: &IstanbulFileRecord) -> Option<HashMap<u64, u32>> {
     file_record.s.as_ref().map(|statement_hits_raw| {
         statement_hits_raw
             .iter()
@@ -235,6 +236,6 @@ fn extract_statement_hits(file_record: &IstanbulFileRecord) -> Option<BTreeMap<u
                 let add = (*hit_count).min(u64::from(u32::MAX)) as u32;
                 Some((statement_id, add))
             })
-            .collect::<BTreeMap<_, _>>()
+            .collect::<HashMap<_, _>>()
     })
 }

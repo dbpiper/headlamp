@@ -84,6 +84,39 @@ fn rust_import_extraction_finds_mod_decls() {
 }
 
 #[test]
+fn rust_import_extraction_supports_use_groups_renames_and_globs() {
+    let repo = mk_temp_dir("dep-lang-rust-use-tree");
+    let lib_rs = repo.join("src/lib.rs");
+    write_file(
+        &lib_rs,
+        "use crate::{a, b::{c, d as e}, *};\n\npub fn entry() {}\n",
+    );
+
+    let specs = headlamp::selection::dependency_language::extract_import_specs(
+        headlamp::selection::dependency_language::DependencyLanguageId::Rust,
+        &lib_rs,
+    );
+    assert!(specs.iter().any(|s| s == "crate::a"));
+    assert!(specs.iter().any(|s| s == "crate::b::c"));
+    assert!(specs.iter().any(|s| s == "crate::b::d"));
+    assert!(specs.iter().any(|s| s == "crate"));
+}
+
+#[test]
+fn rust_import_extraction_supports_path_attribute_mod() {
+    let repo = mk_temp_dir("dep-lang-rust-path-attr");
+    let lib_rs = repo.join("src/lib.rs");
+    write_file(&lib_rs, "#[path = \"alt/a.rs\"]\nmod a;\n");
+    write_file(&repo.join("src/alt/a.rs"), "pub fn a() {}\n");
+
+    let specs = headlamp::selection::dependency_language::extract_import_specs(
+        headlamp::selection::dependency_language::DependencyLanguageId::Rust,
+        &lib_rs,
+    );
+    assert!(specs.iter().any(|s| s == "path:alt/a.rs"));
+}
+
+#[test]
 fn rust_import_resolution_resolves_mod_files() {
     let repo = mk_temp_dir("dep-lang-rust-resolve");
     write_file(&repo.join("src/lib.rs"), "mod a;\nmod b;\n");

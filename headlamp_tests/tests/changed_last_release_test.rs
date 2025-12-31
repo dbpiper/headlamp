@@ -56,6 +56,40 @@ fn commit_file(repo: &Path, rel: &str, contents: &str, message: &str) {
 }
 
 #[test]
+fn changed_all_includes_staged_unstaged_and_untracked() {
+    let tmp = temp_repo_dir();
+    let repo = tmp.path();
+    init_repo(repo);
+
+    commit_file(repo, "a.txt", "a1\n", "a1");
+    write_file(&repo.join("b.txt"), "b1\n");
+    run_git(repo, &["add", "b.txt"]);
+    write_file(&repo.join("a.txt"), "a2\n");
+    write_file(&repo.join("c.txt"), "c1\n");
+
+    let rel = rel_paths(repo, changed_files(repo, ChangedMode::All).unwrap());
+    assert!(rel.contains(&"a.txt".to_string()), "{rel:?}");
+    assert!(rel.contains(&"b.txt".to_string()), "{rel:?}");
+    assert!(rel.contains(&"c.txt".to_string()), "{rel:?}");
+}
+
+#[test]
+fn changed_last_commit_includes_last_commit_and_uncommitted() {
+    let tmp = temp_repo_dir();
+    let repo = tmp.path();
+    init_repo(repo);
+
+    commit_file(repo, "a.txt", "a1\n", "a1");
+    commit_file(repo, "b.txt", "b1\n", "b1");
+    write_file(&repo.join("c.txt"), "c1\n");
+
+    let rel = rel_paths(repo, changed_files(repo, ChangedMode::LastCommit).unwrap());
+    assert!(rel.contains(&"b.txt".to_string()), "{rel:?}");
+    assert!(rel.contains(&"c.txt".to_string()), "{rel:?}");
+    assert!(!rel.contains(&"a.txt".to_string()), "{rel:?}");
+}
+
+#[test]
 fn changed_last_release_uses_previous_tag_when_head_is_tagged() {
     let tmp = temp_repo_dir();
     let repo = tmp.path();

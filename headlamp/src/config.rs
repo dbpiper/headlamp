@@ -9,6 +9,8 @@ use which::which;
 use crate::config_ts::load_headlamp_config_ts_oxc;
 use crate::error::HeadlampError;
 
+pub(crate) mod jsonish;
+
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Deserialize)]
 #[serde(rename_all = "camelCase")]
 pub enum ChangedMode {
@@ -114,10 +116,19 @@ pub struct HeadlampConfig {
 }
 
 pub fn find_repo_root(start: &Path) -> PathBuf {
-    git2::Repository::discover(start)
+    let start_dir = start.parent().filter(|_| start.is_file()).unwrap_or(start);
+    let out = std::process::Command::new("git")
+        .arg("-C")
+        .arg(start_dir)
+        .args(["rev-parse", "--show-toplevel"])
+        .output()
         .ok()
-        .and_then(|repo| repo.workdir().map(|p| p.to_path_buf()))
-        .unwrap_or_else(|| start.to_path_buf())
+        .filter(|o| o.status.success())
+        .and_then(|o| String::from_utf8(o.stdout).ok())
+        .map(|s| s.trim().to_string())
+        .filter(|s| !s.is_empty())
+        .map(PathBuf::from);
+    out.unwrap_or_else(|| start.to_path_buf())
 }
 
 pub fn discover_config_path(repo_root: &Path) -> Option<PathBuf> {
@@ -179,11 +190,12 @@ fn load_json_config(path: &Path) -> Result<HeadlampConfig, HeadlampError> {
         path: path.to_path_buf(),
         source,
     })?;
-    json5::from_str::<HeadlampConfig>(&raw)
-        .or_else(|_| serde_json::from_str::<HeadlampConfig>(&raw))
-        .map_err(|err| HeadlampError::ConfigParse {
+
+    serde_json::from_str::<HeadlampConfig>(&raw)
+        .or_else(|_| jsonish::parse_jsonish_config(&raw))
+        .map_err(|error| HeadlampError::ConfigParse {
             path: path.to_path_buf(),
-            message: err.to_string(),
+            message: error.to_string(),
         })
 }
 

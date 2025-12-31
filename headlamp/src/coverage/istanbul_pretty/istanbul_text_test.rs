@@ -1,4 +1,5 @@
 use std::collections::BTreeMap;
+use std::collections::HashMap;
 
 use crate::format::stacks::strip_ansi_simple;
 
@@ -16,8 +17,8 @@ fn make_file_with_long_uncovered_list() -> FullFileCoverage {
     FullFileCoverage {
         abs_path: "/abs/path/to/src/utils/logging/httpLog.ts".to_string(),
         rel_path: "src/utils/logging/httpLog.ts".to_string(),
-        statement_hits: BTreeMap::new(),
-        statement_map: BTreeMap::new(),
+        statement_hits: HashMap::new(),
+        statement_map: HashMap::new(),
         function_hits: BTreeMap::new(),
         function_map: BTreeMap::new(),
         branch_hits: BTreeMap::new(),

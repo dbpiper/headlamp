@@ -13,13 +13,13 @@ pub struct FileCoverage {
     pub lines_covered: u32,
     pub statements_total: Option<u32>,
     pub statements_covered: Option<u32>,
-    pub statement_hits: Option<BTreeMap<u64, u32>>,
+    pub statement_hits: Option<HashMap<u64, u32>>,
     pub uncovered_lines: Vec<u32>,
-    pub line_hits: BTreeMap<u32, u32>,
-    pub function_hits: BTreeMap<String, u32>,
-    pub function_map: BTreeMap<String, (String, u32)>,
-    pub branch_hits: BTreeMap<String, Vec<u32>>,
-    pub branch_map: BTreeMap<String, u32>,
+    pub line_hits: std::collections::BTreeMap<u32, u32>,
+    pub function_hits: std::collections::BTreeMap<String, u32>,
+    pub function_map: std::collections::BTreeMap<String, (String, u32)>,
+    pub branch_hits: std::collections::BTreeMap<String, Vec<u32>>,
+    pub branch_map: std::collections::BTreeMap<String, u32>,
 }
 
 #[derive(Debug, Clone, Copy, PartialEq)]
@@ -96,7 +96,6 @@ pub fn apply_statement_hits_to_report(
                 let total = (hits.len() as u64).min(u64::from(u32::MAX)) as u32;
                 let covered = (hits.values().filter(|hit| **hit > 0).count() as u64)
                     .min(u64::from(u32::MAX)) as u32;
-                let hits = hits.into_iter().collect::<BTreeMap<_, _>>();
                 FileCoverage {
                     statements_total: Some(total),
                     statements_covered: Some(covered),

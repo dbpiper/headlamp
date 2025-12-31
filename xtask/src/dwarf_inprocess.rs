@@ -18,11 +18,33 @@ pub fn resolve_locations_inprocess(
         );
     }
 
-    resolve_locations_parallel_with_loaders(binary_path, addresses, raw_symbol_names)
+    let addr2line_path =
+        dwarf_path_for_binary(binary_path).unwrap_or_else(|| binary_path.to_path_buf());
+    resolve_locations_parallel_with_loaders(&addr2line_path, addresses, raw_symbol_names)
 }
 
 pub fn default_headlamp_binary_path(repo_root: &Path) -> PathBuf {
     repo_root.join("target").join("release").join("headlamp")
+}
+
+fn dwarf_path_for_binary(binary_path: &Path) -> Option<PathBuf> {
+    let dsym_dir = binary_path.with_extension("dSYM");
+    let dwarf_dir = dsym_dir.join("Contents").join("Resources").join("DWARF");
+    if !dwarf_dir.exists() {
+        return None;
+    }
+    let mut candidates = std::fs::read_dir(&dwarf_dir)
+        .ok()?
+        .filter_map(|entry| entry.ok().map(|e| e.path()))
+        .filter(|path| path.is_file())
+        .collect::<Vec<_>>();
+    candidates.sort();
+    if candidates.len() == 1 {
+        return Some(candidates.remove(0));
+    }
+    let filename = binary_path.file_name()?;
+    let direct = dwarf_dir.join(filename);
+    direct.exists().then_some(direct)
 }
 
 fn demangle_symbol(raw_symbol_name: &str) -> String {

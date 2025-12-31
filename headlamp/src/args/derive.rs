@@ -1,4 +1,3 @@
-use clap::Parser;
 use indexmap::IndexSet;
 
 use crate::config::{ChangedMode, CoverageMode, CoverageThresholds, CoverageUi};
@@ -15,10 +14,7 @@ use super::types::{CoverageDetail, DEFAULT_EXCLUDE, DEFAULT_INCLUDE, ParsedArgs}
 pub fn derive_args(cfg_tokens: &[String], argv: &[String], is_tty: bool) -> ParsedArgs {
     let tokens = combined_tokens(cfg_tokens, argv);
     let (hl_tokens, passthrough) = split_headlamp_tokens(&tokens);
-    let mut clap_argv = vec!["headlamp".to_string()];
-    clap_argv.extend(hl_tokens);
-
-    let parsed_cli = HeadlampCli::try_parse_from(&clap_argv).unwrap_or_default();
+    let parsed_cli = HeadlampCli::parse_lenient(&hl_tokens);
     derive_args_from_parsed_cli(parsed_cli, passthrough, is_tty)
 }
 

@@ -36,6 +36,7 @@ pub mod format;
 pub mod help;
 pub(crate) mod profile;
 pub mod project;
+pub(crate) mod rust_parse;
 pub mod selection;
 pub mod test_model;
 

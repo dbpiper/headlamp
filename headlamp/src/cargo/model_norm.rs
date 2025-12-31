@@ -61,11 +61,21 @@ pub(super) fn normalize_cargo_test_model_by_panic_locations(
     repo_root: &Path,
     model: TestRunModel,
 ) -> TestRunModel {
-    let suites = model
+    let mut suites = model
         .test_results
         .into_iter()
         .flat_map(|suite| split_cargo_suite_by_failure_location(repo_root, suite))
         .collect::<Vec<_>>();
+    suites.sort_by_key(|suite| {
+        let raw = suite.test_file_path.as_str();
+        let path = Path::new(raw);
+        let rel = path
+            .strip_prefix(repo_root)
+            .ok()
+            .and_then(|p| p.to_str())
+            .unwrap_or(raw);
+        rel.replace('\\', "/")
+    });
     let aggregated = recompute_aggregated(&suites, model.aggregated.run_time_ms);
     TestRunModel {
         start_time: model.start_time,

@@ -7,3 +7,9 @@ release = "run -p xtask -- release"
 
 revert-release = "run -q -p xtask -- revert-release"
 test-dev = "run -p headlamp -- --runner=cargo-nextest --changed=branch --coverage --onlyFailures"
+
+[target.aarch64-apple-darwin]
+rustflags = ["-C", "link-arg=-Wl,-dead_strip"]
+
+[target.x86_64-apple-darwin]
+rustflags = ["-C", "link-arg=-Wl,-dead_strip"]

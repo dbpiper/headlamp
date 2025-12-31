@@ -208,7 +208,7 @@ fn find_tsconfig_json(from_dir: &Path, repo_root: &Path) -> Option<PathBuf> {
 
 fn load_tsconfig(tsconfig_path: &Path) -> Option<LoadedTsConfig> {
     let raw = std::fs::read_to_string(tsconfig_path).ok()?;
-    let value = json5::from_str::<serde_json::Value>(&raw).ok()?;
+    let value = crate::config::jsonish::parse_jsonish_value(&raw).ok()?;
     let paths_patterns = value
         .get("compilerOptions")
         .and_then(|v| v.get("paths"))
