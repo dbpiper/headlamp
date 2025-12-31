@@ -135,10 +135,14 @@ fn vitest_footer(agg: &TestRunAggregated, only_failures: bool) -> String {
     .collect::<Vec<_>>()
     .join(&ansi::dim(" | "));
 
-    let time = agg
-        .run_time_ms
-        .map(|ms| format_duration(std::time::Duration::from_millis(ms)))
-        .unwrap_or_default();
+    let time_ms = agg.run_time_ms.unwrap_or_else(|| {
+        let now_ms = std::time::SystemTime::now()
+            .duration_since(std::time::UNIX_EPOCH)
+            .map(|duration| duration.as_millis() as u64)
+            .unwrap_or(agg.start_time);
+        now_ms.saturating_sub(agg.start_time)
+    });
+    let time = format_duration(std::time::Duration::from_millis(time_ms));
 
     let footer = [
         format!(
