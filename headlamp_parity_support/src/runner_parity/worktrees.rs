@@ -1,6 +1,8 @@
+use std::collections::HashMap;
 use std::path::{Path, PathBuf};
 use std::process::Command;
 use std::sync::{Arc, Condvar, Mutex, OnceLock};
+use std::time::Duration;
 
 use super::fixture_repo::shared_real_runner_repo_for_worktrees;
 use super::git_utils::{git_rev_parse_head, run_git_expect_success};
@@ -26,7 +28,7 @@ impl Drop for RealRunnerWorktreeLease {
 
 #[derive(Debug)]
 struct RealRunnerWorktreePool {
-    base_head: String,
+    base_repo: PathBuf,
     available_worktrees: Mutex<Vec<PathBuf>>,
     available_worktrees_cv: Condvar,
 }
@@ -39,17 +41,15 @@ fn parse_usize_env(var_name: &str) -> Option<usize> {
 }
 
 fn default_worktree_pool_size() -> usize {
-    // nextest runs one Rust test per process (process-per-test), so each process only needs
-    // one worktree lease at a time.
-    parse_usize_env("HEADLAMP_PARITY_WORKTREE_POOL_SIZE").unwrap_or(1)
+    // Runner parity executes up to 4 runners concurrently (jest/cargo-test/cargo-nextest/pytest),
+    // so each test process should have at least 4 worktrees available to avoid serializing.
+    parse_usize_env("HEADLAMP_PARITY_WORKTREE_POOL_SIZE").unwrap_or(4)
 }
 
 impl RealRunnerWorktreePool {
-    fn new() -> Self {
-        let base_repo = shared_real_runner_repo_for_worktrees();
-        let base_head = git_rev_parse_head(&base_repo).expect("git rev-parse HEAD failed");
+    fn new(base_repo: PathBuf) -> Self {
         let process_id = std::process::id();
-        let pool_root = worktrees_root_for_process().join("pool");
+        let pool_root = worktrees_root_for_process();
         let _ = std::fs::create_dir_all(&pool_root);
 
         let pool_size = default_worktree_pool_size();
@@ -80,7 +80,7 @@ impl RealRunnerWorktreePool {
 
         worktrees.reverse();
         Self {
-            base_head,
+            base_repo,
             available_worktrees: Mutex::new(worktrees),
             available_worktrees_cv: Condvar::new(),
         }
@@ -98,9 +98,11 @@ impl RealRunnerWorktreePool {
         let _timing = crate::timing::TimingGuard::start(format!(
             "lease acquire reset+clean name={lease_name}"
         ));
+        let base_head =
+            git_rev_parse_head(&self.base_repo).expect("git rev-parse HEAD failed (pool acquire)");
         run_git_expect_success(
             &worktree_path,
-            &["reset", "--hard", self.base_head.as_str(), "-q"],
+            &["reset", "--hard", base_head.as_str(), "-q"],
         );
         run_git_expect_success(&worktree_path, &["clean", "-fdx", "-q"]);
         ensure_repo_local_jest_bin(&worktree_path);
@@ -114,14 +116,32 @@ impl RealRunnerWorktreePool {
     }
 }
 
-pub fn lease_real_runner_worktree(name: &str) -> RealRunnerWorktreeLease {
-    static POOL: OnceLock<Arc<RealRunnerWorktreePool>> = OnceLock::new();
-    let pool = POOL.get_or_init(|| Arc::new(RealRunnerWorktreePool::new()));
+fn pools_by_repo() -> &'static Mutex<HashMap<String, Arc<RealRunnerWorktreePool>>> {
+    static POOLS: OnceLock<Mutex<HashMap<String, Arc<RealRunnerWorktreePool>>>> = OnceLock::new();
+    POOLS.get_or_init(|| Mutex::new(HashMap::new()))
+}
+
+fn pool_for_repo(repo: &Path) -> Arc<RealRunnerWorktreePool> {
+    let key = repo.to_string_lossy().to_string();
+    let mut locked = pools_by_repo().lock().unwrap();
+    locked
+        .entry(key)
+        .or_insert_with(|| Arc::new(RealRunnerWorktreePool::new(repo.to_path_buf())))
+        .clone()
+}
+
+pub fn lease_worktree_for_repo(repo: &Path, name: &str) -> RealRunnerWorktreeLease {
+    let pool = pool_for_repo(repo);
     let worktree_path = pool.acquire(name);
     RealRunnerWorktreeLease {
         worktree_path,
-        pool: pool.clone(),
+        pool,
     }
+}
+
+pub fn lease_real_runner_worktree(name: &str) -> RealRunnerWorktreeLease {
+    let base_repo = shared_real_runner_repo_for_worktrees();
+    lease_worktree_for_repo(&base_repo, name)
 }
 
 fn safe_dir_component(text: &str) -> String {
@@ -141,17 +161,70 @@ fn worktrees_root() -> PathBuf {
 }
 
 fn worktrees_root_for_process() -> PathBuf {
-    worktrees_root().join(format!("{}", std::process::id()))
+    worktrees_root().join("pool")
 }
 
-fn worktree_git_lock() -> &'static Mutex<()> {
-    static LOCK: OnceLock<Mutex<()>> = OnceLock::new();
-    LOCK.get_or_init(|| Mutex::new(()))
+#[derive(Debug)]
+struct WorktreeGitLockGuard {
+    lock_dir: PathBuf,
+}
+
+impl Drop for WorktreeGitLockGuard {
+    fn drop(&mut self) {
+        let _ = std::fs::remove_dir_all(&self.lock_dir);
+    }
+}
+
+fn acquire_worktree_git_lock() -> WorktreeGitLockGuard {
+    let lock_dir = worktrees_root().join("git-lock");
+    let mut attempts: usize = 0;
+    loop {
+        match std::fs::create_dir(&lock_dir) {
+            Ok(()) => return WorktreeGitLockGuard { lock_dir },
+            Err(error) if error.kind() == std::io::ErrorKind::AlreadyExists => {
+                attempts = attempts.saturating_add(1);
+                if attempts > 600 {
+                    panic!(
+                        "timed out waiting for worktree git lock {}",
+                        lock_dir.display()
+                    );
+                }
+                std::thread::sleep(Duration::from_millis(25));
+            }
+            Err(error) => panic!(
+                "failed to acquire worktree git lock {} ({error})",
+                lock_dir.display()
+            ),
+        }
+    }
+}
+
+fn prune_stale_worktree_admin_dirs(base_repo: &Path, safe_worktree_name: &str) {
+    run_git_expect_success(base_repo, &["worktree", "prune", "--expire", "now"]);
+    let admin_root = base_repo.join(".git").join("worktrees");
+    let Ok(entries) = std::fs::read_dir(&admin_root) else {
+        return;
+    };
+    for entry in entries.flatten() {
+        let Ok(file_type) = entry.file_type() else {
+            continue;
+        };
+        if !file_type.is_dir() {
+            continue;
+        }
+        let Some(name) = entry.file_name().to_str().map(|s| s.to_string()) else {
+            continue;
+        };
+        if !name.starts_with(safe_worktree_name) {
+            continue;
+        }
+        let _ = std::fs::remove_dir_all(admin_root.join(name));
+    }
 }
 
 pub fn real_runner_worktree(name: &str) -> PathBuf {
     let _timing = crate::timing::TimingGuard::start(format!("worktree total name={name}"));
-    let _guard = worktree_git_lock().lock().unwrap();
+    let _lock = acquire_worktree_git_lock();
     let base_repo = shared_real_runner_repo_for_worktrees();
     let safe = safe_dir_component(name);
     let dir = worktrees_root_for_process().join(&safe);
@@ -177,6 +250,7 @@ pub fn real_runner_worktree(name: &str) -> PathBuf {
     let _ = std::fs::remove_dir_all(&dir);
     {
         let _timing = crate::timing::TimingGuard::start(format!("worktree add name={name}"));
+        prune_stale_worktree_admin_dirs(&base_repo, safe.as_str());
         run_git_expect_success(
             &base_repo,
             &[

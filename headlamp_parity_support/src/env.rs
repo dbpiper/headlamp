@@ -3,7 +3,6 @@ use std::path::{Path, PathBuf};
 use std::process::Command;
 use std::sync::OnceLock;
 
-use crate::hashing::sha1_12;
 use crate::parity_meta::ParitySideLabel;
 
 pub(crate) fn program_display_name(program: &Path) -> String {
@@ -33,7 +32,7 @@ pub(crate) fn build_env_map(repo: &Path, side_label: &ParitySideLabel) -> BTreeM
     let needs_cargo_target_dir = side_label.runner_stack.contains("cargo-test")
         || side_label.runner_stack.contains("cargo-nextest");
     if needs_cargo_target_dir {
-        let repo_key = sha1_12(&repo.to_string_lossy());
+        let repo_key = headlamp::fast_related::stable_repo_key_hash_12(repo);
         let suffix = side_label.file_safe_label();
         env.insert(
             "CARGO_TARGET_DIR".to_string(),
@@ -45,6 +44,14 @@ pub(crate) fn build_env_map(repo: &Path, side_label: &ParitySideLabel) -> BTreeM
                 .join(suffix)
                 .to_string_lossy()
                 .to_string(),
+        );
+        env.insert(
+            "HEADLAMP_PARITY_REUSE_INSTRUMENTED_BUILD".to_string(),
+            "1".to_string(),
+        );
+        env.insert(
+            "HEADLAMP_PARITY_SKIP_LLVM_COV_JSON".to_string(),
+            "1".to_string(),
         );
     }
     if let Ok(existing_path) = std::env::var("PATH") {

@@ -1,10 +1,60 @@
 use std::path::{Path, PathBuf};
 use std::sync::OnceLock;
+use std::time::Duration;
 
 use crate::fs::write_file;
 use crate::git::{git_commit_all, git_init};
 
 use super::jest_bin::ensure_repo_local_jest_bin;
+
+mod threshold;
+
+#[derive(Debug)]
+struct RepoInitLockGuard {
+    lock_dir: PathBuf,
+}
+
+impl Drop for RepoInitLockGuard {
+    fn drop(&mut self) {
+        let _ = std::fs::remove_dir_all(&self.lock_dir);
+    }
+}
+
+fn acquire_repo_init_lock(lock_dir: &Path) -> RepoInitLockGuard {
+    let mut attempts: usize = 0;
+    loop {
+        match std::fs::create_dir(lock_dir) {
+            Ok(()) => {
+                return RepoInitLockGuard {
+                    lock_dir: lock_dir.to_path_buf(),
+                };
+            }
+            Err(error) if error.kind() == std::io::ErrorKind::AlreadyExists => {
+                attempts = attempts.saturating_add(1);
+                if attempts > 600 {
+                    panic!(
+                        "timed out waiting for repo init lock {}",
+                        lock_dir.display()
+                    );
+                }
+                std::thread::sleep(Duration::from_millis(25));
+            }
+            Err(error) => panic!(
+                "failed to acquire repo init lock {} ({error})",
+                lock_dir.display()
+            ),
+        }
+    }
+}
+
+fn repo_is_initialized(repo: &Path) -> bool {
+    repo.join(".git").exists() && repo.join(".git").join("headlamp_fixture_ready").exists()
+}
+
+fn mark_repo_initialized(repo: &Path) {
+    let _ = std::fs::write(repo.join(".git").join("headlamp_fixture_ready"), b"1\n");
+    let _ = std::fs::remove_file(repo.join(".headlamp_fixture_ready"));
+}
 
 #[derive(Debug, Clone, Copy)]
 struct WriteSpec {
@@ -15,15 +65,16 @@ struct WriteSpec {
 pub fn shared_real_runner_repo() -> PathBuf {
     static REPO: OnceLock<PathBuf> = OnceLock::new();
     REPO.get_or_init(|| {
-        let process_id = std::process::id();
         let repo = PathBuf::from(env!("CARGO_MANIFEST_DIR"))
             .join("target")
             .join("parity-fixtures")
-            .join(format!("real-runner-repo-{process_id}"));
-        if !repo.exists() {
-            std::fs::create_dir_all(&repo).unwrap();
+            .join("real-runner-repo");
+        let _ = std::fs::create_dir_all(&repo);
+        let _lock = acquire_repo_init_lock(&repo.with_extension("init-lock"));
+        if !repo_is_initialized(&repo) {
+            write_real_runner_repo(&repo);
+            mark_repo_initialized(&repo);
         }
-        write_real_runner_repo(&repo);
         repo
     })
     .clone()
@@ -33,74 +84,7 @@ pub(crate) fn shared_real_runner_repo_for_worktrees() -> PathBuf {
     shared_real_runner_repo()
 }
 
-pub fn shared_threshold_real_runner_repo() -> PathBuf {
-    static REPO: OnceLock<PathBuf> = OnceLock::new();
-    REPO.get_or_init(|| {
-        let process_id = std::process::id();
-        let repo = PathBuf::from(env!("CARGO_MANIFEST_DIR"))
-            .join("target")
-            .join("parity-fixtures")
-            .join(format!("real-runner-repo-thresholds-{process_id}"));
-        if !repo.exists() {
-            std::fs::create_dir_all(&repo).unwrap();
-        }
-        write_real_runner_repo(&repo);
-
-        // Make all tests pass so the only failure signal is coverage thresholds.
-        write_file(
-            &repo.join("tests/sum_fail_test.js"),
-            r#"const { sum } = require('../src/sum');
-
-test('test_sum_fails', () => {
-  console.log('log-pass');
-  console.error('err-fail');
-  expect(sum(1, 2)).toBe(3);
-});
-"#,
-        );
-        write_file(
-            &repo.join("tests/sum_fail_test.rs"),
-            "\
-use parity_real::sum;\n\
-\n\
-#[test]\n\
-fn test_sum_fails() {\n\
-    println!(\"log-pass\");\n\
-    eprintln!(\"err-fail\");\n\
-    assert_eq!(sum(1, 2), 3);\n\
-}\n\
-",
-        );
-        write_file(
-            &repo.join("tests/sum_fail_test.py"),
-            r#"import sys
-from sum import sum_two
-
-def test_sum_fails() -> None:
-    print("log-pass")
-    sys.stderr.write("err-fail\n")
-    assert sum_two(1, 2) == 3
-"#,
-        );
-        write_file(
-            &repo.join("headlamp.config.json5"),
-            "\
-{\n\
-  coverage: {\n\
-    thresholds: {\n\
-      lines: 101,\n\
-      functions: 101,\n\
-      branches: 101,\n\
-    },\n\
-  },\n\
-}\n\
-",
-        );
-        git_commit_all(&repo, "coverage thresholds");
-        repo
-    })
-    .clone()
-}
+pub use threshold::shared_threshold_real_runner_repo;
 
 pub fn write_real_runner_repo(repo: &Path) {
     // Make the repo deterministic and tiny; do NOT delete the dir because we want to reuse

@@ -114,16 +114,21 @@ pub fn runner_parity_tty_all_four_canonical_env(
         git_utils::repo_state_token(repo)
     );
     let columns = 120;
+    let snapshot = git_utils::snapshot_working_tree(repo);
     let sides = std::thread::scope(|scope| {
+        let snapshot = &snapshot;
         runners
             .iter()
             .map(|(runner, args)| {
                 let runner_id = *runner;
                 let runner_args = *args;
                 let repo_cache_key = repo_cache_key.clone();
+                let lease_name = format!("case={case} runner={}", runner_id.as_runner_label());
                 scope.spawn(move || {
+                    let lease = worktrees::lease_worktree_for_repo(repo, lease_name.as_str());
+                    git_utils::apply_working_tree_snapshot(lease.path(), snapshot);
                     cache::run_and_normalize_cached(
-                        repo,
+                        lease.path(),
                         repo_cache_key.as_str(),
                         headlamp_bin,
                         columns,

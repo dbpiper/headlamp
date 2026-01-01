@@ -7,6 +7,14 @@ pub(super) fn normalize_paths(mut text: String, root: &Path) -> String {
     let root_s = root.to_slash_lossy().to_string();
     text = text.replace('\\', "/");
     text = text.replace(&root_s, "<ROOT>");
+    // Parity fixtures often run out of git worktrees, and some tools print absolute paths from a
+    // different worktree (or a shortened "/…/" form). Normalize those back to the current root.
+    text = regex_replace(
+        &text,
+        r"[/A-Za-z0-9_.:-]+/headlamp_parity_support/target/parity-fixtures/worktrees/\d+/pool/wt-\d+-\d+",
+        "<ROOT>",
+    );
+    text = regex_replace(&text, r"/…/(src|tests)/", "$1/");
     text = regex_replace(&text, r"jest-bridge-[0-9]+\.json", "jest-bridge-<PID>.json");
     text = regex_replace(&text, r"\+[0-9]+s\]", "+<N>s]");
     text = regex_replace(&text, r"\b[0-9]{1,5}ms\b", "<N>ms");
@@ -35,6 +43,7 @@ fn normalize_fixture_exts(text: &str) -> String {
     let test_suffix_ext = Regex::new(r#"(?m)(tests/[^ \t\r\n:'"]+_test)\.(js|rs|py)"#).unwrap();
     let src_ext = Regex::new(r#"(?m)(src/[^ \t\r\n:'"]+)\.(js|rs|py)"#).unwrap();
     let tests_ext = Regex::new(r#"(?m)(tests/[^ \t\r\n:'"]+)\.(js|rs|py)"#).unwrap();
+    let doubled_src = Regex::new(r#"(?m)\bsrc/(?:\.\.\./)?src/"#).unwrap();
     let istanbul_table_basename_ext =
         Regex::new(r#"(?m)^((?:\x1b\[[0-9;]*m)*\s*)([A-Za-z0-9_.-]+)\.(js|rs|py)"#).unwrap();
 
@@ -46,8 +55,9 @@ fn normalize_fixture_exts(text: &str) -> String {
         .replace_all(&with_test_suffix, "$1.<EXT>")
         .to_string();
     let with_tests_any = tests_ext.replace_all(&with_src, "$1.<EXT>").to_string();
+    let with_deduped_src = doubled_src.replace_all(&with_tests_any, "src/").to_string();
     let with_istanbul_basenames = istanbul_table_basename_ext
-        .replace_all(&with_tests_any, "$1$2.<EXT>")
+        .replace_all(&with_deduped_src, "$1$2.<EXT>")
         .to_string();
     normalize_coverage_numbers(&with_istanbul_basenames)
 }

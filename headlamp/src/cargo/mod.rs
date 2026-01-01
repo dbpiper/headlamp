@@ -14,6 +14,8 @@ use crate::streaming::run_streaming_capture_tail;
 mod adapters;
 mod coverage;
 mod llvm_cov;
+#[cfg(test)]
+mod llvm_cov_test;
 mod model_norm;
 mod paths;
 mod run_trace;

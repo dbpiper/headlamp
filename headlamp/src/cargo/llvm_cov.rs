@@ -22,6 +22,10 @@ use super::paths::{
 };
 use super::runner_args::{build_llvm_cov_nextest_run_args, build_llvm_cov_test_run_args};
 
+pub(super) fn should_reuse_instrumented_build(ci: bool) -> bool {
+    !ci || std::env::var_os("HEADLAMP_PARITY_REUSE_INSTRUMENTED_BUILD").is_some()
+}
+
 fn purge_llvm_cov_profile_artifacts(
     repo_root: &Path,
     args: &ParsedArgs,
@@ -71,7 +75,9 @@ pub(super) fn finish_coverage_after_test_run(
         let _span = profile::span("cargo llvm-cov report (lcov+json)");
         let report_scope_args = extract_llvm_cov_report_scope_args(&args.runner_args);
         run_cargo_llvm_cov_report_lcov(repo_root, args, session, &report_scope_args)?;
-        run_cargo_llvm_cov_report_json(repo_root, args, session, &report_scope_args)?;
+        if std::env::var_os("HEADLAMP_PARITY_SKIP_LLVM_COV_JSON").is_none() {
+            run_cargo_llvm_cov_report_json(repo_root, args, session, &report_scope_args)?;
+        }
     }
     if args.coverage_ui != CoverageUi::Jest {
         let thresholds_failed = coverage::print_lcov(repo_root, args, session);
@@ -104,7 +110,7 @@ pub(super) fn run_cargo_llvm_cov_test_and_render(
 
     let use_nightly = can_use_nightly(repo_root);
     let enable_branch_coverage = use_nightly;
-    let reuse_instrumented_build = !args.ci;
+    let reuse_instrumented_build = should_reuse_instrumented_build(args.ci);
     if reuse_instrumented_build {
         // When reusing the instrumented target dir, cargo-llvm-cov can leave old profraw/profdata around.
         // Purge only those artifacts (fast) while keeping compiled instrumented objects.
@@ -166,7 +172,7 @@ pub(super) fn run_cargo_llvm_cov_nextest_and_render(
 
     let use_nightly = can_use_nightly(repo_root);
     let enable_branch_coverage = use_nightly;
-    let reuse_instrumented_build = !args.ci;
+    let reuse_instrumented_build = should_reuse_instrumented_build(args.ci);
     if reuse_instrumented_build {
         purge_llvm_cov_profile_artifacts(repo_root, args, session);
     }

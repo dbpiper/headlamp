@@ -224,9 +224,59 @@ fn compute_branch_maps(
 pub fn normalize_lcov_path(path: &str, root: &Path) -> String {
     let p = Path::new(path);
     if p.is_absolute() {
-        return normalize_sep(p);
+        return normalize_sep(&normalize_abs_lcov_path(p, root));
     }
-    normalize_sep(&root.join(p))
+    normalize_sep(&normalize_rel_lcov_path(p, root))
+}
+
+fn normalize_abs_lcov_path(abs: &Path, root: &Path) -> std::path::PathBuf {
+    if let Ok(rel) = abs.strip_prefix(root) {
+        return root.join(rel);
+    }
+    if let Some(rel) = strip_to_repo_relative(abs) {
+        return root.join(rel);
+    }
+    abs.to_path_buf()
+}
+
+fn normalize_rel_lcov_path(rel: &Path, root: &Path) -> std::path::PathBuf {
+    let direct = root.join(rel);
+    if direct.exists() {
+        return direct;
+    }
+    let under_src = root.join("src").join(rel);
+    if under_src.exists() {
+        return under_src;
+    }
+    let under_tests = root.join("tests").join(rel);
+    if under_tests.exists() {
+        return under_tests;
+    }
+    let under_legacy = root.join("legacy").join(rel);
+    if under_legacy.exists() {
+        return under_legacy;
+    }
+    direct
+}
+
+fn strip_to_repo_relative(abs: &Path) -> Option<std::path::PathBuf> {
+    let components = abs
+        .components()
+        .filter_map(|c| match c {
+            std::path::Component::Normal(name) => Some(name),
+            _ => None,
+        })
+        .collect::<Vec<_>>();
+
+    let start_index = components
+        .iter()
+        .rposition(|name| *name == "src" || *name == "tests" || *name == "legacy")?;
+
+    let mut rel = std::path::PathBuf::new();
+    for name in components.into_iter().skip(start_index) {
+        rel.push(name);
+    }
+    Some(rel)
 }
 
 fn normalize_sep(path: &Path) -> String {
