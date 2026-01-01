@@ -34,10 +34,37 @@ pub(crate) fn build_env_map(repo: &Path, side_label: &ParitySideLabel) -> BTreeM
     if needs_cargo_target_dir {
         let repo_key = headlamp::fast_related::stable_repo_key_hash_12(repo);
         let suffix = side_label.file_safe_label();
+
+        // IMPORTANT: when runners are executed concurrently, Cargo must not contend on shared
+        // filesystem locks. Isolate both `CARGO_TARGET_DIR` and `CARGO_HOME` per repo+runner.
+        //
+        // If the outer process set `CARGO_TARGET_DIR`/`CARGO_HOME` (e.g. via Docker volumes),
+        // we keep everything under those roots so builds/downloads are still reused across runs.
+        let base_target_dir = std::env::var_os("CARGO_TARGET_DIR")
+            .map(PathBuf::from)
+            .unwrap_or_else(|| PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("target"));
+        let base_cargo_home = std::env::var_os("CARGO_HOME")
+            .map(PathBuf::from)
+            .unwrap_or_else(|| {
+                PathBuf::from(env!("CARGO_MANIFEST_DIR"))
+                    .join("target")
+                    .join("parity-fixtures")
+                    .join("cargo-home")
+            });
+
+        env.insert(
+            "CARGO_HOME".to_string(),
+            base_cargo_home
+                .join("parity-fixtures")
+                .join("cargo-home")
+                .join(repo_key.clone())
+                .join(suffix.clone())
+                .to_string_lossy()
+                .to_string(),
+        );
         env.insert(
             "CARGO_TARGET_DIR".to_string(),
-            PathBuf::from(env!("CARGO_MANIFEST_DIR"))
-                .join("target")
+            base_target_dir
                 .join("parity-fixtures")
                 .join("cargo-target")
                 .join(repo_key)
@@ -165,6 +192,12 @@ fn ensure_pytest_venv_bin_dir() -> Option<PathBuf> {
     static PY_BIN: OnceLock<Option<PathBuf>> = OnceLock::new();
     PY_BIN
         .get_or_init(|| {
+            // CI speed: allow using a preinstalled venv inside the CI image.
+            let prebuilt = PathBuf::from("/opt/headlamp/py_venv/bin");
+            if pytest_path(&prebuilt).exists() {
+                return Some(prebuilt);
+            }
+
             let requirements = pytest_requirements_path()?;
             if let Some(bin) = repo_pytest_bin_if_installed(&requirements) {
                 return Some(bin);

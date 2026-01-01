@@ -48,11 +48,13 @@ fn acquire_repo_init_lock(lock_dir: &Path) -> RepoInitLockGuard {
 }
 
 fn repo_is_initialized(repo: &Path) -> bool {
-    repo.join(".git").exists() && repo.join(".git").join("headlamp_fixture_ready").exists()
+    repo.join(".git").exists() && repo.join(".git").join("headlamp_fixture_ready_v3").exists()
 }
 
 fn mark_repo_initialized(repo: &Path) {
-    let _ = std::fs::write(repo.join(".git").join("headlamp_fixture_ready"), b"1\n");
+    let _ = std::fs::write(repo.join(".git").join("headlamp_fixture_ready_v3"), b"1\n");
+    let _ = std::fs::remove_file(repo.join(".git").join("headlamp_fixture_ready"));
+    let _ = std::fs::remove_file(repo.join(".git").join("headlamp_fixture_ready_v2"));
     let _ = std::fs::remove_file(repo.join(".headlamp_fixture_ready"));
 }
 
@@ -97,6 +99,19 @@ pub fn write_real_runner_repo(repo: &Path) {
     let _ = std::fs::remove_dir_all(repo.join("pkg"));
     let _ = std::fs::remove_dir_all(repo.join("tests/__pycache__"));
     let _ = std::fs::remove_dir_all(repo.join("tests/.pytest_cache"));
+    let _ = std::fs::remove_dir_all(repo.join("node_modules"));
+
+    // Ensure helper deps created by the parity harness never become tracked/staged.
+    write_file(
+        &repo.join(".gitignore"),
+        "node_modules/\n.venv/\n.pytest_cache/\n.headlamp-cache/\n",
+    );
+    // IMPORTANT: ignores do not apply to already-tracked files. If a previous run accidentally
+    // committed `node_modules/`, force-remove it from the index.
+    let _ = std::process::Command::new("git")
+        .current_dir(repo)
+        .args(["rm", "-r", "--cached", "-f", "node_modules"])
+        .status();
 
     write_js_runner_files(repo);
     write_rust_runner_files(repo);

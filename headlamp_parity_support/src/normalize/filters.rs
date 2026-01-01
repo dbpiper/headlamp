@@ -67,12 +67,19 @@ fn should_keep_line(line: &str) -> bool {
     if trimmed.starts_with("idle ") {
         return false;
     }
-    if (line.contains("\u{1b}[2K") || line.contains("\u{1b}[1A"))
-        && !line.chars().any(|c| c.is_alphanumeric())
-    {
+    // Worktree paths can wrap in a narrow TTY, producing a continuation line like:
+    // `s/057093c2092a/wt-187-0)` (from `repos/<hash>/wt-...` split after `repo`).
+    if is_wrapped_worktree_path_continuation(trimmed) {
         return false;
     }
-    if line.contains("\u{1b}[2K") && line.contains("RUN [") {
+    // If a live-progress line was wrapped/split, we can get a deterministic "tail fragment"
+    // like `1163-1)` or `<N>-<N>)`. Drop these unconditionally.
+    if is_live_progress_tail_fragment(trimmed) {
+        return false;
+    }
+    // Drop terminal cursor-control / line-erasing sequences unconditionally. These come from the
+    // live progress renderer and can appear alongside partial text when a line is redrawn.
+    if line.contains("\u{1b}[2K") || line.contains("\u{1b}[1A") {
         return false;
     }
     if line.contains("waiting for Jest") || line.contains("+<N>s]") {
@@ -116,6 +123,40 @@ fn should_keep_line(line: &str) -> bool {
     !discovery_prefixes
         .iter()
         .any(|prefix| line.starts_with(prefix))
+}
+
+fn is_wrapped_worktree_path_continuation(trimmed: &str) -> bool {
+    // Example continuation when `repos/<hash>/wt-123-0)` wraps after `rep`:
+    // `os/057093c2092a/wt-123-0)` (or `s/...` etc).
+    if trimmed.contains(char::is_whitespace) {
+        return false;
+    }
+    let parts = trimmed.split('/').collect::<Vec<_>>();
+    if parts.len() != 3 {
+        return false;
+    }
+    let [prefix, repo_hash, wt] = [parts[0], parts[1], parts[2]];
+    let prefix_ok =
+        (1..=4).contains(&prefix.len()) && prefix.chars().all(|c| c.is_ascii_alphabetic());
+    let hash_ok = repo_hash.len() == 12 && repo_hash.chars().all(|c| c.is_ascii_hexdigit());
+    let wt_ok = wt.starts_with("wt-")
+        && wt.ends_with(')')
+        && wt
+            .chars()
+            .all(|c| c.is_ascii_alphanumeric() || matches!(c, '-' | '_' | '.' | ')' | '<' | '>'));
+    prefix_ok && hash_ok && wt_ok
+}
+
+fn is_live_progress_tail_fragment(trimmed: &str) -> bool {
+    if !trimmed.ends_with(')') {
+        return false;
+    }
+    if !trimmed.contains('-') {
+        return false;
+    }
+    trimmed
+        .chars()
+        .all(|c| c.is_ascii_digit() || matches!(c, '-' | ')' | '<' | '>' | 'N'))
 }
 
 pub(super) fn strip_terminal_sequences(text: &str) -> String {

@@ -1,6 +1,9 @@
 [test-groups.coverage_perf]
 max-threads = 1
 
+[test-groups.parity]
+max-threads = 1
+
 [profile.default]
 
 [[profile.default.overrides]]
@@ -8,3 +11,10 @@ max-threads = 1
 # cross-test CPU contention causing false failures.
 filter = 'test(coverage_pipeline_for_250_files_completes_under_time_budget)|test(coverage_pretty_from_lcov_large_report_completes_under_one_second)|test(coverage_pretty_runtime_scales_approximately_linearly_in_file_count)'
 test-group = 'coverage_perf'
+
+[[profile.default.overrides]]
+# Parity tests spawn their own `cargo`/`nextest` subprocesses. Running multiple parity
+# cases concurrently provides no speedup (Cargo serializes on internal locks) and can
+# cause long stalls with "Blocking waiting for file lock".
+filter = 'package(headlamp_parity_tests)'
+test-group = 'parity'

@@ -41,6 +41,16 @@ fn main() {
     should_print_terminal_debug()
         .then(print_terminal_debug)
         .unwrap_or(());
+    // Parity tests may need to invoke `headlamp` from within a `cargo nextest` run.
+    // Avoid spawning a nested `cargo build -p headlamp` from inside tests (which can
+    // contend on Cargo's build directory lock) by advertising our current executable.
+    if std::env::var_os("HEADLAMP_PARITY_HEADLAMP_BIN").is_none() {
+        if let Ok(exe) = std::env::current_exe() {
+            if exe.exists() {
+                unsafe { std::env::set_var("HEADLAMP_PARITY_HEADLAMP_BIN", exe) };
+            }
+        }
+    }
     let argv0 = std::env::args().skip(1).collect::<Vec<_>>();
     match early_exit_before_double_dash(&argv0) {
         Some(EarlyExit::Help) => {

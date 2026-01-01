@@ -114,19 +114,22 @@ pub fn runner_parity_tty_all_four_canonical_env(
         git_utils::repo_state_token(repo)
     );
     let columns = 120;
-    let snapshot = git_utils::snapshot_working_tree(repo);
+    let snapshot = std::sync::Arc::new(git_utils::snapshot_working_tree(repo));
+    // Run each runner concurrently. We rely on per-runner Cargo isolation (`CARGO_HOME` and
+    // `CARGO_TARGET_DIR`) to avoid lock contention while still getting parallel speedups.
     let sides = std::thread::scope(|scope| {
-        let snapshot = &snapshot;
-        runners
-            .iter()
-            .map(|(runner, args)| {
-                let runner_id = *runner;
-                let runner_args = *args;
-                let repo_cache_key = repo_cache_key.clone();
-                let lease_name = format!("case={case} runner={}", runner_id.as_runner_label());
-                scope.spawn(move || {
-                    let lease = worktrees::lease_worktree_for_repo(repo, lease_name.as_str());
-                    git_utils::apply_working_tree_snapshot(lease.path(), snapshot);
+        let mut joins = Vec::with_capacity(runners.len());
+        for (index, (runner, args)) in runners.iter().enumerate() {
+            let runner_id = *runner;
+            let runner_args = *args;
+            let lease_name = format!("case={case} runner={}", runner_id.as_runner_label());
+            let snapshot = snapshot.clone();
+            let repo_cache_key = repo_cache_key.clone();
+            joins.push(scope.spawn(move || {
+                let lease = worktrees::lease_worktree_for_repo(repo, lease_name.as_str());
+                git_utils::apply_working_tree_snapshot(lease.path(), snapshot.as_ref());
+                (
+                    index,
                     cache::run_and_normalize_cached(
                         lease.path(),
                         repo_cache_key.as_str(),
@@ -135,13 +138,17 @@ pub fn runner_parity_tty_all_four_canonical_env(
                         runner_id,
                         runner_args,
                         extra_env,
-                    )
-                })
-            })
-            .collect::<Vec<_>>()
-            .into_iter()
-            .map(|handle| handle.join().unwrap())
-            .collect::<Vec<_>>()
+                    ),
+                )
+            }));
+        }
+        let mut out: Vec<Option<std::sync::Arc<CachedRunnerParitySide>>> =
+            vec![None; runners.len()];
+        for join in joins {
+            let (index, side) = join.join().expect("runner parity thread panicked");
+            out[index] = Some(side);
+        }
+        out.into_iter().flatten().collect::<Vec<_>>()
     });
 
     {

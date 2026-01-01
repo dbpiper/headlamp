@@ -96,7 +96,11 @@ fn parse_suite_header_source_path(line: &str) -> Option<String> {
         Cow::Borrowed(line)
     };
     let trimmed = stripped.trim();
-    let rest = trimmed.strip_prefix("Running ")?;
+    // Cargo can emit `Running <path>` with styling that sometimes removes the space after
+    // "Running" once ANSI escapes are stripped (e.g. `Running<path>`).
+    // Be tolerant and treat any whitespace as optional.
+    let rest = trimmed.strip_prefix("Running")?;
+    let rest = rest.trim_start();
     let (path_like, _) = rest.split_once(" (").unwrap_or((rest, ""));
     let cleaned = path_like.trim();
     let cleaned = cleaned.strip_prefix("unittests ").unwrap_or(cleaned).trim();

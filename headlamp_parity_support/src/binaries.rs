@@ -1,5 +1,4 @@
 use std::path::PathBuf;
-use std::process::Command;
 
 #[derive(Debug, Clone)]
 pub struct ParityBinaries {
@@ -43,15 +42,22 @@ pub fn parity_binaries() -> Option<ParityBinaries> {
 
 pub fn runner_parity_binaries() -> RunnerParityBinaries {
     RunnerParityBinaries {
-        headlamp_bin: std::env::var("CARGO_BIN_EXE_headlamp")
-            .ok()
-            .map(PathBuf::from)
+        headlamp_bin: env_path("HEADLAMP_PARITY_HEADLAMP_BIN")
             .filter(|p| p.exists())
-            .unwrap_or_else(ensure_headlamp_bin_from_target_dir),
+            .or_else(|| {
+                std::env::var("CARGO_BIN_EXE_headlamp")
+                    .ok()
+                    .map(PathBuf::from)
+                    .filter(|p| p.exists())
+            })
+            .or_else(headlamp_bin_from_target_dir_if_present)
+            .unwrap_or_else(|| {
+                panic!("headlamp parity requires an existing headlamp binary. Set HEADLAMP_PARITY_HEADLAMP_BIN to an executable path (recommended) or build `target/debug/headlamp` before running parity tests.")
+            }),
     }
 }
 
-fn ensure_headlamp_bin_from_target_dir() -> PathBuf {
+fn headlamp_bin_from_target_dir_if_present() -> Option<PathBuf> {
     let manifest_dir = PathBuf::from(env!("CARGO_MANIFEST_DIR"));
     let workspace_root = manifest_dir
         .parent()
@@ -69,19 +75,5 @@ fn ensure_headlamp_bin_from_target_dir() -> PathBuf {
         "headlamp"
     };
     let bin_path = target_dir.join("debug").join(exe_name);
-    let status = Command::new("cargo")
-        .current_dir(&workspace_root)
-        .args(["build", "-q", "-p", "headlamp"])
-        .status()
-        .unwrap_or_else(|e| panic!("failed to run cargo build: {e}"));
-    if !status.success() {
-        panic!(
-            "failed to build headlamp binary (status={:?})",
-            status.code()
-        );
-    }
-    if !bin_path.exists() {
-        panic!("headlamp binary missing at {}", bin_path.display());
-    }
-    bin_path
+    bin_path.exists().then_some(bin_path)
 }

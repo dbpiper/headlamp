@@ -67,7 +67,10 @@ pub fn snapshot_working_tree(repo: &Path) -> WorkingTreeSnapshot {
 
 pub fn apply_working_tree_snapshot(repo: &Path, snapshot: &WorkingTreeSnapshot) {
     if !snapshot.staged_patch.is_empty() {
-        apply_git_patch_bytes(repo, &["apply", "--index"], &snapshot.staged_patch);
+        // Avoid `git apply --index` strictness (it can fail in worktrees due to index hash
+        // mismatches when helper artifacts exist). Apply to the working tree, then stage.
+        apply_git_patch_bytes(repo, &["apply"], &snapshot.staged_patch);
+        run_git_expect_success(repo, &["add", "-A"]);
     }
     if !snapshot.unstaged_patch.is_empty() {
         apply_git_patch_bytes(repo, &["apply"], &snapshot.unstaged_patch);
@@ -79,14 +82,26 @@ fn apply_git_patch_bytes(repo: &Path, args: &[&str], patch: &[u8]) {
         .current_dir(repo)
         .args(args)
         .stdin(std::process::Stdio::piped())
-        .stdout(std::process::Stdio::null())
-        .stderr(std::process::Stdio::null())
+        .stdout(std::process::Stdio::piped())
+        .stderr(std::process::Stdio::piped())
         .spawn()
         .expect("failed to spawn git apply");
     if let Some(mut stdin) = child.stdin.take() {
         use std::io::Write;
         let _ = stdin.write_all(patch);
     }
-    let status = child.wait().expect("failed to wait for git apply");
-    assert!(status.success(), "git {:?} failed", args);
+    let out = child
+        .wait_with_output()
+        .expect("failed to wait for git apply");
+    if !out.status.success() {
+        let stdout = String::from_utf8_lossy(&out.stdout);
+        let stderr = String::from_utf8_lossy(&out.stderr);
+        panic!(
+            "git {:?} failed (exit={})\nstdout:\n{}\nstderr:\n{}",
+            args,
+            out.status.code().unwrap_or(1),
+            stdout.trim(),
+            stderr.trim()
+        );
+    }
 }

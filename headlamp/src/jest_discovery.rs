@@ -103,7 +103,16 @@ pub fn discover_jest_list_tests_with_timeout(
         };
         return Err(RunError::CommandFailed { message });
     }
-    let text = String::from_utf8_lossy(&out.stdout);
+    // In some environments (notably when running under a PTY), Jest can emit `--listTests`
+    // output on stderr instead of stdout. Prefer stdout, but fall back to stderr if stdout
+    // is empty to keep discovery stable across CI/local.
+    let stdout_text = String::from_utf8_lossy(&out.stdout);
+    let stderr_text = String::from_utf8_lossy(&out.stderr);
+    let text = if stdout_text.trim().is_empty() {
+        stderr_text
+    } else {
+        stdout_text
+    };
     Ok(text
         .lines()
         .map(|l| l.trim())

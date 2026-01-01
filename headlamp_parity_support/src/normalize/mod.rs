@@ -121,6 +121,19 @@ pub fn normalize_tty_ui_with_meta(text: String, root: &Path) -> (String, Normali
     } else {
         (common::trim_leading_blank_lines(&final_block), false)
     };
+    // Even if we had to fall back to a less-structured block picker, always:
+    // - drop live-progress noise (RUN(+...), idle..., cursor controls)
+    // - normalize the footer time line
+    // so runner parity compares stable content.
+    let normalized = normalized
+        .lines()
+        .filter_map(|raw_line| {
+            let without_profile = filters::strip_headlamp_profile_suffix(raw_line);
+            filters::should_keep_line_tty(raw_line)
+                .then(|| normalize_time_line_tty(without_profile))
+        })
+        .collect::<Vec<_>>()
+        .join("\n");
     let normalized = normalize_tty_footer_spacing(&normalized);
 
     let (last_failed_tests_line, last_test_files_line, last_box_table_top_line) =

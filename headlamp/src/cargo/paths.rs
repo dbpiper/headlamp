@@ -26,14 +26,34 @@ pub fn build_cargo_llvm_cov_command_args(
 }
 
 pub(super) fn can_use_nightly(repo_root: &Path) -> bool {
-    duct_cmd("cargo", ["+nightly", "llvm-cov", "--version"])
+    // IMPORTANT: do not probe `cargo +nightly ...` here.
+    //
+    // `cargo +nightly` can cause rustup to auto-download the nightly toolchain on-demand, which
+    // makes behavior CI-dependent and can fail later when `llvm-tools-preview` isn't installed
+    // for nightly. Instead, only enable nightly if the toolchain already exists *and* has
+    // `llvm-tools-preview` installed.
+    let nightly_exists = duct_cmd("rustup", ["run", "nightly", "rustc", "--version"])
         .dir(repo_root)
         .stdout_capture()
         .stderr_capture()
         .unchecked()
         .run()
         .ok()
-        .is_some_and(|o| o.status.success())
+        .is_some_and(|o| o.status.success());
+    if !nightly_exists {
+        return false;
+    }
+    let components = duct_cmd("rustup", ["component", "list", "--toolchain", "nightly"])
+        .dir(repo_root)
+        .stdout_capture()
+        .stderr_capture()
+        .unchecked()
+        .run()
+        .ok()
+        .filter(|o| o.status.success())
+        .map(|o| String::from_utf8_lossy(&o.stdout).to_string())
+        .unwrap_or_default();
+    components.contains("llvm-tools-preview") && components.contains("installed")
 }
 
 fn headlamp_cargo_target_dir(repo_root: &Path) -> PathBuf {

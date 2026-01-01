@@ -2,21 +2,27 @@ use std::path::{Path, PathBuf};
 
 pub fn ensure_repo_local_jest_bin(repo: &Path) {
     // Jest runner requires repo-local node_modules/.bin/jest.
-    let js_deps_bin = PathBuf::from(env!("CARGO_MANIFEST_DIR"))
+    let jest_name = if cfg!(windows) { "jest.cmd" } else { "jest" };
+    let js_deps_bin_repo = PathBuf::from(env!("CARGO_MANIFEST_DIR"))
         .join("..")
         .join("headlamp_tests")
         .join("tests")
         .join("js_deps")
         .join("node_modules")
         .join(".bin");
-    let jest_src = js_deps_bin.join(if cfg!(windows) { "jest.cmd" } else { "jest" });
+    // CI speed: allow using a preinstalled deps bundle inside the CI image.
+    let js_deps_bin_prebuilt = PathBuf::from("/opt/headlamp/js_deps/node_modules/.bin");
+    let jest_src = [js_deps_bin_repo, js_deps_bin_prebuilt]
+        .into_iter()
+        .map(|dir| dir.join(jest_name))
+        .find(|candidate| candidate.exists());
     let jest_dst = repo
         .join("node_modules")
         .join(".bin")
-        .join(if cfg!(windows) { "jest.cmd" } else { "jest" });
-    if !jest_src.exists() {
+        .join(jest_name);
+    let Some(jest_src) = jest_src else {
         return;
-    }
+    };
     let Some(jest_dst_parent) = jest_dst.parent() else {
         panic_jest_like_setup_failure(
             repo,

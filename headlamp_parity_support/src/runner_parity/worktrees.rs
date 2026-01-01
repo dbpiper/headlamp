@@ -8,6 +8,51 @@ use super::fixture_repo::shared_real_runner_repo_for_worktrees;
 use super::git_utils::{git_rev_parse_head, run_git_expect_success};
 use super::jest_bin::ensure_repo_local_jest_bin;
 
+fn ensure_git_info_exclude_has(repo: &Path, pattern: &str) {
+    let out = Command::new("git")
+        .current_dir(repo)
+        .args(["rev-parse", "--git-dir"])
+        .output()
+        .ok();
+    let Some(out) = out.filter(|o| o.status.success()) else {
+        return;
+    };
+    let git_dir_text = String::from_utf8_lossy(&out.stdout).trim().to_string();
+    if git_dir_text.is_empty() {
+        return;
+    }
+    let git_dir = PathBuf::from(git_dir_text);
+    let git_dir = if git_dir.is_absolute() {
+        git_dir
+    } else {
+        repo.join(git_dir)
+    };
+    let exclude_path = git_dir.join("info").join("exclude");
+    if let Some(parent) = exclude_path.parent() {
+        let _ = std::fs::create_dir_all(parent);
+    }
+    let existing = std::fs::read_to_string(&exclude_path).unwrap_or_default();
+    if existing.lines().any(|line| line.trim() == pattern) {
+        return;
+    }
+    let mut next = existing;
+    if !next.ends_with('\n') && !next.is_empty() {
+        next.push('\n');
+    }
+    next.push_str(pattern);
+    next.push('\n');
+    let _ = std::fs::write(&exclude_path, next);
+}
+
+fn ensure_parity_repo_git_excludes(repo: &Path) {
+    // Parity harness may create helper artifacts under the repo (jest bin symlink, venvs, caches).
+    // These must not affect `--changed` cases that stage or diff changes.
+    ensure_git_info_exclude_has(repo, "node_modules/");
+    ensure_git_info_exclude_has(repo, ".venv/");
+    ensure_git_info_exclude_has(repo, ".pytest_cache/");
+    ensure_git_info_exclude_has(repo, ".headlamp-cache/");
+}
+
 #[derive(Debug)]
 pub struct RealRunnerWorktreeLease {
     worktree_path: PathBuf,
@@ -49,7 +94,9 @@ fn default_worktree_pool_size() -> usize {
 impl RealRunnerWorktreePool {
     fn new(base_repo: PathBuf) -> Self {
         let process_id = std::process::id();
-        let pool_root = worktrees_root_for_process();
+        let pool_root = worktrees_root_for_process()
+            .join("repos")
+            .join(headlamp::fast_related::stable_repo_key_hash_12(&base_repo));
         let _ = std::fs::create_dir_all(&pool_root);
 
         let pool_size = default_worktree_pool_size();
@@ -105,6 +152,7 @@ impl RealRunnerWorktreePool {
             &["reset", "--hard", base_head.as_str(), "-q"],
         );
         run_git_expect_success(&worktree_path, &["clean", "-fdx", "-q"]);
+        ensure_parity_repo_git_excludes(&worktree_path);
         ensure_repo_local_jest_bin(&worktree_path);
         worktree_path
     }

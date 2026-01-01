@@ -19,6 +19,9 @@ pub mod hashing;
 pub mod parity_run;
 pub mod types;
 
+#[cfg(test)]
+mod env_test;
+
 pub use binaries::{ParityBinaries, RunnerParityBinaries, parity_binaries, runner_parity_binaries};
 pub use diagnostics_assert::{
     RerunMeta, RerunSideMeta, assert_parity_non_tty_with_diagnostics,
