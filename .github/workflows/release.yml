@@ -87,9 +87,6 @@ jobs:
         with:
           tool: cargo-llvm-cov
 
-      - name: Warm parity fixture cache (coverage)
-        run: cargo nextest run -p headlamp_parity_tests --test parity_suite_test parity_runner_coverage_ui_both_all_four
-
       - name: run headlamp (changed=lastRelease)
         run: cargo run -p headlamp --locked -- --runner=cargo-nextest --changed=lastRelease
 
