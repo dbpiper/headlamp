@@ -174,12 +174,16 @@ fn git_toplevel(start: &Path) -> PathBuf {
 }
 
 fn git_stdout_lines(repo_root: &Path, args: &[&str]) -> Result<Vec<String>, RunError> {
-    let out = Command::new("git")
-        .arg("-C")
-        .arg(repo_root)
-        .args(args)
-        .output()
-        .map_err(RunError::Io)?;
+    let mut cmd = Command::new("git");
+    cmd.arg("-C").arg(repo_root);
+    if args.first().is_some_and(|arg| *arg == "diff") {
+        // Guard against user/global gitconfig aliases overriding the built-in `diff` subcommand.
+        // In CI we observed failures where an alias expanded `diff` into `diff --no-index`,
+        // which rejects flags like `--cached`.
+        cmd.args(["-c", "alias.diff=diff"]);
+    }
+    cmd.args(args);
+    let out = cmd.output().map_err(RunError::Io)?;
     if !out.status.success() {
         return Err(RunError::Io(std::io::Error::other(
             String::from_utf8_lossy(&out.stderr).to_string(),

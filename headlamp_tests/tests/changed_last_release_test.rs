@@ -55,6 +55,16 @@ fn commit_file(repo: &Path, rel: &str, contents: &str, message: &str) {
     run_git(repo, &["commit", "-q", "-m", message]);
 }
 
+fn with_git_config_global_removed<T>(f: impl FnOnce() -> T) -> T {
+    let previous = std::env::var_os("GIT_CONFIG_GLOBAL");
+    unsafe { std::env::remove_var("GIT_CONFIG_GLOBAL") };
+    let out = f();
+    if let Some(value) = previous {
+        unsafe { std::env::set_var("GIT_CONFIG_GLOBAL", value) };
+    }
+    out
+}
+
 #[test]
 fn changed_all_includes_staged_unstaged_and_untracked() {
     let tmp = temp_repo_dir();
@@ -71,6 +81,27 @@ fn changed_all_includes_staged_unstaged_and_untracked() {
     assert!(rel.contains(&"a.txt".to_string()), "{rel:?}");
     assert!(rel.contains(&"b.txt".to_string()), "{rel:?}");
     assert!(rel.contains(&"c.txt".to_string()), "{rel:?}");
+}
+
+#[test]
+fn changed_all_is_robust_to_git_diff_aliases_in_global_config() {
+    with_git_config_global_removed(|| {
+        let tmp = temp_repo_dir();
+        let repo = tmp.path();
+        init_repo(repo);
+
+        commit_file(repo, "a.txt", "a1\n", "a1");
+        write_file(&repo.join("a.txt"), "a2\n");
+
+        let gitconfig = repo.join("global.gitconfig");
+        std::fs::write(&gitconfig, "[alias]\ndiff = diff --no-index\n").unwrap();
+        unsafe { std::env::set_var("GIT_CONFIG_GLOBAL", &gitconfig) };
+
+        // If we accidentally respect the alias, `git diff --cached` will break because it turns into
+        // `git diff --no-index --cached ...`. We force the built-in `diff` via `-c alias.diff=diff`.
+        let rel = rel_paths(repo, changed_files(repo, ChangedMode::All).unwrap());
+        assert!(rel.contains(&"a.txt".to_string()), "{rel:?}");
+    })
 }
 
 #[test]
