@@ -1,6 +1,6 @@
 {
   "name": "headlamp",
-  "version": "0.1.58",
+  "version": "0.1.59",
   "description": "The smart searchlight for your test suite. Fast, graph-powered selection for Jest and Cargo.",
   "keywords": [
     "testing",

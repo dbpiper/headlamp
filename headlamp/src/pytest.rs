@@ -131,12 +131,16 @@ pub(crate) fn build_pytest_cmd_args(
     cmd_args.extend(selected.iter().cloned());
     let has_cov = args.runner_args.iter().any(|a| a.starts_with("--cov"));
     if args.collect_coverage {
+        let has_cov_branch = args.runner_args.iter().any(|a| a == "--cov-branch");
         let has_lcov_report = cmd_args.iter().any(|a| a.starts_with("--cov-report=lcov:"))
             || cmd_args
                 .windows(2)
                 .any(|w| w[0] == "--cov-report" && w[1].starts_with("lcov:"));
         if !has_cov {
             cmd_args.push("--cov=.".to_string());
+        }
+        if !has_cov_branch {
+            cmd_args.push("--cov-branch".to_string());
         }
         if !has_lcov_report {
             let lcov_path = coverage::pytest_lcov_path(args.keep_artifacts, session);

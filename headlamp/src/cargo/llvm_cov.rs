@@ -22,6 +22,12 @@ use super::paths::{
 };
 use super::runner_args::{build_llvm_cov_nextest_run_args, build_llvm_cov_test_run_args};
 
+#[derive(Debug)]
+pub(super) struct LlvmCovRunOutput {
+    pub(super) exit_code: i32,
+    pub(super) model: headlamp_core::test_model::TestRunModel,
+}
+
 pub(super) fn should_reuse_instrumented_build(ci: bool) -> bool {
     !ci || std::env::var_os("HEADLAMP_PARITY_REUSE_INSTRUMENTED_BUILD").is_some()
 }
@@ -101,9 +107,6 @@ pub(super) fn finish_coverage_after_test_run(
     exit_code: i32,
     _extra_cargo_args: &[String],
 ) -> Result<i32, RunError> {
-    if args.coverage_abort_on_failure && exit_code != 0 {
-        return Ok(normalize_runner_exit_code(exit_code));
-    }
     let reuse_instrumented_build = should_reuse_instrumented_build(args.ci);
     let lcov_path = lcov_output_path_for_session(args.keep_artifacts, repo_root, session);
     let lcov_path_exists = lcov_path.exists();
@@ -144,7 +147,7 @@ pub(super) fn run_cargo_llvm_cov_test_and_render(
     args: &ParsedArgs,
     session: &crate::session::RunSession,
     extra_cargo_args: &[String],
-) -> Result<i32, RunError> {
+) -> Result<LlvmCovRunOutput, RunError> {
     let mode = live_progress_mode(
         headlamp_core::format::terminal::is_output_terminal(),
         args.ci,
@@ -199,7 +202,7 @@ pub(super) fn run_cargo_llvm_cov_test_and_render(
     if !rendered.trim().is_empty() {
         println!("{rendered}");
     }
-    Ok(exit_code)
+    Ok(LlvmCovRunOutput { exit_code, model })
 }
 
 pub(super) fn run_cargo_llvm_cov_nextest_and_render(
@@ -207,7 +210,7 @@ pub(super) fn run_cargo_llvm_cov_nextest_and_render(
     args: &ParsedArgs,
     session: &crate::session::RunSession,
     extra_cargo_args: &[String],
-) -> Result<i32, RunError> {
+) -> Result<LlvmCovRunOutput, RunError> {
     let mode = live_progress_mode(
         headlamp_core::format::terminal::is_output_terminal(),
         args.ci,
@@ -262,7 +265,7 @@ pub(super) fn run_cargo_llvm_cov_nextest_and_render(
     if !rendered.trim().is_empty() {
         println!("{rendered}");
     }
-    Ok(exit_code)
+    Ok(LlvmCovRunOutput { exit_code, model })
 }
 
 fn extract_llvm_cov_report_scope_args(runner_args: &[String]) -> Vec<String> {

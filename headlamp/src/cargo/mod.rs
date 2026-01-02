@@ -10,9 +10,12 @@ use crate::git::changed_files;
 use crate::live_progress::{LiveProgress, live_progress_mode};
 use crate::run::{RunError, run_bootstrap};
 use crate::streaming::run_streaming_capture_tail_merged;
+use crate::test_model::TestRunModel;
 
 mod adapters;
 mod coverage;
+#[cfg(test)]
+mod coverage_abort_on_failure_semantics_test;
 mod llvm_cov;
 #[cfg(test)]
 mod llvm_cov_test;
@@ -22,6 +25,8 @@ mod run_trace;
 mod runner_args;
 #[cfg(test)]
 mod runner_args_test;
+#[cfg(test)]
+mod rust_coverage_missing_test;
 mod selection;
 
 pub use paths::build_cargo_llvm_cov_command_args;
@@ -87,9 +92,17 @@ pub fn run_cargo_test(
         );
         return Ok(0);
     }
-    if let Some(exit_code) =
-        maybe_run_cargo_test_with_llvm_cov(repo_root, args, session, &selection)?
-    {
+    if let Some(run) = maybe_run_cargo_test_with_llvm_cov(repo_root, args, session, &selection)? {
+        if should_abort_coverage_after_run(args, &run.model) {
+            return Ok(run_trace::normalize_and_trace_cargo_test_coverage_abort(
+                repo_root,
+                args,
+                started_at,
+                changed.len(),
+                &selection,
+                run.exit_code,
+            ));
+        }
         return run_trace::finish_cargo_test_llvm_cov_and_trace(
             repo_root,
             args,
@@ -97,13 +110,13 @@ pub fn run_cargo_test(
             started_at,
             changed.len(),
             &selection,
-            exit_code,
+            run.exit_code,
         );
     }
     let run = run_cargo_test_streaming(repo_root, args, session, &selection.extra_cargo_args)?;
     print_runner_tail_if_failed_without_tests(run.exit_code, &run.model, &run.tail);
     maybe_print_rendered_model(repo_root, args, run.exit_code, &run.model);
-    if args.coverage_abort_on_failure && run.exit_code != 0 {
+    if should_abort_coverage_after_run(args, &run.model) {
         return Ok(run_trace::normalize_and_trace_cargo_test_coverage_abort(
             repo_root,
             args,
@@ -170,17 +183,17 @@ fn maybe_run_cargo_test_with_llvm_cov(
     args: &ParsedArgs,
     session: &crate::session::RunSession,
     selection: &selection::CargoSelection,
-) -> Result<Option<i32>, RunError> {
+) -> Result<Option<llvm_cov::LlvmCovRunOutput>, RunError> {
     if !(args.collect_coverage && coverage::has_cargo_llvm_cov(repo_root, args, session)) {
         return Ok(None);
     }
-    let exit_code = llvm_cov::run_cargo_llvm_cov_test_and_render(
+    let run = llvm_cov::run_cargo_llvm_cov_test_and_render(
         repo_root,
         args,
         session,
         &selection.extra_cargo_args,
     )?;
-    Ok(Some(exit_code))
+    Ok(Some(run))
 }
 
 #[derive(Debug)]
@@ -266,24 +279,34 @@ pub fn run_cargo_nextest(
         return Ok(exit_code);
     }
     ensure_cargo_nextest_is_available(repo_root, args, session)?;
-    if let Some(exit_code) = maybe_run_nextest_with_llvm_cov(repo_root, args, session, &selection)?
-    {
+    if let Some(run) = maybe_run_nextest_with_llvm_cov(repo_root, args, session, &selection)? {
+        if should_abort_coverage_after_run(args, &run.model) {
+            return Ok(normalize_runner_exit_code(run.exit_code));
+        }
         return llvm_cov::finish_coverage_after_test_run(
             repo_root,
             args,
             session,
-            exit_code,
+            run.exit_code,
             &selection.extra_cargo_args,
         );
     }
     let run = run_nextest_streaming(repo_root, args, session, &selection.extra_cargo_args)?;
     print_runner_tail_if_failed_without_tests(run.exit_code, &run.model, &run.tail);
     maybe_print_rendered_model(repo_root, args, run.exit_code, &run.model);
-    if args.coverage_abort_on_failure && run.exit_code != 0 {
+    if should_abort_coverage_after_run(args, &run.model) {
         return Ok(normalize_runner_exit_code(run.exit_code));
     }
     let final_exit = maybe_print_lcov_and_adjust_exit(repo_root, args, session, run.exit_code);
     Ok(final_exit)
+}
+
+fn cargo_model_has_failed_tests(model: &TestRunModel) -> bool {
+    model.aggregated.num_failed_tests > 0 || model.aggregated.num_failed_test_suites > 0
+}
+
+pub(crate) fn should_abort_coverage_after_run(args: &ParsedArgs, model: &TestRunModel) -> bool {
+    args.coverage_abort_on_failure && cargo_model_has_failed_tests(model)
 }
 
 fn changed_files_for_args(
@@ -354,17 +377,17 @@ fn maybe_run_nextest_with_llvm_cov(
     args: &ParsedArgs,
     session: &crate::session::RunSession,
     selection: &selection::CargoSelection,
-) -> Result<Option<i32>, RunError> {
+) -> Result<Option<llvm_cov::LlvmCovRunOutput>, RunError> {
     if !(args.collect_coverage && coverage::has_cargo_llvm_cov(repo_root, args, session)) {
         return Ok(None);
     }
-    let exit_code = llvm_cov::run_cargo_llvm_cov_nextest_and_render(
+    let run = llvm_cov::run_cargo_llvm_cov_nextest_and_render(
         repo_root,
         args,
         session,
         &selection.extra_cargo_args,
     )?;
-    Ok(Some(exit_code))
+    Ok(Some(run))
 }
 
 #[derive(Debug)]
@@ -461,12 +484,34 @@ fn maybe_print_lcov_and_adjust_exit(
     session: &crate::session::RunSession,
     exit_code: i32,
 ) -> i32 {
-    let thresholds_failed = if args.collect_coverage && args.coverage_ui != CoverageUi::Jest {
+    let coverage_requested = args.collect_coverage && args.coverage_ui != CoverageUi::Jest;
+    let thresholds_failed = if coverage_requested {
         coverage::print_lcov(repo_root, args, session)
     } else {
         false
     };
     let normalized_exit_code = normalize_runner_exit_code(exit_code);
+    if coverage_requested && !thresholds_failed {
+        // `print_lcov` returns false both for "no thresholds failed" and for "could not print"
+        // (e.g., lcov missing). If coverage was explicitly requested, never fail silently:
+        // if we printed nothing due to missing coverage artifacts, fail with an actionable hint.
+        //
+        // Heuristic: if lcov is missing/unreadable, `print_lcov` returns false and there will be no
+        // thresholds output either. In that case, force a non-zero exit so users notice.
+        let expected_lcov_path = if args.keep_artifacts {
+            repo_root.join("coverage").join("lcov.info")
+        } else {
+            session.subdir("coverage").join("rust").join("lcov.info")
+        };
+        if !expected_lcov_path.exists() {
+            eprintln!(
+                "headlamp: coverage was requested but Rust lcov was not generated (missing {}). \
+Install `cargo-llvm-cov` and re-run.",
+                expected_lcov_path.to_string_lossy()
+            );
+            return 1;
+        }
+    }
     if normalized_exit_code == 0 && thresholds_failed {
         1
     } else {

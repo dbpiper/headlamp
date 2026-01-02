@@ -51,6 +51,37 @@ pip install headlamp
 headlamp --runner=pytest
 ```
 
+## Peer dependencies (system requirements)
+
+Headlamp is a wrapper around your project’s runners. It does **not** vendor the runners themselves, so you need the runner executables available in your environment for the features you’re using.
+
+### Common (all runners)
+
+- **Git**: required for `--changed=...` modes (e.g. `--changed=branch`).
+
+### Jest runner (`--runner=jest`)
+
+- **Node.js**: required.
+- **Jest installed in the repo**: Headlamp expects Jest to be runnable from your project (typically `./node_modules/.bin/jest`).
+- **Coverage** (`--coverage`): requires Jest coverage support (standard Jest `--coverage` + reporters). Headlamp formats/prints coverage from generated reports.
+
+### Pytest runner (`--runner=pytest`)
+
+- **Python 3**: required.
+- **pytest**: must be on `PATH` (`pytest` / `pytest.exe`).
+- **Coverage** (`--coverage`): requires `pytest-cov` (Headlamp enables coverage and passes `--cov` flags; branch coverage uses `--cov-branch`).
+
+### Cargo test runner (`--runner=cargo-test`)
+
+- **Rust toolchain**: `cargo` + `rustc`.
+- **Coverage** (`--coverage`): requires **`cargo-llvm-cov`** to generate Rust `lcov.info` (`cargo install cargo-llvm-cov`; you may also need `rustup component add llvm-tools-preview` depending on your toolchain).
+
+### Cargo nextest runner (`--runner=cargo-nextest`)
+
+- **Rust toolchain**: `cargo` + `rustc`.
+- **nextest**: requires **`cargo-nextest`** (`cargo install cargo-nextest`).
+- **Coverage** (`--coverage`): requires **`cargo-llvm-cov`** (same as `cargo-test` coverage above).
+
 ## Quickstart
 
 ### Jest

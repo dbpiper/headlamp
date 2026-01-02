@@ -39,6 +39,35 @@ fn base_args() -> ParsedArgs {
 }
 
 #[test]
+fn pytest_cmd_args_enable_branch_coverage_when_coverage_is_enabled() {
+    let session = RunSession::new(false).unwrap();
+    let mut args = base_args();
+    args.runner_args = vec![
+        "--cov=src/models".to_string(),
+        "--cov-report=term-missing".to_string(),
+    ];
+    let cmd_args = build_pytest_cmd_args(&args, &session, &[]);
+    assert!(cmd_args.iter().any(|t| t == "--cov-branch"));
+}
+
+#[test]
+fn pytest_cmd_args_do_not_duplicate_cov_branch_when_user_provided_it() {
+    let session = RunSession::new(false).unwrap();
+    let mut args = base_args();
+    args.runner_args = vec![
+        "--cov=src/models".to_string(),
+        "--cov-branch".to_string(),
+        "--cov-report=term-missing".to_string(),
+    ];
+    let cmd_args = build_pytest_cmd_args(&args, &session, &[]);
+    let cov_branch_count = cmd_args
+        .iter()
+        .filter(|t| (*t).as_str() == "--cov-branch")
+        .count();
+    assert_eq!(cov_branch_count, 1);
+}
+
+#[test]
 fn pytest_cov_report_lcov_is_rewritten_into_session_when_keep_artifacts_false() {
     let session = RunSession::new(false).unwrap();
     let mut args = base_args();

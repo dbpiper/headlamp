@@ -1,5 +1,5 @@
 use std::path::{Path, PathBuf};
-use std::process::Command;
+use std::process::{Command, Stdio};
 
 use indexmap::IndexMap;
 use path_slash::PathExt;
@@ -221,6 +221,8 @@ fn git_stdout_trimmed(repo_root: &Path, args: &[&str]) -> Result<String, RunErro
 fn git_has_head(repo_root: &Path) -> bool {
     git_command_in_repo(repo_root)
         .args(["rev-parse", "--verify", "HEAD"])
+        .stdout(Stdio::null())
+        .stderr(Stdio::null())
         .status()
         .ok()
         .is_some_and(|s| s.success())
@@ -229,6 +231,8 @@ fn git_has_head(repo_root: &Path) -> bool {
 fn git_is_ancestor(repo_root: &Path, ancestor: &str, descendant: &str) -> bool {
     git_command_in_repo(repo_root)
         .args(["merge-base", "--is-ancestor", ancestor, descendant])
+        .stdout(Stdio::null())
+        .stderr(Stdio::null())
         .status()
         .ok()
         .is_some_and(|s| s.success())
