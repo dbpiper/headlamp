@@ -1,6 +1,5 @@
 ---
 source: headlamp_parity_tests/tests/parity_support/runner_parity.rs
-assertion_line: 32
 expression: canonical
 ---
 [<N>;<N>;<N>;<N>;35m[97m FAIL [39m[0m [97mtests/sum_fail_test.<EXT>[39m

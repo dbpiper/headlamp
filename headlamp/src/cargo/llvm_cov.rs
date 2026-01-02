@@ -26,7 +26,35 @@ pub(super) fn should_reuse_instrumented_build(ci: bool) -> bool {
     !ci || std::env::var_os("HEADLAMP_PARITY_REUSE_INSTRUMENTED_BUILD").is_some()
 }
 
-fn purge_llvm_cov_profile_artifacts(
+fn lcov_output_path_for_session(
+    keep_artifacts: bool,
+    repo_root: &Path,
+    session: &crate::session::RunSession,
+) -> std::path::PathBuf {
+    if keep_artifacts {
+        repo_root.join("coverage").join("lcov.info")
+    } else {
+        session.subdir("coverage").join("rust").join("lcov.info")
+    }
+}
+
+fn should_run_post_run_llvm_cov_reports(
+    ci: bool,
+    reuse_instrumented_build: bool,
+    lcov_path_exists: bool,
+) -> bool {
+    // If the instrumented run already wrote the lcov report to disk, do not run an additional
+    // `cargo llvm-cov report`: in reuse mode this can be flaky because cargo-llvm-cov may clean up
+    // intermediate profile artifacts after it produces the report.
+    if lcov_path_exists {
+        return false;
+    }
+    // Otherwise, generate lcov (and optional json) via a post-run report step.
+    // This is needed for the non-reuse path which uses `--no-report` during the instrumented run.
+    !(ci && reuse_instrumented_build)
+}
+
+pub(super) fn purge_llvm_cov_profile_artifacts(
     repo_root: &Path,
     args: &ParsedArgs,
     session: &crate::session::RunSession,
@@ -53,7 +81,12 @@ fn purge_llvm_cov_profile_artifacts(
                 .extension()
                 .and_then(|s| s.to_str())
                 .unwrap_or_default();
-            if matches!(ext, "profraw" | "profdata") {
+            let file_name = path
+                .file_name()
+                .and_then(|s| s.to_str())
+                .unwrap_or_default();
+            let is_profraw_list = file_name.ends_with("-profraw-list");
+            if matches!(ext, "profraw" | "profdata") || is_profraw_list {
                 let _ = std::fs::remove_file(&path);
             }
         }
@@ -71,7 +104,10 @@ pub(super) fn finish_coverage_after_test_run(
     if args.coverage_abort_on_failure && exit_code != 0 {
         return Ok(normalize_runner_exit_code(exit_code));
     }
-    {
+    let reuse_instrumented_build = should_reuse_instrumented_build(args.ci);
+    let lcov_path = lcov_output_path_for_session(args.keep_artifacts, repo_root, session);
+    let lcov_path_exists = lcov_path.exists();
+    if should_run_post_run_llvm_cov_reports(args.ci, reuse_instrumented_build, lcov_path_exists) {
         let _span = profile::span("cargo llvm-cov report (lcov+json)");
         let report_scope_args = extract_llvm_cov_report_scope_args(&args.runner_args);
         run_cargo_llvm_cov_report_lcov(repo_root, args, session, &report_scope_args)?;
@@ -81,6 +117,14 @@ pub(super) fn finish_coverage_after_test_run(
     }
     if args.coverage_ui != CoverageUi::Jest {
         let thresholds_failed = coverage::print_lcov(repo_root, args, session);
+        if args.collect_coverage && !lcov_path.exists() {
+            return Err(RunError::CommandFailed {
+                message: format!(
+                    "coverage requested but rust lcov file was not generated: {}",
+                    lcov_path.display()
+                ),
+            });
+        }
         let normalized = normalize_runner_exit_code(exit_code);
         return Ok(if normalized == 0 && thresholds_failed {
             1

@@ -273,8 +273,12 @@ fn acquire_worktree_git_lock() -> WorktreeGitLockGuard {
         match std::fs::create_dir(&lock_dir) {
             Ok(()) => return WorktreeGitLockGuard { lock_dir },
             Err(error) if error.kind() == std::io::ErrorKind::AlreadyExists => {
+                if worktree_git_lock_is_stale(&lock_dir) {
+                    let _ = std::fs::remove_dir_all(&lock_dir);
+                    continue;
+                }
                 attempts = attempts.saturating_add(1);
-                if attempts > 600 {
+                if attempts > 12_000 {
                     panic!(
                         "timed out waiting for worktree git lock {}",
                         lock_dir.display()
@@ -288,6 +292,19 @@ fn acquire_worktree_git_lock() -> WorktreeGitLockGuard {
             ),
         }
     }
+}
+
+fn worktree_git_lock_is_stale(lock_dir: &Path) -> bool {
+    let Ok(metadata) = std::fs::metadata(lock_dir) else {
+        return false;
+    };
+    let Ok(modified) = metadata.modified() else {
+        return false;
+    };
+    let Ok(elapsed) = modified.elapsed() else {
+        return false;
+    };
+    elapsed > Duration::from_secs(5 * 60)
 }
 
 fn prune_stale_worktree_admin_dirs(base_repo: &Path, safe_worktree_name: &str) {

@@ -66,6 +66,13 @@ pub(crate) fn run_cmd_tty_portable_pty(
         .ok()?;
 
     let mut builder = CommandBuilder::new(program);
+    // `std::process::Command` inherits the current process environment by default.
+    // `portable_pty::CommandBuilder` does not automatically get that environment unless we
+    // explicitly propagate it, so copy the current env first, then apply any overrides/removals
+    // that were configured on `cmd`.
+    std::env::vars_os().for_each(|(key, value)| {
+        builder.env(key, value);
+    });
     builder
         .get_argv_mut()
         .extend(cmd.get_args().map(|a| a.to_os_string()));

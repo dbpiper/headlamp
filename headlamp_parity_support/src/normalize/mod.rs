@@ -9,6 +9,11 @@ mod paths;
 mod runner_parity;
 mod tty_blocks;
 
+use regex::Regex;
+use std::sync::LazyLock;
+
+static BOX_CHAR_RE: LazyLock<Regex> = LazyLock::new(|| Regex::new(r"[┌│┼└]").unwrap());
+
 pub fn normalize(text: String, root: &Path) -> String {
     normalize_with_meta(text, root).0
 }
@@ -160,6 +165,23 @@ fn normalize_time_line_tty(raw: &str) -> String {
     let stripped = headlamp::format::stacks::strip_ansi_simple(raw);
     if !stripped.trim_start().starts_with("Time ") {
         return raw.to_string();
+    }
+    // Root cause fix: sometimes the following box-table border gets concatenated onto the `Time`
+    // line by the TTY capture. If we normalize the whole `Time` line, we'd drop that border.
+    // Instead, split at the first box-drawing character and keep it as its own line.
+    if let Some(split_at) = BOX_CHAR_RE.find(&stripped).map(|m| m.start()) {
+        let leading_ws = raw
+            .chars()
+            .take_while(|c| c.is_whitespace())
+            .collect::<String>();
+        let bold_time = headlamp::format::ansi::bold("Time");
+        let time_line = if raw.contains(&bold_time) {
+            format!("{leading_ws}{bold_time}      <DURATION>")
+        } else {
+            format!("{leading_ws}Time      <DURATION>")
+        };
+        let tail = stripped[split_at..].to_string();
+        return format!("{time_line}\n{tail}");
     }
     let leading_ws = raw
         .chars()

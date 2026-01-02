@@ -48,7 +48,11 @@ fn mk_headlamp_tty_run_spec(
     extra_env: &[(&str, String)],
     case_id: Option<&str>,
 ) -> ParityRunSpec {
-    let base_args = [format!("--runner={runner}"), "--sequential".to_string()];
+    let base_args = [
+        format!("--runner={runner}"),
+        "--sequential".to_string(),
+        "--no-cache".to_string(),
+    ];
     let side_label = ParitySideLabel {
         binary: program_display_name(headlamp_bin),
         runner_stack: headlamp_runner_stack(runner),
