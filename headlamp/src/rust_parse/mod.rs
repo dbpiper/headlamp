@@ -6,7 +6,7 @@ mod util;
 
 pub use self::types::RustFileMarkers;
 
-pub fn extract_import_specs_from_source(source: &str) -> std::collections::BTreeSet<String> {
+pub fn extract_import_specs_from_source(source: &str) -> Vec<String> {
     imports::extract_import_specs_from_source(source)
 }
 

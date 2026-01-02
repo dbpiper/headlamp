@@ -12,6 +12,7 @@ pub struct ParsedArgs {
     pub watch: bool,
     pub ci: bool,
     pub verbose: bool,
+    pub quiet: bool,
     pub no_cache: bool,
 
     pub collect_coverage: bool,

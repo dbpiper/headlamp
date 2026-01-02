@@ -20,11 +20,18 @@ fn normalize_tty_ui_drops_live_progress_lines_and_cursor_controls() {
     ]
     .join("\n");
 
-    let (normalized, meta) = headlamp_parity_support::normalize::normalize_tty_ui_with_meta(raw, root);
+    let (normalized, meta) =
+        headlamp_parity_support::normalize::normalize_tty_ui_with_meta(raw, root);
 
     assert!(!meta.used_fallback, "normalizer should not fall back");
-    assert!(!normalized.contains("RUN (+"), "should drop live progress header lines");
-    assert!(!normalized.contains("idle "), "should drop live progress idle lines");
+    assert!(
+        !normalized.contains("RUN (+"),
+        "should drop live progress header lines"
+    );
+    assert!(
+        !normalized.contains("idle "),
+        "should drop live progress idle lines"
+    );
     assert!(
         !normalized.contains("/057093c2092a/wt-"),
         "should drop wrapped worktree path continuation lines"
@@ -42,4 +49,3 @@ fn normalize_tty_ui_drops_live_progress_lines_and_cursor_controls() {
         "should keep the stable runner header"
     );
 }
-

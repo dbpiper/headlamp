@@ -63,7 +63,8 @@ pub(super) fn build_llvm_cov_nextest_run_args(
     let translated = translate_libtest_args_to_nextest(&test_binary_args);
 
     let (success_output, failure_output) = nextest_output_modes(args.show_logs);
-    let is_interactive = is_interactive_nextest_progress(args);
+    let env_ci = std::env::var_os("CI").is_some();
+    let cargo_quiet = args.ci || env_ci;
 
     let mut cmd_args: Vec<String> = vec!["nextest".to_string()];
     extend_llvm_cov_report_mode_args(
@@ -77,9 +78,9 @@ pub(super) fn build_llvm_cov_nextest_run_args(
     extend_nextest_common_args(
         &mut cmd_args,
         has_user_color,
-        is_interactive,
         success_output,
         failure_output,
+        cargo_quiet,
     );
     extend_nextest_test_threads(&mut cmd_args, args, &translated, has_user_test_threads);
     extend_nextest_filter_and_passthrough(&mut cmd_args, translated);
@@ -92,13 +93,6 @@ fn nextest_output_modes(show_logs: bool) -> (&'static str, &'static str) {
     } else {
         ("never", "never")
     }
-}
-
-fn is_interactive_nextest_progress(args: &ParsedArgs) -> bool {
-    crate::live_progress::live_progress_mode(
-        headlamp_core::format::terminal::is_output_terminal(),
-        args.ci,
-    ) == crate::live_progress::LiveProgressMode::Interactive
 }
 
 fn extend_llvm_cov_report_mode_args(
@@ -134,9 +128,9 @@ fn lcov_output_path_token(keep_artifacts: bool, session: &crate::session::RunSes
 fn extend_nextest_common_args(
     cmd_args: &mut Vec<String>,
     has_user_color: bool,
-    is_interactive: bool,
     success_output: &str,
     failure_output: &str,
+    cargo_quiet: bool,
 ) {
     if !has_user_color {
         cmd_args.extend(["--color".to_string(), "never".to_string()]);
@@ -158,7 +152,7 @@ fn extend_nextest_common_args(
         "--message-format".to_string(),
         "libtest-json-plus".to_string(),
     ]);
-    if !is_interactive {
+    if cargo_quiet {
         cmd_args.push("--cargo-quiet".to_string());
     }
 }
@@ -201,10 +195,8 @@ pub(super) fn build_nextest_run_args(
     } else {
         ("never", "never")
     };
-    let is_interactive = crate::live_progress::live_progress_mode(
-        headlamp_core::format::terminal::is_output_terminal(),
-        args.ci,
-    ) == crate::live_progress::LiveProgressMode::Interactive;
+    let env_ci = std::env::var_os("CI").is_some();
+    let cargo_quiet = args.ci || env_ci;
 
     cmd_args.extend([
         "--color".to_string(),
@@ -225,7 +217,7 @@ pub(super) fn build_nextest_run_args(
         "--message-format".to_string(),
         "libtest-json-plus".to_string(),
     ]);
-    if !is_interactive {
+    if cargo_quiet {
         cmd_args.push("--cargo-quiet".to_string());
     }
 

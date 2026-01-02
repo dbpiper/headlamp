@@ -91,6 +91,7 @@ pub struct HeadlampConfig {
     pub watch: Option<bool>,
     pub ci: Option<bool>,
     pub verbose: Option<bool>,
+    pub quiet: Option<bool>,
     pub no_cache: Option<bool>,
 
     pub coverage: Option<CoverageConfig>,

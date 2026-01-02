@@ -231,11 +231,13 @@ fn plain_tick(shared: &PlainTickerShared) {
     let done = shared.shared.done_units.load(Ordering::SeqCst);
     let label = locked_clone(&shared.shared.current_label).unwrap_or_default();
     if label.trim().is_empty() {
-        std::thread::sleep(Duration::from_millis(200));
         return;
     }
     let (elapsed_seconds, idle_seconds) = elapsed_and_idle_seconds(&shared.shared);
-    if idle_seconds < 5 {
+    // In TTY environments, avoid redrawing too aggressively (this stabilizes snapshots and
+    // keeps the output readable). In non-TTY environments, keep emitting progress even if the
+    // runner is chatty (otherwise we can end up printing nothing).
+    if shared.stdout_is_tty && idle_seconds < 5 {
         std::thread::sleep(Duration::from_secs(2));
         return;
     }

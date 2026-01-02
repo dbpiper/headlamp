@@ -25,6 +25,7 @@ pub(super) struct HeadlampCli {
     pub(super) watch_all: bool,
     pub(super) ci: bool,
     pub(super) verbose: bool,
+    pub(super) quiet: bool,
     pub(super) no_cache: bool,
     pub(super) bootstrap_command: Option<String>,
     pub(super) changed: Option<String>,
@@ -130,6 +131,7 @@ fn apply_bool_flag(
         "watch-all" => parse_bool_with_optional_value(raw_value, next_token_text, has_next)?,
         "ci" => parse_bool_with_optional_value(raw_value, next_token_text, has_next)?,
         "verbose" => parse_bool_with_optional_value(raw_value, next_token_text, has_next)?,
+        "quiet" => parse_bool_with_optional_value(raw_value, next_token_text, has_next)?,
         "no-cache" => parse_bool_with_optional_value(raw_value, next_token_text, has_next)?,
         _ => return Ok(None),
     };
@@ -145,6 +147,7 @@ fn apply_bool_flag(
         "watch-all" => parsed.watch_all = value,
         "ci" => parsed.ci = value,
         "verbose" => parsed.verbose = value,
+        "quiet" => parsed.quiet = value,
         "no-cache" => parsed.no_cache = value,
         _ => {}
     }

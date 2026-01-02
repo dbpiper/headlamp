@@ -1,4 +1,3 @@
-use std::collections::BTreeSet;
 use std::collections::HashSet;
 
 use rustc_lexer::TokenKind;
@@ -7,11 +6,121 @@ use super::lex::{is_trivia, lex_spans};
 use super::types::TokenSpan;
 use super::util::{is_ident_text, skip_trivia, skip_visibility, unescape_rust_string_literal};
 
-pub(super) fn extract_import_specs_from_source(source: &str) -> BTreeSet<String> {
+pub(super) fn extract_import_specs_from_source(source: &str) -> Vec<String> {
+    if should_use_fast_path(source) {
+        return extract_import_specs_fast_path(source);
+    }
+
     let token_spans = lex_spans(source);
-    collect_import_specs(source, &token_spans)
+    let mut out = collect_import_specs(source, &token_spans)
         .into_iter()
-        .collect::<BTreeSet<_>>()
+        .collect::<Vec<_>>();
+    out.sort();
+    out
+}
+
+fn should_use_fast_path(source: &str) -> bool {
+    // Fast path is for "flat" files that only contain simple top-level:
+    //   - `use foo::bar;`
+    //   - `mod a;` / `pub mod a;`
+    //
+    // Anything involving braces (use groups), globs, path attributes, or renames falls back to
+    // the lexer-based parser for correctness.
+    !(source.contains('{')
+        || source.contains('}')
+        || source.contains('#')
+        || source.contains('*')
+        || source.contains(" as ")
+        || source.contains("\tas ")
+        || source.contains(" as\t"))
+}
+
+fn extract_import_specs_fast_path(source: &str) -> Vec<String> {
+    let mut use_specs: HashSet<&str> = HashSet::new();
+    let mut mod_specs: HashSet<&str> = HashSet::new();
+
+    for line in source.lines() {
+        let trimmed = line.trim_start();
+        if trimmed.is_empty() {
+            continue;
+        }
+
+        if let Some(rest) = strip_simple_use_prefix(trimmed) {
+            if let Some(spec) = rest
+                .split(';')
+                .next()
+                .map(str::trim)
+                .filter(|s| !s.is_empty())
+            {
+                let spec = spec.trim_start_matches("::").trim();
+                if !spec.is_empty() {
+                    use_specs.insert(spec);
+                }
+            }
+            continue;
+        }
+
+        if let Some(mod_name) = strip_simple_mod_decl(trimmed) {
+            mod_specs.insert(mod_name);
+        }
+    }
+
+    let mut out: Vec<String> = Vec::with_capacity(use_specs.len() + mod_specs.len());
+    use_specs
+        .into_iter()
+        .for_each(|spec| out.push(spec.to_string()));
+    mod_specs
+        .into_iter()
+        .for_each(|name| out.push(format!("self::{name}")));
+
+    out.sort();
+    out
+}
+
+fn strip_simple_use_prefix(line: &str) -> Option<&str> {
+    // Accept:
+    // - `use ...;`
+    // - `pub use ...;`
+    // - `pub(crate) use ...;` etc (we just search for the first `use ` token at the start level)
+    if let Some(rest) = line.strip_prefix("use ") {
+        return Some(rest);
+    }
+    if let Some(rest) = line.strip_prefix("pub ") {
+        let rest = rest.trim_start();
+        return rest.strip_prefix("use ").or_else(|| {
+            // `pub(...) use ...`
+            let after_paren = rest.strip_prefix("pub")?;
+            let after_paren = after_paren.trim_start();
+            after_paren.strip_prefix("use ")
+        });
+    }
+    // `pub(crate) use ...` doesn't start with "pub " after trim_start, it starts with "pub(".
+    if let Some(rest) = line.strip_prefix("pub(") {
+        // Find the closing ')' then look for `use `.
+        let after = rest.split_once(')')?.1.trim_start();
+        return after.strip_prefix("use ");
+    }
+    None
+}
+
+fn strip_simple_mod_decl(line: &str) -> Option<&str> {
+    // Accept:
+    // - `mod a;`
+    // - `pub mod a;`
+    // - `pub(crate) mod a;`
+    // Ignore inline module bodies (`mod a { ... }`) via fast-path predicate.
+    let after = if let Some(rest) = line.strip_prefix("mod ") {
+        rest
+    } else if let Some(rest) = line.strip_prefix("pub mod ") {
+        rest
+    } else if let Some(rest) = line.strip_prefix("pub(") {
+        let after = rest.split_once(')')?.1.trim_start();
+        after.strip_prefix("mod ")?
+    } else {
+        return None;
+    };
+    let name = after.split(';').next().map(str::trim).unwrap_or("");
+    (!name.is_empty()).then_some(name)
 }
 
 fn collect_import_specs(source: &str, token_spans: &[TokenSpan]) -> HashSet<String> {

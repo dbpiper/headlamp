@@ -55,11 +55,11 @@ fn live_progress_frame_physical_line_count_counts_wrapped_lines_even_without_new
 #[test]
 fn live_progress_enable_gate_follows_tty_flag() {
     assert_eq!(
-        live_progress_mode_with_env_ci(false, false, false),
-        LiveProgressMode::Off
+        live_progress_mode_with_env_ci(false, false, false, false),
+        LiveProgressMode::Plain
     );
     assert_eq!(
-        live_progress_mode_with_env_ci(true, false, false),
+        live_progress_mode_with_env_ci(true, false, false, false),
         LiveProgressMode::Interactive
     );
 }
@@ -67,7 +67,7 @@ fn live_progress_enable_gate_follows_tty_flag() {
 #[test]
 fn live_progress_disabled_in_ci_mode() {
     assert_eq!(
-        live_progress_mode_with_env_ci(true, true, false),
+        live_progress_mode_with_env_ci(true, true, false, false),
         LiveProgressMode::Plain
     );
 }

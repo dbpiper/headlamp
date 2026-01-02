@@ -5,8 +5,6 @@ pub fn extract_import_specs(abs_path: &Path) -> Vec<String> {
         return vec![];
     };
     crate::rust_parse::extract_import_specs_from_source(&body)
-        .into_iter()
-        .collect::<Vec<_>>()
 }
 
 pub fn resolve_import_with_root(from_file: &Path, spec: &str, root_dir: &Path) -> Option<PathBuf> {

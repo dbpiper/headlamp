@@ -46,6 +46,30 @@ pub fn run_cmd_tty_with_backend(mut cmd: Command, columns: usize) -> (i32, Strin
     (code, combined, TtyBackend::Script)
 }
 
+pub fn run_cmd_tty_with_backend_timeout(
+    mut cmd: Command,
+    columns: usize,
+    timeout: Duration,
+) -> (i32, String, TtyBackend) {
+    let _timing = crate::timing::TimingGuard::start("tty_run_timeout");
+    apply_tty_env(&mut cmd, true);
+
+    let portable = run_cmd_tty_portable_pty(&cmd, columns, timeout);
+    if let Some((code, out)) = portable {
+        return (code, sanitize_tty_output(out), TtyBackend::PortablePty);
+    }
+
+    let tty_capture_path = capture_path("tty-capture");
+    let shell_cmd = build_tty_shell_command(&cmd, columns);
+    let script = build_script_command(&cmd, &tty_capture_path, shell_cmd);
+    let Some((code, stderr_text)) = run_script_capture_stderr(script, timeout) else {
+        return (1, String::new(), TtyBackend::Script);
+    };
+    let combined = sanitize_tty_output(format!("{}{}", read_lossy(&tty_capture_path), stderr_text));
+    let _ = std::fs::remove_file(&tty_capture_path);
+    (code, combined, TtyBackend::Script)
+}
+
 pub fn run_cmd_tty(cmd: Command, columns: usize) -> (i32, String) {
     let (code, out, _backend) = run_cmd_tty_with_backend(cmd, columns);
     (code, out)
@@ -93,7 +117,12 @@ fn apply_tty_env(cmd: &mut Command, force_color: bool) {
 }
 
 fn tty_timeout() -> Duration {
-    Duration::from_secs(60)
+    let seconds = std::env::var("HEADLAMP_PARITY_TTY_TIMEOUT_SECS")
+        .ok()
+        .and_then(|v| v.trim().parse::<u64>().ok())
+        .filter(|&v| v > 0)
+        .unwrap_or(60);
+    Duration::from_secs(seconds.clamp(30, 600))
 }
 
 fn capture_path(prefix: &str) -> PathBuf {

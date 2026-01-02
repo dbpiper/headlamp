@@ -12,7 +12,7 @@ pub fn run_headlamp_with_args_tty(
     runner: &str,
     args: &[&str],
 ) -> (ParityRunSpec, i32, String) {
-    run_headlamp_with_args_tty_env(repo, headlamp_bin, columns, runner, args, &[])
+    run_headlamp_with_args_tty_env(repo, headlamp_bin, columns, runner, args, &[], None)
 }
 
 pub fn run_headlamp_with_args_tty_env(
@@ -22,8 +22,17 @@ pub fn run_headlamp_with_args_tty_env(
     runner: &str,
     args: &[&str],
     extra_env: &[(&str, String)],
+    case_id: Option<&str>,
 ) -> (ParityRunSpec, i32, String) {
-    let mut spec = mk_headlamp_tty_run_spec(repo, headlamp_bin, columns, runner, args, extra_env);
+    let mut spec = mk_headlamp_tty_run_spec(
+        repo,
+        headlamp_bin,
+        columns,
+        runner,
+        args,
+        extra_env,
+        case_id,
+    );
     let (code, out, backend) =
         crate::exec::run_cmd_tty_with_backend(build_command_from_spec(&spec), columns);
     spec.exec_backend = Some(backend.to_string());
@@ -37,13 +46,14 @@ fn mk_headlamp_tty_run_spec(
     runner: &str,
     args: &[&str],
     extra_env: &[(&str, String)],
+    case_id: Option<&str>,
 ) -> ParityRunSpec {
     let base_args = [format!("--runner={runner}"), "--sequential".to_string()];
     let side_label = ParitySideLabel {
         binary: program_display_name(headlamp_bin),
         runner_stack: headlamp_runner_stack(runner),
     };
-    let mut env = build_env_map(repo, &side_label);
+    let mut env = build_env_map(repo, &side_label, case_id);
     // Always-on in CI: write headlamp sidecar diagnostics under the parity dump root (or temp).
     // This does not affect stdout/stderr that parity compares.
     if std::env::var("CI").ok().is_some()

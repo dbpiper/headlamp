@@ -90,17 +90,21 @@ impl StreamAdapter for CargoTestAdapter {
         if is_ci_env && stream == OutputStream::Stderr && is_cargo_summary_error {
             return vec![];
         }
+        let mut actions: Vec<StreamAction> = vec![];
         if is_ci_env && !is_tty_output && stream == OutputStream::Stderr && has_useful_status {
-            return vec![
+            actions.extend([
                 StreamAction::SetProgressLabel(format!("cargo: {}", line.trim())),
                 StreamAction::PrintStderr(line.trim().to_string()),
-            ];
+            ]);
         }
-        self.parser
-            .push_line(line)
-            .into_iter()
-            .flat_map(|evt| self.actions_for_event(evt))
-            .collect::<Vec<_>>()
+        actions.extend(
+            self.parser
+                .push_line(line)
+                .into_iter()
+                .flat_map(|evt| self.actions_for_event(evt))
+                .collect::<Vec<_>>(),
+        );
+        actions
     }
 }
 
@@ -121,16 +125,20 @@ impl StreamAdapter for NextestAdapter {
         if is_ci_env && stream == OutputStream::Stderr && is_nextest_summary_error {
             return vec![];
         }
+        let mut actions: Vec<StreamAction> = vec![];
         if is_ci_env && !is_tty_output && stream == OutputStream::Stderr && has_useful_status {
-            return vec![
+            actions.extend([
                 StreamAction::SetProgressLabel(format!("cargo: {}", line.trim())),
                 StreamAction::PrintStderr(line.trim().to_string()),
-            ];
+            ]);
         }
-        self.parser
-            .push_line(line)
-            .as_ref()
-            .map(|u| self.actions_for_update(u))
-            .unwrap_or_default()
+        let update = self.parser.push_line(line);
+        actions.extend(
+            update
+                .as_ref()
+                .map(|u| self.actions_for_update(u))
+                .unwrap_or_default(),
+        );
+        actions
     }
 }

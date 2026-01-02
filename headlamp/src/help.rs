@@ -33,6 +33,7 @@ Flags:
   --watch-all[=true|false]                  Watch everything (runner-specific)
   --ci[=true|false]                         CI mode (disable interactive UI and set CI=1)
   --verbose[=true|false]                    More Headlamp diagnostics
+  --quiet[=true|false]                      Quiet mode (disable live progress output)
   --no-cache[=true|false]                   Disable Headlamp caches (and runner caches when possible)
   --keep-artifacts[=true|false]             Keep test artifacts after run (default: false)
   --bootstrap-command <cmd>                 Run once before tests (npm script name or shell cmd)

@@ -10,9 +10,10 @@ use std::sync::LazyLock;
 
 use crate::git::changed_files;
 use crate::live_progress;
+use crate::process::run_command_capture_with_timeout;
 use crate::pytest_select::{changed_seeds, discover_pytest_test_files, filter_tests_by_seeds};
 use crate::run::{RunError, run_bootstrap};
-use crate::streaming::run_streaming_capture_tail_merged;
+use crate::streaming::StreamAdapter;
 
 const PYTEST_PLUGIN_BYTES: &[u8] = include_bytes!("../assets/pytest/headlamp_pytest_plugin.py");
 
@@ -117,6 +118,11 @@ pub(crate) fn build_pytest_cmd_args(
         "--no-summary".to_string(),
         "-q".to_string(),
     ];
+    if args.collect_coverage {
+        // We disable plugin autoload for hermetic runs; explicitly load pytest-cov when coverage is enabled.
+        cmd_args.push("-p".to_string());
+        cmd_args.push("pytest_cov".to_string());
+    }
     if !args.keep_artifacts {
         cmd_args.push("-p".to_string());
         cmd_args.push("no:cacheprovider".to_string());
@@ -151,6 +157,7 @@ fn run_pytest_streaming(
     let mode = live_progress::live_progress_mode(
         headlamp_core::format::terminal::is_output_terminal(),
         args.ci,
+        args.quiet,
     );
     let live_progress = live_progress::LiveProgress::start(1, mode);
     let mut command = Command::new(pytest_bin);
@@ -158,6 +165,10 @@ fn run_pytest_streaming(
         .args(cmd_args)
         .current_dir(repo_root)
         .env("CI", "1")
+        // Make pytest runs hermetic and fast by disabling auto-loading of user-installed plugins.
+        // This avoids hangs/slowdowns caused by globally installed plugins (common on dev machines).
+        .env("PYTEST_DISABLE_PLUGIN_AUTOLOAD", "1")
+        .env("PYTHONNOUSERSITE", "1")
         .env("PYTHONPATH", pythonpath);
     if args.collect_coverage && !args.keep_artifacts {
         let coverage_data_path = coverage::pytest_coverage_data_path(session);
@@ -166,13 +177,67 @@ fn run_pytest_streaming(
     if !args.keep_artifacts {
         command.env("PYTHONDONTWRITEBYTECODE", "1");
     }
+    // IMPORTANT: Use capture-with-timeout to prevent hangs. We still parse output lines using the
+    // same adapter, but we avoid long-lived pipe reader threads that can deadlock if a pipe never
+    // reaches EOF due to unexpected FD inheritance.
+    let display_command = format!(
+        "{} {}",
+        pytest_bin,
+        command
+            .get_args()
+            .map(|a| a.to_string_lossy().to_string())
+            .collect::<Vec<_>>()
+            .join(" ")
+    );
     let mut adapter = PytestAdapter::new(args.show_logs, args.ci);
-    let (exit_code, _tail) =
-        run_streaming_capture_tail_merged(command, &live_progress, &mut adapter, 1024 * 1024)?;
+    if let Some(label) = adapter.on_start() {
+        live_progress.set_current_label(label);
+    }
+    let out = run_command_capture_with_timeout(
+        command,
+        display_command,
+        std::time::Duration::from_secs(60),
+    )?;
+    let exit_code = out.status.code().unwrap_or(1);
+    let stdout_text = String::from_utf8_lossy(&out.stdout);
+    let stderr_text = String::from_utf8_lossy(&out.stderr);
+    apply_pytest_output_text(
+        &mut adapter,
+        &live_progress,
+        crate::streaming::OutputStream::Stdout,
+        &stdout_text,
+    );
+    apply_pytest_output_text(
+        &mut adapter,
+        &live_progress,
+        crate::streaming::OutputStream::Stderr,
+        &stderr_text,
+    );
     live_progress.increment_done(1);
     live_progress.finish();
-    let model = adapter.finalize(exit_code);
-    Ok((exit_code, model))
+    Ok((exit_code, adapter.finalize(exit_code)))
+}
+
+fn apply_pytest_output_text(
+    adapter: &mut PytestAdapter,
+    live_progress: &live_progress::LiveProgress,
+    stream: crate::streaming::OutputStream,
+    text: &str,
+) {
+    text.lines()
+        .map(|line| line.strip_suffix('\r').unwrap_or(line))
+        .flat_map(|line| adapter.on_line(stream, line))
+        .for_each(|action| match action {
+            crate::streaming::StreamAction::SetProgressLabel(label) => {
+                live_progress.set_current_label(label)
+            }
+            crate::streaming::StreamAction::PrintStdout(text) => {
+                live_progress.println_stdout(&text)
+            }
+            crate::streaming::StreamAction::PrintStderr(text) => {
+                live_progress.eprintln_stderr(&text)
+            }
+        });
 }
 
 fn maybe_print_rendered_pytest_run(

@@ -1,3 +1,5 @@
+use std::borrow::Cow;
+
 use crate::model::{ResolvedLocation, SymbolRecord, TreemapNode};
 
 use super::dwarf::AnalysisStats;
@@ -20,14 +22,14 @@ pub fn build_treemap_from_symbols_and_locations(
     }
     entries.sort_by(|left, right| {
         (
-            left.crate_name.as_str(),
-            left.file_name.as_str(),
-            left.function_name.as_str(),
+            left.crate_name.as_ref(),
+            left.file_name.as_ref(),
+            left.function_name,
         )
             .cmp(&(
-                right.crate_name.as_str(),
-                right.file_name.as_str(),
-                right.function_name.as_str(),
+                right.crate_name.as_ref(),
+                right.file_name.as_ref(),
+                right.function_name,
             ))
     });
 
@@ -69,17 +71,17 @@ pub fn worker_count_for(item_count: usize) -> usize {
 }
 
 #[derive(Debug, Clone)]
-struct TreeEntry {
-    crate_name: String,
-    file_name: String,
-    function_name: String,
+struct TreeEntry<'a> {
+    crate_name: Cow<'a, str>,
+    file_name: Cow<'a, str>,
+    function_name: &'a str,
     bytes: u64,
 }
 
-fn build_entries_for_tree(
-    symbols: &[SymbolRecord],
-    locations: &[ResolvedLocation],
-) -> Vec<TreeEntry> {
+fn build_entries_for_tree<'a>(
+    symbols: &'a [SymbolRecord],
+    locations: &'a [ResolvedLocation],
+) -> Vec<TreeEntry<'a>> {
     let mut entries = Vec::with_capacity(symbols.len());
     for (record, location) in symbols.iter().zip(locations.iter()) {
         let bytes = record.size_bytes;
@@ -87,15 +89,16 @@ fn build_entries_for_tree(
             continue;
         }
 
-        let crate_name = crate_name_from_function_name_and_file_path(
-            &location.function_name,
+        let crate_name = crate_name_from_function_name_and_file_path_cow(
+            location.function_name.as_str(),
             location.file_path.as_deref(),
         );
         let file_name = location
             .file_path
-            .clone()
-            .unwrap_or_else(|| format!("unknown@0x{:x}", record.address));
-        let function_name = location.function_name.clone();
+            .as_deref()
+            .map(Cow::Borrowed)
+            .unwrap_or_else(|| Cow::Owned(format!("unknown@0x{:x}", record.address)));
+        let function_name = location.function_name.as_str();
 
         entries.push(TreeEntry {
             crate_name,
@@ -107,7 +110,7 @@ fn build_entries_for_tree(
     entries
 }
 
-fn build_tree_from_sorted_entries(entries: &[TreeEntry]) -> TreemapNode {
+fn build_tree_from_sorted_entries(entries: &[TreeEntry<'_>]) -> TreemapNode {
     let mut root_children = Vec::<TreemapNode>::new();
 
     let mut current_crate: Option<TreemapNode> = None;
@@ -118,10 +121,10 @@ fn build_tree_from_sorted_entries(entries: &[TreeEntry]) -> TreemapNode {
     for entry in entries {
         let crate_changed = current_crate
             .as_ref()
-            .is_none_or(|node| node.name != entry.crate_name);
+            .is_none_or(|node| node.name != entry.crate_name.as_ref());
         let file_changed = current_file
             .as_ref()
-            .is_none_or(|node| node.name != entry.file_name);
+            .is_none_or(|node| node.name != entry.file_name.as_ref());
         let function_changed = current_function_name.is_none_or(|name| name != entry.function_name);
 
         if crate_changed || file_changed || function_changed {
@@ -137,20 +140,20 @@ fn build_tree_from_sorted_entries(entries: &[TreeEntry]) -> TreemapNode {
         if crate_changed {
             flush_crate_into_root(&mut root_children, &mut current_crate);
             current_crate = Some(TreemapNode {
-                name: entry.crate_name.clone(),
+                name: entry.crate_name.as_ref().to_string(),
                 bytes: 0,
                 children: Vec::new(),
             });
         }
         if crate_changed || file_changed {
             current_file = Some(TreemapNode {
-                name: entry.file_name.clone(),
+                name: entry.file_name.as_ref().to_string(),
                 bytes: 0,
                 children: Vec::new(),
             });
         }
         if crate_changed || file_changed || function_changed {
-            current_function_name = Some(entry.function_name.as_str());
+            current_function_name = Some(entry.function_name);
             current_function_bytes = 0;
         }
 
@@ -258,28 +261,40 @@ fn flush_crate_into_root(
 }
 
 pub fn crate_name_from_function_name(function_name: &str) -> String {
-    let first = function_name.split("::").next().unwrap_or("unknown").trim();
-    if first.is_empty() {
-        return "unknown".to_string();
-    }
-    first.trim_start_matches('<').to_string()
+    crate_name_from_function_name_cow(function_name).into_owned()
 }
 
 pub fn crate_name_from_function_name_and_file_path(
     function_name: &str,
     file_path: Option<&str>,
 ) -> String {
-    let from_function = crate_name_from_function_name(function_name);
+    crate_name_from_function_name_and_file_path_cow(function_name, file_path).into_owned()
+}
+
+fn crate_name_from_function_name_cow(function_name: &str) -> Cow<'_, str> {
+    let first = function_name.split("::").next().unwrap_or("unknown").trim();
+    if first.is_empty() {
+        return Cow::Borrowed("unknown");
+    }
+    Cow::Borrowed(first.strip_prefix('<').unwrap_or(first))
+}
+
+fn crate_name_from_function_name_and_file_path_cow<'a>(
+    function_name: &'a str,
+    file_path: Option<&'a str>,
+) -> Cow<'a, str> {
+    let from_function = crate_name_from_function_name_cow(function_name);
+    let from_function_str = from_function.as_ref();
     let function_is_probably_not_a_crate = !function_name.contains("::")
-        || from_function == "unknown"
-        || from_function.starts_with('_')
-        || from_function.contains('.');
+        || from_function_str == "unknown"
+        || from_function_str.starts_with('_')
+        || from_function_str.contains('.');
 
     if function_is_probably_not_a_crate
         && let Some(path) = file_path
         && let Some(from_path) = crate_name_from_file_path(path)
     {
-        return from_path;
+        return Cow::Owned(from_path);
     }
 
     from_function

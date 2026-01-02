@@ -55,6 +55,7 @@ static HEADLAMP_FLAGS: LazyLock<std::collections::HashSet<&'static str>> = LazyL
         "--watchAll",
         "--ci",
         "--verbose",
+        "--quiet",
         "--no-cache",
         "--noCache",
         "--bootstrap-command",
@@ -130,6 +131,7 @@ static BOOL_FLAGS: LazyLock<std::collections::HashSet<&'static str>> = LazyLock:
         "--watchAll",
         "--ci",
         "--verbose",
+        "--quiet",
         "--no-cache",
         "--noCache",
         "--coverage-show-code",
@@ -158,6 +160,7 @@ fn append_basic_config_tokens(tokens: &mut Vec<String>, cfg: &HeadlampConfig) {
     push_bool_flag(tokens, cfg.watch == Some(true), "--watch");
     push_bool_flag(tokens, cfg.ci == Some(true), "--ci");
     push_bool_flag(tokens, cfg.verbose == Some(true), "--verbose");
+    push_bool_flag(tokens, cfg.quiet == Some(true), "--quiet");
     push_bool_flag(tokens, cfg.no_cache == Some(true), "--no-cache");
     cfg.jest_args
         .as_ref()

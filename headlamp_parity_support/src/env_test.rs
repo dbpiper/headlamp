@@ -36,11 +36,12 @@ fn build_env_map_sets_isolated_cargo_home_and_target_dir_per_runner_stack() {
         runner_stack: "cargo-nextest->nextest".to_string(),
     };
 
-    let cargo_test_env = build_env_map(&repo_root, &cargo_test_label);
-    let cargo_nextest_env = build_env_map(&repo_root, &cargo_nextest_label);
+    let cargo_test_env = build_env_map(&repo_root, &cargo_test_label, None);
+    let cargo_nextest_env = build_env_map(&repo_root, &cargo_nextest_label, None);
 
     let cargo_test_target_dir = PathBuf::from(cargo_test_env.get("CARGO_TARGET_DIR").unwrap());
-    let cargo_nextest_target_dir = PathBuf::from(cargo_nextest_env.get("CARGO_TARGET_DIR").unwrap());
+    let cargo_nextest_target_dir =
+        PathBuf::from(cargo_nextest_env.get("CARGO_TARGET_DIR").unwrap());
 
     assert!(cargo_test_target_dir.starts_with(&outer_target_dir));
     assert!(cargo_nextest_target_dir.starts_with(&outer_target_dir));
@@ -53,4 +54,3 @@ fn build_env_map_sets_isolated_cargo_home_and_target_dir_per_runner_stack() {
     assert!(cargo_nextest_home.starts_with(&outer_cargo_home));
     assert_ne!(cargo_test_home, cargo_nextest_home);
 }
-

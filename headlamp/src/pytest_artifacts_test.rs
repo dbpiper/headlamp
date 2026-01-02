@@ -12,6 +12,7 @@ fn base_args() -> ParsedArgs {
         watch: false,
         ci: false,
         verbose: false,
+        quiet: false,
         no_cache: false,
         collect_coverage: true,
         coverage_ui: CoverageUi::Both,

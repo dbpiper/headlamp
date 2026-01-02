@@ -11,7 +11,7 @@ use headlamp_core::format::vitest::render_vitest_from_test_model;
 use crate::live_progress::{LiveProgress, live_progress_mode};
 use crate::profile;
 use crate::run::RunError;
-use crate::streaming::run_streaming_capture_tail;
+use crate::streaming::run_streaming_capture_tail_merged;
 
 use super::adapters::{CargoTestAdapter, NextestAdapter};
 use super::coverage;
@@ -104,6 +104,7 @@ pub(super) fn run_cargo_llvm_cov_test_and_render(
     let mode = live_progress_mode(
         headlamp_core::format::terminal::is_output_terminal(),
         args.ci,
+        args.quiet,
     );
     let live_progress = LiveProgress::start(1, mode);
     let run_start = Instant::now();
@@ -131,7 +132,7 @@ pub(super) fn run_cargo_llvm_cov_test_and_render(
     let mut adapter = CargoTestAdapter::new(repo_root, args.only_failures);
     let (exit_code, _tail) = {
         let _span = profile::span("cargo llvm-cov test (instrumented run)");
-        run_streaming_capture_tail(cmd, &live_progress, &mut adapter, 1024 * 1024)?
+        run_streaming_capture_tail_merged(cmd, &live_progress, &mut adapter, 1024 * 1024)?
     };
     live_progress.increment_done(1);
     live_progress.finish();
@@ -166,6 +167,7 @@ pub(super) fn run_cargo_llvm_cov_nextest_and_render(
     let mode = live_progress_mode(
         headlamp_core::format::terminal::is_output_terminal(),
         args.ci,
+        args.quiet,
     );
     let live_progress = LiveProgress::start(1, mode);
     let run_start = Instant::now();
@@ -192,7 +194,7 @@ pub(super) fn run_cargo_llvm_cov_nextest_and_render(
     let mut adapter = NextestAdapter::new(repo_root, args.only_failures);
     let (exit_code, _tail) = {
         let _span = profile::span("cargo llvm-cov nextest (instrumented run)");
-        run_streaming_capture_tail(cmd, &live_progress, &mut adapter, 1024 * 1024)?
+        run_streaming_capture_tail_merged(cmd, &live_progress, &mut adapter, 1024 * 1024)?
     };
     live_progress.increment_done(1);
     live_progress.finish();

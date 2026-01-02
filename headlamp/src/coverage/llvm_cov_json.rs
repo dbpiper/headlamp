@@ -100,22 +100,122 @@ fn parse_llvm_cov_json_statement_hits_serde(
         where
             D: serde::Deserializer<'de>,
         {
-            deserializer.deserialize_any(AnyValueVisitor {
+            deserializer.deserialize_map(RootVisitor {
                 repo_root: self.repo_root,
                 hits_by_path: self.hits_by_path,
             })
         }
     }
 
-    struct AnyValueVisitor<'a> {
+    struct RootVisitor<'a> {
         repo_root: &'a Path,
         hits_by_path: &'a mut HashMap<String, HashMap<u64, u32>>,
     }
 
-    impl<'de> Visitor<'de> for AnyValueVisitor<'_> {
+    impl<'de> Visitor<'de> for RootVisitor<'_> {
         type Value = ();
         fn expecting(&self, formatter: &mut std::fmt::Formatter) -> std::fmt::Result {
-            formatter.write_str("any JSON value")
+            formatter.write_str("llvm-cov root object")
+        }
+
+        fn visit_map<A>(self, mut map: A) -> Result<Self::Value, A::Error>
+        where
+            A: MapAccess<'de>,
+        {
+            while let Some(key) = map.next_key::<std::borrow::Cow<'de, str>>()? {
+                match key.as_ref() {
+                    // llvm-cov JSON usually stores the actual report under data[].files[].
+                    "data" => {
+                        map.next_value_seed(DataSeed {
+                            repo_root: self.repo_root,
+                            hits_by_path: self.hits_by_path,
+                        })?;
+                    }
+                    "files" => {
+                        map.next_value_seed(FilesSeed {
+                            repo_root: self.repo_root,
+                            hits_by_path: self.hits_by_path,
+                        })?;
+                    }
+                    _ => {
+                        map.next_value::<IgnoredAny>()?;
+                    }
+                }
+            }
+            Ok(())
+        }
+    }
+
+    struct DataSeed<'a> {
+        repo_root: &'a Path,
+        hits_by_path: &'a mut HashMap<String, HashMap<u64, u32>>,
+    }
+
+    impl<'de> DeserializeSeed<'de> for DataSeed<'_> {
+        type Value = ();
+        fn deserialize<D>(self, deserializer: D) -> Result<Self::Value, D::Error>
+        where
+            D: serde::Deserializer<'de>,
+        {
+            deserializer.deserialize_seq(DataVisitor {
+                repo_root: self.repo_root,
+                hits_by_path: self.hits_by_path,
+            })
+        }
+    }
+
+    struct DataVisitor<'a> {
+        repo_root: &'a Path,
+        hits_by_path: &'a mut HashMap<String, HashMap<u64, u32>>,
+    }
+
+    impl<'de> Visitor<'de> for DataVisitor<'_> {
+        type Value = ();
+        fn expecting(&self, formatter: &mut std::fmt::Formatter) -> std::fmt::Result {
+            formatter.write_str("llvm-cov data array")
+        }
+
+        fn visit_seq<A>(self, mut seq: A) -> Result<Self::Value, A::Error>
+        where
+            A: SeqAccess<'de>,
+        {
+            while (seq.next_element_seed(DataElemSeed {
+                repo_root: self.repo_root,
+                hits_by_path: self.hits_by_path,
+            })?)
+            .is_some()
+            {}
+            Ok(())
+        }
+    }
+
+    struct DataElemSeed<'a> {
+        repo_root: &'a Path,
+        hits_by_path: &'a mut HashMap<String, HashMap<u64, u32>>,
+    }
+
+    impl<'de> DeserializeSeed<'de> for DataElemSeed<'_> {
+        type Value = ();
+        fn deserialize<D>(self, deserializer: D) -> Result<Self::Value, D::Error>
+        where
+            D: serde::Deserializer<'de>,
+        {
+            deserializer.deserialize_map(DataElemVisitor {
+                repo_root: self.repo_root,
+                hits_by_path: self.hits_by_path,
+            })
+        }
+    }
+
+    struct DataElemVisitor<'a> {
+        repo_root: &'a Path,
+        hits_by_path: &'a mut HashMap<String, HashMap<u64, u32>>,
+    }
+
+    impl<'de> Visitor<'de> for DataElemVisitor<'_> {
+        type Value = ();
+        fn expecting(&self, formatter: &mut std::fmt::Formatter) -> std::fmt::Result {
+            formatter.write_str("llvm-cov data element object")
         }
 
         fn visit_map<A>(self, mut map: A) -> Result<Self::Value, A::Error>
@@ -131,75 +231,10 @@ fn parse_llvm_cov_json_statement_hits_serde(
                         })?;
                     }
                     _ => {
-                        map.next_value_seed(RootSeed {
-                            repo_root: self.repo_root,
-                            hits_by_path: self.hits_by_path,
-                        })?;
+                        map.next_value::<IgnoredAny>()?;
                     }
                 }
             }
-            Ok(())
-        }
-
-        fn visit_seq<A>(self, mut seq: A) -> Result<Self::Value, A::Error>
-        where
-            A: SeqAccess<'de>,
-        {
-            while (seq.next_element_seed(RootSeed {
-                repo_root: self.repo_root,
-                hits_by_path: self.hits_by_path,
-            })?)
-            .is_some()
-            {}
-            Ok(())
-        }
-
-        fn visit_bool<E>(self, _v: bool) -> Result<Self::Value, E>
-        where
-            E: serde::de::Error,
-        {
-            Ok(())
-        }
-        fn visit_i64<E>(self, _v: i64) -> Result<Self::Value, E>
-        where
-            E: serde::de::Error,
-        {
-            Ok(())
-        }
-        fn visit_u64<E>(self, _v: u64) -> Result<Self::Value, E>
-        where
-            E: serde::de::Error,
-        {
-            Ok(())
-        }
-        fn visit_f64<E>(self, _v: f64) -> Result<Self::Value, E>
-        where
-            E: serde::de::Error,
-        {
-            Ok(())
-        }
-        fn visit_str<E>(self, _v: &str) -> Result<Self::Value, E>
-        where
-            E: serde::de::Error,
-        {
-            Ok(())
-        }
-        fn visit_string<E>(self, _v: String) -> Result<Self::Value, E>
-        where
-            E: serde::de::Error,
-        {
-            Ok(())
-        }
-        fn visit_none<E>(self) -> Result<Self::Value, E>
-        where
-            E: serde::de::Error,
-        {
-            Ok(())
-        }
-        fn visit_unit<E>(self) -> Result<Self::Value, E>
-        where
-            E: serde::de::Error,
-        {
             Ok(())
         }
     }

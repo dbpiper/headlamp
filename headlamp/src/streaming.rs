@@ -1,7 +1,8 @@
 use std::collections::VecDeque;
 use std::io::{BufRead, BufReader};
-use std::process::{Command, Stdio};
+use std::process::Command;
 use std::sync::mpsc;
+use std::time::{Duration, Instant};
 
 use crate::live_progress::LiveProgress;
 use crate::run::RunError;
@@ -66,6 +67,65 @@ fn apply_actions(progress: &LiveProgress, actions: Vec<StreamAction>) {
     });
 }
 
+fn drain_after_child_exit_deadline(now: Instant) -> Instant {
+    now + Duration::from_millis(250)
+}
+
+fn recv_poll_interval() -> Duration {
+    Duration::from_millis(50)
+}
+
+fn normalize_crlf_line(line: &str) -> String {
+    line.strip_suffix('\r').unwrap_or(line).to_string()
+}
+
+fn spawn_lines_thread(
+    reader: impl std::io::Read + Send + 'static,
+    tx: mpsc::Sender<(OutputStream, String)>,
+    stream: OutputStream,
+) {
+    std::thread::spawn(move || {
+        let reader = BufReader::new(reader);
+        reader.lines().map_while(Result::ok).for_each(|line| {
+            let line = normalize_crlf_line(&line);
+            let _ = tx.send((stream, line));
+        });
+    });
+}
+
+fn drain_channel_until_exit_then_deadline(
+    mut child: std::process::Child,
+    rx: mpsc::Receiver<(OutputStream, String)>,
+    ring_bytes: usize,
+    mut on_line: impl FnMut(OutputStream, &str, &mut RingBuffer),
+) -> Result<(i32, RingBuffer), RunError> {
+    let mut ring = RingBuffer::new(ring_bytes);
+    let mut child_exited = false;
+    let mut drain_deadline: Option<Instant> = None;
+    loop {
+        match rx.recv_timeout(recv_poll_interval()) {
+            Ok((stream, line)) => on_line(stream, &line, &mut ring),
+            Err(std::sync::mpsc::RecvTimeoutError::Timeout) => {
+                let now = Instant::now();
+                if child_exited {
+                    if drain_deadline.is_some_and(|deadline| now >= deadline) {
+                        break;
+                    }
+                    continue;
+                }
+                if child.try_wait().map_err(RunError::WaitFailed)?.is_some() {
+                    child_exited = true;
+                    drain_deadline = Some(drain_after_child_exit_deadline(now));
+                }
+            }
+            Err(std::sync::mpsc::RecvTimeoutError::Disconnected) => break,
+        }
+    }
+    let status = child.wait().map_err(RunError::WaitFailed)?;
+    let exit_code = status.code().unwrap_or(1);
+    Ok((exit_code, ring))
+}
+
 #[doc(hidden)]
 pub fn consume_lines_capture_tail(
     reader: impl BufRead,
@@ -76,7 +136,7 @@ pub fn consume_lines_capture_tail(
     let mut ring = RingBuffer::new(ring_bytes);
     reader.lines().map_while(Result::ok).for_each(|line| {
         // Normalize CRLF -> LF. BufRead::lines strips '\n' but keeps a trailing '\r' if present.
-        let line = line.strip_suffix('\r').unwrap_or(&line).to_string();
+        let line = normalize_crlf_line(&line);
         ring.push_line(line.clone());
         // Once merged, stream distinction is no longer meaningful.
         progress.record_runner_stdout_line(&line);
@@ -92,8 +152,19 @@ pub fn run_streaming_capture_tail(
     adapter: &mut dyn StreamAdapter,
     ring_bytes: usize,
 ) -> Result<(i32, RingBuffer), RunError> {
-    command.stdout(Stdio::piped()).stderr(Stdio::piped());
-    let mut child = command.spawn().map_err(RunError::SpawnFailed)?;
+    // IMPORTANT: use explicit pipes so we control FD/handle ownership and never retain a write end
+    // in the parent. If the parent accidentally keeps a write end open, reader threads can block
+    // forever waiting for EOF (especially when the child produces little/no output).
+    let (stdout_reader, stdout_writer) = os_pipe::pipe().map_err(RunError::SpawnFailed)?;
+    let (stderr_reader, stderr_writer) = os_pipe::pipe().map_err(RunError::SpawnFailed)?;
+    command
+        .stdout(std::process::Stdio::from(stdout_writer))
+        .stderr(std::process::Stdio::from(stderr_writer));
+    let child = command.spawn().map_err(RunError::SpawnFailed)?;
+    // IMPORTANT: ensure the parent does not retain any pipe write ends via `Command`/`Stdio`
+    // ownership. If a write end stays open in the parent, reader threads can block forever and
+    // we hang (especially when the child produces little/no output).
+    drop(command);
 
     if let Some(label) = adapter.on_start() {
         progress.set_current_label(label);
@@ -101,49 +172,20 @@ pub fn run_streaming_capture_tail(
 
     let (tx, rx) = mpsc::channel::<(OutputStream, String)>();
 
-    let stdout = child.stdout.take();
-    let stderr = child.stderr.take();
-
-    // Reader threads (stdout + stderr).
-    // We read via BufRead::lines so we can incrementally feed the adapter.
-    if let Some(out) = stdout {
-        let tx_out = tx.clone();
-        std::thread::spawn(move || {
-            let reader = BufReader::new(out);
-            reader.lines().map_while(Result::ok).for_each(|line| {
-                let line = line.strip_suffix('\r').unwrap_or(&line).to_string();
-                let _ = tx_out.send((OutputStream::Stdout, line));
-            });
-        });
-    }
-
-    if let Some(err) = stderr {
-        let tx_err = tx.clone();
-        std::thread::spawn(move || {
-            let reader = BufReader::new(err);
-            reader.lines().map_while(Result::ok).for_each(|line| {
-                let line = line.strip_suffix('\r').unwrap_or(&line).to_string();
-                let _ = tx_err.send((OutputStream::Stderr, line));
-            });
-        });
-    }
+    spawn_lines_thread(stdout_reader, tx.clone(), OutputStream::Stdout);
+    spawn_lines_thread(stderr_reader, tx.clone(), OutputStream::Stderr);
 
     drop(tx);
 
-    let mut ring = RingBuffer::new(ring_bytes);
-    rx.iter().for_each(|(stream, line)| {
-        ring.push_line(line.clone());
+    drain_channel_until_exit_then_deadline(child, rx, ring_bytes, |stream, line, ring| {
+        ring.push_line(line.to_string());
         match stream {
-            OutputStream::Stdout => progress.record_runner_stdout_line(&line),
-            OutputStream::Stderr => progress.record_runner_stderr_line(&line),
+            OutputStream::Stdout => progress.record_runner_stdout_line(line),
+            OutputStream::Stderr => progress.record_runner_stderr_line(line),
         }
-        let actions = adapter.on_line(stream, &line);
+        let actions = adapter.on_line(stream, line);
         apply_actions(progress, actions);
-    });
-
-    let status = child.wait().map_err(RunError::WaitFailed)?;
-    let exit_code = status.code().unwrap_or(1);
-    Ok((exit_code, ring))
+    })
 }
 
 pub fn run_streaming_capture_tail_merged(
@@ -167,5 +209,43 @@ pub fn run_streaming_capture_tail_merged(
     }
 
     let mut merged = MergeStreamsAdapter { inner: adapter };
-    run_streaming_capture_tail(command, progress, &mut merged, ring_bytes)
+
+    #[cfg(unix)]
+    {
+        // Create a single pipe and point both stdout and stderr at the same write end. This
+        // preserves the kernel-observed ordering of interleaved writes across the two streams.
+        //
+        // IMPORTANT: never block waiting for EOF. It is possible for stdout/stderr to remain open
+        // (e.g. background processes inheriting FDs), even after the direct child exits. We read on
+        // a thread and stop when the child exits + a short drain window elapses.
+        let (merged_reader, merged_writer) = os_pipe::pipe().map_err(RunError::SpawnFailed)?;
+        let merged_writer2 = merged_writer.try_clone().map_err(RunError::SpawnFailed)?;
+
+        let mut command = command;
+        command
+            .stdout(std::process::Stdio::from(merged_writer))
+            .stderr(std::process::Stdio::from(merged_writer2));
+
+        let child = command.spawn().map_err(RunError::SpawnFailed)?;
+        drop(command);
+
+        if let Some(label) = merged.on_start() {
+            progress.set_current_label(label);
+        }
+
+        let (tx, rx) = mpsc::channel::<(OutputStream, String)>();
+        spawn_lines_thread(merged_reader, tx, OutputStream::Stdout);
+
+        drain_channel_until_exit_then_deadline(child, rx, ring_bytes, |stream, line, ring| {
+            ring.push_line(line.to_string());
+            progress.record_runner_stdout_line(line);
+            let actions = merged.on_line(stream, line);
+            apply_actions(progress, actions);
+        })
+    }
+
+    #[cfg(not(unix))]
+    {
+        run_streaming_capture_tail(command, progress, &mut merged, ring_bytes)
+    }
 }

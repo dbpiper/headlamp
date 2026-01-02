@@ -21,83 +21,139 @@ pub(crate) fn headlamp_runner_stack(runner: &str) -> String {
     }
 }
 
-pub(crate) fn build_env_map(repo: &Path, side_label: &ParitySideLabel) -> BTreeMap<String, String> {
+pub(crate) fn build_env_map(
+    repo: &Path,
+    side_label: &ParitySideLabel,
+    case_id: Option<&str>,
+) -> BTreeMap<String, String> {
     let mut env: BTreeMap<String, String> = BTreeMap::new();
+    insert_headlamp_cache_dir_if_missing(repo, &mut env);
+    insert_cargo_isolation_env_if_needed(repo, side_label, case_id, &mut env);
+    insert_path_with_pytest_venv_if_needed(side_label, &mut env);
+    env
+}
+
+fn insert_headlamp_cache_dir_if_missing(repo: &Path, env: &mut BTreeMap<String, String>) {
     if std::env::var_os("HEADLAMP_CACHE_DIR").is_none() {
         env.insert(
             "HEADLAMP_CACHE_DIR".to_string(),
             repo.join(".headlamp-cache").to_string_lossy().to_string(),
         );
     }
+}
+
+fn insert_cargo_isolation_env_if_needed(
+    repo: &Path,
+    side_label: &ParitySideLabel,
+    case_id: Option<&str>,
+    env: &mut BTreeMap<String, String>,
+) {
     let needs_cargo_target_dir = side_label.runner_stack.contains("cargo-test")
         || side_label.runner_stack.contains("cargo-nextest");
-    if needs_cargo_target_dir {
-        let repo_key = headlamp::fast_related::stable_repo_key_hash_12(repo);
-        let suffix = side_label.file_safe_label();
-
-        // IMPORTANT: when runners are executed concurrently, Cargo must not contend on shared
-        // filesystem locks. Isolate both `CARGO_TARGET_DIR` and `CARGO_HOME` per repo+runner.
-        //
-        // If the outer process set `CARGO_TARGET_DIR`/`CARGO_HOME` (e.g. via Docker volumes),
-        // we keep everything under those roots so builds/downloads are still reused across runs.
-        let base_target_dir = std::env::var_os("CARGO_TARGET_DIR")
-            .map(PathBuf::from)
-            .unwrap_or_else(|| PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("target"));
-        let base_cargo_home = std::env::var_os("CARGO_HOME")
-            .map(PathBuf::from)
-            .unwrap_or_else(|| {
-                PathBuf::from(env!("CARGO_MANIFEST_DIR"))
-                    .join("target")
-                    .join("parity-fixtures")
-                    .join("cargo-home")
-            });
-
-        env.insert(
-            "CARGO_HOME".to_string(),
-            base_cargo_home
-                .join("parity-fixtures")
-                .join("cargo-home")
-                .join(repo_key.clone())
-                .join(suffix.clone())
-                .to_string_lossy()
-                .to_string(),
-        );
-        env.insert(
-            "CARGO_TARGET_DIR".to_string(),
-            base_target_dir
-                .join("parity-fixtures")
-                .join("cargo-target")
-                .join(repo_key)
-                .join(suffix)
-                .to_string_lossy()
-                .to_string(),
-        );
-        env.insert(
-            "HEADLAMP_PARITY_REUSE_INSTRUMENTED_BUILD".to_string(),
-            "1".to_string(),
-        );
-        env.insert(
-            "HEADLAMP_PARITY_SKIP_LLVM_COV_JSON".to_string(),
-            "1".to_string(),
-        );
+    if !needs_cargo_target_dir {
+        return;
     }
-    if let Ok(existing_path) = std::env::var("PATH") {
-        let sep = if cfg!(windows) { ";" } else { ":" };
-        let needs_pytest = side_label.runner_stack.contains("pytest");
-        if needs_pytest {
-            if let Some(py_bin) = ensure_pytest_venv_bin_dir() {
-                env.insert(
-                    "PATH".to_string(),
-                    format!("{}{}{}", py_bin.to_string_lossy(), sep, existing_path),
-                );
-            } else {
-                env.insert("PATH".to_string(), existing_path);
+    let repo_key = headlamp::fast_related::stable_repo_key_hash_12(repo);
+    let suffix = env_isolation_suffix(side_label, case_id);
+    let (base_cargo_home, base_target_dir) = base_cargo_paths();
+    env.insert(
+        "CARGO_HOME".to_string(),
+        base_cargo_home
+            .join("parity-fixtures")
+            .join("cargo-home")
+            .join(repo_key.clone())
+            .join(suffix.clone())
+            .to_string_lossy()
+            .to_string(),
+    );
+    env.insert(
+        "CARGO_TARGET_DIR".to_string(),
+        base_target_dir
+            .join("parity-fixtures")
+            .join("cargo-target")
+            .join(repo_key)
+            .join(suffix)
+            .to_string_lossy()
+            .to_string(),
+    );
+    env.insert(
+        "HEADLAMP_PARITY_REUSE_INSTRUMENTED_BUILD".to_string(),
+        "1".to_string(),
+    );
+    env.insert(
+        "HEADLAMP_PARITY_SKIP_LLVM_COV_JSON".to_string(),
+        "1".to_string(),
+    );
+}
+
+fn env_isolation_suffix(side_label: &ParitySideLabel, case_id: Option<&str>) -> String {
+    let base = side_label.file_safe_label();
+    let isolate_by_case = std::env::var_os("HEADLAMP_PARITY_ISOLATE_BY_CASE").is_some();
+    if !isolate_by_case {
+        return base;
+    }
+    case_id
+        .map(file_safe_component)
+        .filter(|s| !s.is_empty())
+        .map(|case_component| format!("{base}-{case_component}"))
+        .unwrap_or(base)
+}
+
+fn file_safe_component(text: &str) -> String {
+    let mut out = String::with_capacity(text.len());
+    let mut prev_dash = false;
+    for ch in text.chars() {
+        let lower = ch.to_ascii_lowercase();
+        let keep = lower.is_ascii_alphanumeric() || matches!(lower, '-' | '_' | '.');
+        let mapped = if keep { lower } else { '-' };
+        if mapped == '-' {
+            if !prev_dash {
+                out.push('-');
             }
+            prev_dash = true;
         } else {
-            env.insert("PATH".to_string(), existing_path);
+            out.push(mapped);
+            prev_dash = false;
         }
     }
-    env
+    out.trim_matches(['-', '_']).to_string()
+}
+
+fn base_cargo_paths() -> (PathBuf, PathBuf) {
+    let base_target_dir = std::env::var_os("CARGO_TARGET_DIR")
+        .map(PathBuf::from)
+        .unwrap_or_else(|| PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("target"));
+    let base_cargo_home = std::env::var_os("CARGO_HOME")
+        .map(PathBuf::from)
+        .unwrap_or_else(|| {
+            PathBuf::from(env!("CARGO_MANIFEST_DIR"))
+                .join("target")
+                .join("parity-fixtures")
+                .join("cargo-home")
+        });
+    (base_cargo_home, base_target_dir)
+}
+
+fn insert_path_with_pytest_venv_if_needed(
+    side_label: &ParitySideLabel,
+    env: &mut BTreeMap<String, String>,
+) {
+    let Ok(existing_path) = std::env::var("PATH") else {
+        return;
+    };
+    if !side_label.runner_stack.contains("pytest") {
+        env.insert("PATH".to_string(), existing_path);
+        return;
+    }
+    let sep = if cfg!(windows) { ";" } else { ":" };
+    let Some(py_bin) = ensure_pytest_venv_bin_dir() else {
+        env.insert("PATH".to_string(), existing_path);
+        return;
+    };
+    env.insert(
+        "PATH".to_string(),
+        format!("{}{}{}", py_bin.to_string_lossy(), sep, existing_path),
+    );
 }
 
 fn pytest_requirements_path() -> Option<PathBuf> {
@@ -146,6 +202,44 @@ fn shared_py_deps_venv_dir() -> PathBuf {
     PathBuf::from(env!("CARGO_MANIFEST_DIR"))
         .join("target")
         .join("py_deps_venv")
+}
+
+#[derive(Debug)]
+struct VenvInitLockGuard {
+    lock_dir: PathBuf,
+}
+
+impl Drop for VenvInitLockGuard {
+    fn drop(&mut self) {
+        let _ = std::fs::remove_dir_all(&self.lock_dir);
+    }
+}
+
+fn acquire_venv_init_lock(lock_dir: &Path) -> VenvInitLockGuard {
+    let mut attempts: usize = 0;
+    loop {
+        match std::fs::create_dir(lock_dir) {
+            Ok(()) => {
+                return VenvInitLockGuard {
+                    lock_dir: lock_dir.to_path_buf(),
+                };
+            }
+            Err(error) if error.kind() == std::io::ErrorKind::AlreadyExists => {
+                attempts = attempts.saturating_add(1);
+                if attempts > 600 {
+                    panic!(
+                        "timed out waiting for pytest venv init lock {}",
+                        lock_dir.display()
+                    );
+                }
+                std::thread::sleep(std::time::Duration::from_millis(25));
+            }
+            Err(error) => panic!(
+                "failed to acquire pytest venv init lock {} ({error})",
+                lock_dir.display()
+            ),
+        }
+    }
 }
 
 fn create_venv(venv: &Path) -> Option<()> {
@@ -205,14 +299,18 @@ fn ensure_pytest_venv_bin_dir() -> Option<PathBuf> {
 
             let venv = shared_py_deps_venv_dir();
             let bin = venv_bin_dir(&venv);
+            let _lock = acquire_venv_init_lock(&venv.with_extension("init-lock"));
+
             if pytest_path(&bin).exists() {
                 return Some(bin);
             }
 
-            create_venv(&venv)?;
+            if !python_path(&bin).exists() {
+                create_venv(&venv)?;
+            }
             let python = python_path(&bin);
             pip_install_requirements(&python, &requirements, &venv)?;
-            Some(bin)
+            pytest_path(&bin).exists().then_some(bin)
         })
         .clone()
 }

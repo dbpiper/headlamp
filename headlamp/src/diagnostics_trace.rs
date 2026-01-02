@@ -20,6 +20,7 @@ pub struct RunTrace {
 pub struct ArgsSummary {
     pub ci: bool,
     pub verbose: bool,
+    pub quiet: bool,
     pub watch: bool,
     pub no_cache: bool,
     pub sequential: bool,
@@ -112,6 +113,7 @@ pub fn maybe_write_run_trace(
         args: ArgsSummary {
             ci: args.ci,
             verbose: args.verbose,
+            quiet: args.quiet,
             watch: args.watch,
             no_cache: args.no_cache,
             sequential: args.sequential,

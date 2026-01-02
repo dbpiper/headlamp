@@ -1,16 +1,19 @@
 mod cache;
+mod env_matrix;
 mod fixture_repo;
 mod git_utils;
 mod headlamp_bin;
 mod jest_bin;
 mod worktrees;
 
+pub use env_matrix::*;
 pub use fixture_repo::*;
 pub use headlamp_bin::*;
 pub use worktrees::*;
 
 use std::hash::{Hash, Hasher};
 use std::path::Path;
+use std::sync::Arc;
 
 use crate::types::{ParityRunGroup, ParityRunSpec};
 
@@ -80,6 +83,24 @@ impl Hash for RunnerParityCacheKey {
     }
 }
 
+#[derive(Debug, Clone)]
+struct RunnerParityCaseContext<'a> {
+    repo: &'a Path,
+    headlamp_bin: &'a Path,
+    case: &'a str,
+    extra_env: &'a [(&'a str, String)],
+    columns: usize,
+    snapshot: Arc<git_utils::WorkingTreeSnapshot>,
+    repo_cache_key: Arc<str>,
+}
+
+#[derive(Debug, Clone, Copy)]
+struct RunnerParitySideSpec<'a> {
+    index: usize,
+    runner_id: RunnerId,
+    runner_args: &'a [&'a str],
+}
+
 pub fn assert_runner_parity_tty_snapshot_all_four_env(
     repo: &Path,
     headlamp_bin: &Path,
@@ -108,74 +129,117 @@ pub fn runner_parity_tty_all_four_canonical_env(
     extra_env: &[(&str, String)],
 ) -> String {
     let _timing = crate::timing::TimingGuard::start(format!("case total case={case}"));
-    let repo_cache_key = format!(
+    let columns = 120;
+    let case_context = RunnerParityCaseContext {
+        repo,
+        headlamp_bin,
+        case,
+        extra_env,
+        columns,
+        snapshot: Arc::new(git_utils::snapshot_working_tree(repo)),
+        repo_cache_key: Arc::<str>::from(repo_cache_key(repo)),
+    };
+    let sides = run_sides_concurrently(case_context, runners);
+    assert_parity_for_case(repo, case, &sides);
+    canonical_normalized_output(&sides)
+}
+
+fn repo_cache_key(repo: &Path) -> String {
+    format!(
         "{}:{}",
         headlamp::fast_related::stable_repo_key_hash_12(repo),
         git_utils::repo_state_token(repo)
-    );
-    let columns = 120;
-    let snapshot = std::sync::Arc::new(git_utils::snapshot_working_tree(repo));
+    )
+}
+
+fn run_sides_concurrently(
+    case_context: RunnerParityCaseContext<'_>,
+    runners: &[(RunnerId, &[&str])],
+) -> Vec<std::sync::Arc<CachedRunnerParitySide>> {
     // Run each runner concurrently. We rely on per-runner Cargo isolation (`CARGO_HOME` and
     // `CARGO_TARGET_DIR`) to avoid lock contention while still getting parallel speedups.
-    let sides = std::thread::scope(|scope| {
+    std::thread::scope(|scope| {
         let mut joins = Vec::with_capacity(runners.len());
         for (index, (runner, args)) in runners.iter().enumerate() {
-            let runner_id = *runner;
-            let runner_args = *args;
-            let lease_name = format!("case={case} runner={}", runner_id.as_runner_label());
-            let snapshot = snapshot.clone();
-            let repo_cache_key = repo_cache_key.clone();
-            joins.push(scope.spawn(move || {
-                let lease = worktrees::lease_worktree_for_repo(repo, lease_name.as_str());
-                git_utils::apply_working_tree_snapshot(lease.path(), snapshot.as_ref());
-                (
+            joins.push(spawn_runner_side(
+                scope,
+                case_context.clone(),
+                RunnerParitySideSpec {
                     index,
-                    cache::run_and_normalize_cached(
-                        lease.path(),
-                        repo_cache_key.as_str(),
-                        headlamp_bin,
-                        columns,
-                        runner_id,
-                        runner_args,
-                        extra_env,
-                    ),
-                )
-            }));
+                    runner_id: *runner,
+                    runner_args: args,
+                },
+            ));
         }
-        let mut out: Vec<Option<std::sync::Arc<CachedRunnerParitySide>>> =
+        let mut sides_by_index: Vec<Option<std::sync::Arc<CachedRunnerParitySide>>> =
             vec![None; runners.len()];
         for join in joins {
             let (index, side) = join.join().expect("runner parity thread panicked");
-            out[index] = Some(side);
+            sides_by_index[index] = Some(side);
         }
-        out.into_iter().flatten().collect::<Vec<_>>()
-    });
+        sides_by_index.into_iter().flatten().collect::<Vec<_>>()
+    })
+}
 
-    {
-        let _timing = crate::timing::TimingGuard::start(format!("case compare case={case}"));
-        let compare = crate::parity_meta::ParityCompareInput {
-            sides: sides
-                .iter()
-                .map(|side| crate::parity_meta::ParityCompareSideInput {
-                    label: side.spec.side_label.clone(),
-                    exit: side.exit,
-                    raw: side.raw.clone(),
-                    normalized: side.normalized.clone(),
-                    meta: side.meta.clone(),
-                })
-                .collect(),
-        };
-        let run_group = ParityRunGroup {
-            sides: sides.iter().map(|side| side.spec.clone()).collect(),
-        };
-        crate::diagnostics_assert::assert_parity_with_diagnostics(
-            repo,
-            case,
-            &compare,
-            Some(&run_group),
-        );
-    }
+fn spawn_runner_side<'scope>(
+    scope: &'scope std::thread::Scope<'scope, '_>,
+    case_context: RunnerParityCaseContext<'scope>,
+    side: RunnerParitySideSpec<'scope>,
+) -> std::thread::ScopedJoinHandle<'scope, (usize, std::sync::Arc<CachedRunnerParitySide>)> {
+    let lease_name = format!(
+        "case={} runner={}",
+        case_context.case,
+        side.runner_id.as_runner_label()
+    );
+    scope.spawn(move || {
+        let lease = worktrees::lease_worktree_for_repo(case_context.repo, lease_name.as_str());
+        git_utils::apply_working_tree_snapshot(lease.path(), case_context.snapshot.as_ref());
+        (
+            side.index,
+            cache::run_and_normalize_cached(cache::RunAndNormalizeCachedRequest {
+                repo: lease.path(),
+                repo_cache_key: case_context.repo_cache_key.as_ref(),
+                case_id: case_context.case,
+                headlamp_bin: case_context.headlamp_bin,
+                columns: case_context.columns,
+                runner: side.runner_id,
+                args: side.runner_args,
+                extra_env: case_context.extra_env,
+            }),
+        )
+    })
+}
 
+fn assert_parity_for_case(
+    repo: &Path,
+    case: &str,
+    sides: &[std::sync::Arc<CachedRunnerParitySide>],
+) {
+    let _timing = crate::timing::TimingGuard::start(format!("case compare case={case}"));
+    let compare = crate::parity_meta::ParityCompareInput {
+        sides: sides
+            .iter()
+            .map(|side| crate::parity_meta::ParityCompareSideInput {
+                label: side.spec.side_label.clone(),
+                exit: side.exit,
+                raw: side.raw.clone(),
+                normalized: side.normalized.clone(),
+                meta: side.meta.clone(),
+            })
+            .collect(),
+    };
+    let run_group = ParityRunGroup {
+        sides: sides.iter().map(|side| side.spec.clone()).collect(),
+    };
+    crate::diagnostics_assert::assert_parity_with_diagnostics(
+        repo,
+        case,
+        &compare,
+        Some(&run_group),
+    );
+}
+
+fn canonical_normalized_output(sides: &[std::sync::Arc<CachedRunnerParitySide>]) -> String {
     sides
         .first()
         .map(|s| s.normalized.clone())
@@ -209,6 +273,7 @@ pub fn assert_runner_parity_tty_all_four_env(
             runner.as_runner_flag_value(),
             args,
             extra_env,
+            Some(case),
         );
         let raw_bytes = raw.len();
         let raw_lines = raw.lines().count();

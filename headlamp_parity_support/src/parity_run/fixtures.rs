@@ -119,6 +119,7 @@ pub fn run_parity_headlamp_vs_headlamp_with_args_tty(
         baseline_runner,
         baseline_args,
         &[],
+        None,
     )
     .0;
     let candidate_spec = crate::parity_run::headlamp::run_headlamp_with_args_tty_env(
@@ -128,6 +129,7 @@ pub fn run_parity_headlamp_vs_headlamp_with_args_tty(
         candidate_runner,
         candidate_args,
         &[],
+        None,
     )
     .0;
 
@@ -223,8 +225,8 @@ fn fixture_specs(
         binary: program_display_name(rust_bin),
         runner_stack: headlamp_runner_stack(runner),
     };
-    let ts_env = build_env_map(repo, &ts_side_label);
-    let rs_env = build_env_map(repo, &rs_side_label);
+    let ts_env = build_env_map(repo, &ts_side_label, None);
+    let rs_env = build_env_map(repo, &rs_side_label, None);
     let ts_spec = ts_fixture_spec(
         FixtureSpecOptions {
             repo,
@@ -350,7 +352,7 @@ pub fn run_rust_fixture_with_args_tty_stdout_piped(
         binary: program_display_name(rust_bin),
         runner_stack: headlamp_runner_stack("jest"),
     };
-    let env = build_env_map(repo, &side_label);
+    let env = build_env_map(repo, &side_label, None);
     let mut cmd_rs = Command::new(rust_bin);
     cmd_rs
         .current_dir(repo)

@@ -9,7 +9,7 @@ use headlamp_core::format::vitest::render_vitest_from_test_model;
 use crate::git::changed_files;
 use crate::live_progress::{LiveProgress, live_progress_mode};
 use crate::run::{RunError, run_bootstrap};
-use crate::streaming::run_streaming_capture_tail;
+use crate::streaming::run_streaming_capture_tail_merged;
 
 mod adapters;
 mod coverage;
@@ -20,6 +20,8 @@ mod model_norm;
 mod paths;
 mod run_trace;
 mod runner_args;
+#[cfg(test)]
+mod runner_args_test;
 mod selection;
 
 pub use paths::build_cargo_llvm_cov_command_args;
@@ -197,6 +199,7 @@ fn run_cargo_test_streaming(
     let mode = live_progress_mode(
         headlamp_core::format::terminal::is_output_terminal(),
         args.ci,
+        args.quiet,
     );
     let live_progress = LiveProgress::start(1, mode);
     let run_start = Instant::now();
@@ -213,7 +216,7 @@ fn run_cargo_test_streaming(
     );
     let mut adapter = adapters::CargoTestAdapter::new(repo_root, args.only_failures);
     let (exit_code, tail) =
-        run_streaming_capture_tail(cmd, &live_progress, &mut adapter, 1024 * 1024)?;
+        run_streaming_capture_tail_merged(cmd, &live_progress, &mut adapter, 1024 * 1024)?;
     live_progress.increment_done(1);
     live_progress.finish();
     let model = adapter
@@ -380,6 +383,7 @@ fn run_nextest_streaming(
     let mode = live_progress_mode(
         headlamp_core::format::terminal::is_output_terminal(),
         args.ci,
+        args.quiet,
     );
     let live_progress = LiveProgress::start(1, mode);
     let run_start = Instant::now();
@@ -396,7 +400,7 @@ fn run_nextest_streaming(
     );
     let mut adapter = adapters::NextestAdapter::new(repo_root, args.only_failures);
     let (exit_code, tail) =
-        run_streaming_capture_tail(cmd, &live_progress, &mut adapter, 1024 * 1024)?;
+        run_streaming_capture_tail_merged(cmd, &live_progress, &mut adapter, 1024 * 1024)?;
     live_progress.increment_done(1);
     live_progress.finish();
     let adapters::NextestAdapter { parser, .. } = adapter;

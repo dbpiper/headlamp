@@ -93,6 +93,13 @@ fn default_worktree_pool_size() -> usize {
 
 impl RealRunnerWorktreePool {
     fn new(base_repo: PathBuf) -> Self {
+        // `git worktree add/remove/prune` mutates shared admin state under `<repo>/.git/worktrees`.
+        // When nextest runs multiple test binaries in parallel, multiple processes can try to
+        // manage worktrees for the same base repo concurrently. Serialize those operations across
+        // processes to avoid corrupting `.git/worktrees/*` (which can manifest as commondir read
+        // errors).
+        let _git_lock = acquire_worktree_git_lock();
+
         let process_id = std::process::id();
         let pool_root = worktrees_root_for_process()
             .join("repos")
@@ -104,13 +111,37 @@ impl RealRunnerWorktreePool {
         let _ = std::fs::remove_file(base_repo.join(".git/index.lock"));
         let _ = std::fs::remove_file(base_repo.join(".git/config.lock"));
 
+        // If a previous run created worktrees under a different absolute path (e.g. in a CI image),
+        // the `.git` file in each worktree can point at a now-nonexistent gitdir. Prune stale
+        // metadata up-front, and recreate any broken worktree directories we find.
+        let _ = Command::new("git")
+            .current_dir(&base_repo)
+            .args(["worktree", "prune"])
+            .status();
+
         let mut worktrees = (0..pool_size)
             .map(|index| pool_root.join(format!("wt-{process_id}-{index}")))
             .collect::<Vec<_>>();
 
         worktrees.iter().for_each(|dir| {
-            if dir.exists() {
+            if dir.exists() && worktree_is_healthy(dir) {
                 return;
+            }
+            if dir.exists() {
+                let _ = Command::new("git")
+                    .current_dir(&base_repo)
+                    .args([
+                        "worktree",
+                        "remove",
+                        "--force",
+                        dir.to_string_lossy().as_ref(),
+                    ])
+                    .status();
+                let _ = std::fs::remove_dir_all(dir);
+                let _ = Command::new("git")
+                    .current_dir(&base_repo)
+                    .args(["worktree", "prune"])
+                    .status();
             }
             run_git_expect_success(
                 &base_repo,
@@ -162,6 +193,15 @@ impl RealRunnerWorktreePool {
         available.push(worktree_path);
         self.available_worktrees_cv.notify_one();
     }
+}
+
+fn worktree_is_healthy(worktree_path: &Path) -> bool {
+    Command::new("git")
+        .current_dir(worktree_path)
+        .args(["rev-parse", "--is-inside-work-tree"])
+        .output()
+        .ok()
+        .is_some_and(|out| out.status.success())
 }
 
 fn pools_by_repo() -> &'static Mutex<HashMap<String, Arc<RealRunnerWorktreePool>>> {

@@ -1,8 +1,20 @@
 use std::path::{Path, PathBuf};
 
 pub fn ensure_repo_local_jest_bin(repo: &Path) {
-    // Jest runner requires repo-local node_modules/.bin/jest.
+    // Jest runner requires repo-local node_modules/.bin/jest, but we never check in node_modules.
+    // Mirror CI: keep deps elsewhere, and drop a tiny repo-local shim that delegates to that jest.
     let jest_name = if cfg!(windows) { "jest.cmd" } else { "jest" };
+    let Some(jest_src) = find_shared_jest_bin(jest_name) else {
+        return;
+    };
+    let jest_dst = repo.join("node_modules").join(".bin").join(jest_name);
+    ensure_parent_dir(repo, "jest", &jest_dst);
+    write_jest_shim(repo, &jest_src, &jest_dst);
+}
+
+fn find_shared_jest_bin(jest_name: &str) -> Option<PathBuf> {
+    // CI speed: allow using a preinstalled deps bundle inside the CI image.
+    let js_deps_bin_prebuilt = PathBuf::from("/opt/headlamp/js_deps/node_modules/.bin");
     let js_deps_bin_repo = PathBuf::from(env!("CARGO_MANIFEST_DIR"))
         .join("..")
         .join("headlamp_tests")
@@ -10,64 +22,52 @@ pub fn ensure_repo_local_jest_bin(repo: &Path) {
         .join("js_deps")
         .join("node_modules")
         .join(".bin");
-    // CI speed: allow using a preinstalled deps bundle inside the CI image.
-    let js_deps_bin_prebuilt = PathBuf::from("/opt/headlamp/js_deps/node_modules/.bin");
-    let jest_src = [js_deps_bin_repo, js_deps_bin_prebuilt]
+    [js_deps_bin_prebuilt, js_deps_bin_repo]
         .into_iter()
         .map(|dir| dir.join(jest_name))
-        .find(|candidate| candidate.exists());
-    let jest_dst = repo
-        .join("node_modules")
-        .join(".bin")
-        .join(jest_name);
-    let Some(jest_src) = jest_src else {
-        return;
-    };
-    let Some(jest_dst_parent) = jest_dst.parent() else {
+        .find(|candidate| candidate.exists())
+}
+
+fn ensure_parent_dir(repo: &Path, runner: &str, dst: &Path) {
+    let Some(dst_parent) = dst.parent() else {
         panic_jest_like_setup_failure(
             repo,
-            "jest",
+            runner,
             format!(
-                "failed to compute jest bin parent for {}",
-                jest_dst.display()
+                "failed to compute {runner} bin parent for {}",
+                dst.display()
             ),
         );
     };
-    if let Err(error) = std::fs::create_dir_all(jest_dst_parent) {
+    if let Err(error) = std::fs::create_dir_all(dst_parent) {
         panic_jest_like_setup_failure(
             repo,
-            "jest",
-            format!("failed to create {} ({})", jest_dst_parent.display(), error),
+            runner,
+            format!("failed to create {} ({})", dst_parent.display(), error),
         );
     }
+}
+
+fn write_jest_shim(repo: &Path, jest_src: &Path, jest_dst: &Path) {
     #[cfg(unix)]
     {
-        use std::os::unix::fs::symlink;
-        let already_correct = std::fs::read_link(&jest_dst)
-            .ok()
-            .is_some_and(|target| target == jest_src);
-        if !already_correct {
-            let _ = std::fs::remove_file(&jest_dst);
-            let _ = std::fs::remove_dir_all(&jest_dst);
-            if let Err(error) = symlink(&jest_src, &jest_dst)
-                && error.kind() != std::io::ErrorKind::AlreadyExists
-            {
-                panic_jest_like_setup_failure(
-                    repo,
-                    "jest",
-                    format!(
-                        "failed to symlink {} -> {} ({})",
-                        jest_dst.display(),
-                        jest_src.display(),
-                        error
-                    ),
-                );
-            }
+        use std::os::unix::fs::PermissionsExt;
+        let script = format!(
+            "#!/usr/bin/env bash\nexec \"{}\" \"$@\"\n",
+            jest_src.to_string_lossy()
+        );
+        if let Err(error) = std::fs::write(jest_dst, script.as_bytes()) {
+            panic_jest_like_setup_failure(
+                repo,
+                "jest",
+                format!("failed to write {} ({})", jest_dst.display(), error),
+            );
         }
+        let _ = std::fs::set_permissions(jest_dst, std::fs::Permissions::from_mode(0o755));
     }
     #[cfg(windows)]
     {
-        let _ = std::fs::copy(&jest_src, &jest_dst);
+        let _ = std::fs::copy(jest_src, jest_dst);
     }
 }
 

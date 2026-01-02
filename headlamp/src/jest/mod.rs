@@ -124,6 +124,7 @@ fn build_jest_run_context(
     let mode = live_progress_mode(
         headlamp_core::format::terminal::is_output_terminal(),
         args.ci,
+        args.quiet,
     );
     Ok(JestRunContext {
         jest_bin,

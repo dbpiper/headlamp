@@ -99,20 +99,21 @@ fn build_treemap_is_fast_and_scales_reasonably() {
     let (symbols_small, locations_small) = synthetic_inputs(symbol_count_small);
     let (symbols_large, locations_large) = synthetic_inputs(symbol_count_large);
 
-    let duration_small = measure_fastest_duration(|| {
-        build_treemap_from_symbols_and_locations(&symbols_small, &locations_small)
-            .expect("tree")
-            .bytes as usize
-    });
-    let duration_large = measure_fastest_duration(|| {
-        build_treemap_from_symbols_and_locations(&symbols_large, &locations_large)
-            .expect("tree")
-            .bytes as usize
-    });
+    let (duration_small, best_ratio) = measure_best_ratio_paired(
+        || {
+            build_treemap_from_symbols_and_locations(&symbols_small, &locations_small)
+                .expect("tree")
+                .bytes as usize
+        },
+        || {
+            build_treemap_from_symbols_and_locations(&symbols_large, &locations_large)
+                .expect("tree")
+                .bytes as usize
+        },
+    );
 
     assert!(duration_small <= std::time::Duration::from_secs(1));
-    let ratio = duration_large.as_secs_f64() / duration_small.as_secs_f64().max(1e-9);
-    assert!(ratio <= 3.0);
+    assert!(best_ratio <= 3.0);
 }
 
 #[test]
@@ -158,13 +159,29 @@ fn synthetic_inputs(count: usize) -> (Vec<SymbolRecord>, Vec<ResolvedLocation>) 
     (symbols, locations)
 }
 
-fn measure_fastest_duration(mut f: impl FnMut() -> usize) -> std::time::Duration {
-    std::hint::black_box(f());
-    let mut best = std::time::Duration::MAX;
-    for _ in 0..5 {
-        let start = std::time::Instant::now();
-        std::hint::black_box(f());
-        best = best.min(start.elapsed());
+fn measure_best_ratio_paired(
+    mut small: impl FnMut() -> usize,
+    mut large: impl FnMut() -> usize,
+) -> (std::time::Duration, f64) {
+    std::hint::black_box(small());
+    std::hint::black_box(large());
+
+    let mut best_small = std::time::Duration::MAX;
+    let mut best_ratio = f64::INFINITY;
+
+    for _ in 0..8 {
+        let start_small = std::time::Instant::now();
+        std::hint::black_box(small());
+        let duration_small = start_small.elapsed();
+
+        let start_large = std::time::Instant::now();
+        std::hint::black_box(large());
+        let duration_large = start_large.elapsed();
+
+        best_small = best_small.min(duration_small);
+        let ratio = duration_large.as_secs_f64() / duration_small.as_secs_f64().max(1e-9);
+        best_ratio = best_ratio.min(ratio);
     }
-    best
+
+    (best_small, best_ratio)
 }

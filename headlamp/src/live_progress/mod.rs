@@ -31,17 +31,21 @@ pub fn live_progress_mode_with_env_ci(
     stdout_is_tty: bool,
     ci: bool,
     env_ci: bool,
+    quiet: bool,
 ) -> LiveProgressMode {
+    if quiet {
+        return LiveProgressMode::Off;
+    }
     if ci || env_ci {
         return LiveProgressMode::Plain;
     }
     if stdout_is_tty && !env_ci {
         return LiveProgressMode::Interactive;
     }
-    LiveProgressMode::Off
+    LiveProgressMode::Plain
 }
 
-pub fn live_progress_mode(stdout_is_tty: bool, ci: bool) -> LiveProgressMode {
+pub fn live_progress_mode(stdout_is_tty: bool, ci: bool, quiet: bool) -> LiveProgressMode {
     let env_ci = std::env::var("CI").ok().is_some();
-    live_progress_mode_with_env_ci(stdout_is_tty, ci, env_ci)
+    live_progress_mode_with_env_ci(stdout_is_tty, ci, env_ci, quiet)
 }
