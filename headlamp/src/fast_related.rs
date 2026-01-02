@@ -277,9 +277,7 @@ pub fn stable_repo_key_hash_12(repo_root: &Path) -> String {
 }
 
 pub fn git_short_head(repo_root: &Path) -> Option<String> {
-    let out = Command::new("git")
-        .arg("-C")
-        .arg(repo_root)
+    let out = crate::git::git_command_in_repo(repo_root)
         .args(["rev-parse", "--short=8", "HEAD"])
         .output()
         .ok()?;

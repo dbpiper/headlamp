@@ -384,9 +384,7 @@ fn git_test_status_hash(cwd: &Path) -> String {
 }
 
 fn git_status_porcelain_paths(cwd: &Path) -> Vec<String> {
-    let out = std::process::Command::new("git")
-        .arg("-C")
-        .arg(cwd)
+    let out = crate::git::git_command_in_repo(cwd)
         .args(["status", "--porcelain"])
         .output()
         .ok();

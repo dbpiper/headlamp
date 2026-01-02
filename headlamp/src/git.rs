@@ -20,6 +20,16 @@ static SEMVER_IN_TAG_NAME: LazyLock<Regex> = LazyLock::new(|| {
 
 const EMPTY_TREE_OID: &str = "4b825dc642cb6eb9a060e54bf8d69288fbee4904";
 
+pub(crate) fn git_command_in_repo(repo_root: &Path) -> Command {
+    let mut cmd = Command::new("git");
+    cmd.arg("-C").arg(repo_root);
+    // Git >= 2.35 can reject repositories with "dubious ownership" (common in CI workspaces).
+    // We only need read-only queries, so we allow this repo for this invocation without mutating
+    // global config.
+    cmd.args(["-c", "safe.directory=*"]);
+    cmd
+}
+
 pub fn changed_files(repo_root: &Path, mode: ChangedMode) -> Result<Vec<PathBuf>, RunError> {
     let workdir = git_toplevel(repo_root);
     let mut out: Vec<PathBuf> = vec![];
@@ -169,9 +179,7 @@ fn merge_base_with_default_branch(repo_root: &Path) -> Option<String> {
 }
 
 fn git_toplevel(start: &Path) -> PathBuf {
-    let out = Command::new("git")
-        .arg("-C")
-        .arg(start)
+    let out = git_command_in_repo(start)
         .args(["rev-parse", "--show-toplevel"])
         .output()
         .ok()
@@ -184,8 +192,7 @@ fn git_toplevel(start: &Path) -> PathBuf {
 }
 
 fn git_stdout_lines(repo_root: &Path, args: &[&str]) -> Result<Vec<String>, RunError> {
-    let mut cmd = Command::new("git");
-    cmd.arg("-C").arg(repo_root);
+    let mut cmd = git_command_in_repo(repo_root);
     if args.first().is_some_and(|arg| *arg == "diff") {
         // Guard against user/global gitconfig aliases overriding the built-in `diff` subcommand.
         // In CI we observed failures where an alias expanded `diff` into `diff --no-index`,
@@ -212,9 +219,7 @@ fn git_stdout_trimmed(repo_root: &Path, args: &[&str]) -> Result<String, RunErro
 }
 
 fn git_has_head(repo_root: &Path) -> bool {
-    Command::new("git")
-        .arg("-C")
-        .arg(repo_root)
+    git_command_in_repo(repo_root)
         .args(["rev-parse", "--verify", "HEAD"])
         .status()
         .ok()
@@ -222,9 +227,7 @@ fn git_has_head(repo_root: &Path) -> bool {
 }
 
 fn git_is_ancestor(repo_root: &Path, ancestor: &str, descendant: &str) -> bool {
-    Command::new("git")
-        .arg("-C")
-        .arg(repo_root)
+    git_command_in_repo(repo_root)
         .args(["merge-base", "--is-ancestor", ancestor, descendant])
         .status()
         .ok()

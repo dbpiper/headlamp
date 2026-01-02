@@ -118,9 +118,7 @@ pub struct HeadlampConfig {
 
 pub fn find_repo_root(start: &Path) -> PathBuf {
     let start_dir = start.parent().filter(|_| start.is_file()).unwrap_or(start);
-    let out = std::process::Command::new("git")
-        .arg("-C")
-        .arg(start_dir)
+    let out = crate::git::git_command_in_repo(start_dir)
         .args(["rev-parse", "--show-toplevel"])
         .output()
         .ok()
