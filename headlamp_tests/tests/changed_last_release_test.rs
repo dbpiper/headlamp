@@ -105,6 +105,26 @@ fn changed_all_is_robust_to_git_diff_aliases_in_global_config() {
 }
 
 #[test]
+fn changed_last_release_is_robust_to_git_diff_aliases_in_global_config() {
+    with_git_config_global_removed(|| {
+        let tmp = temp_repo_dir();
+        let repo = tmp.path();
+        init_repo(repo);
+
+        commit_file(repo, "a.txt", "a1\n", "a1");
+        run_git(repo, &["tag", "v0.1.0"]);
+        commit_file(repo, "b.txt", "b1\n", "b1");
+
+        let gitconfig = repo.join("global.gitconfig");
+        std::fs::write(&gitconfig, "[alias]\ndiff = diff --no-index\n").unwrap();
+        unsafe { std::env::set_var("GIT_CONFIG_GLOBAL", &gitconfig) };
+
+        let rel = rel_paths(repo, changed_files(repo, ChangedMode::LastRelease).unwrap());
+        assert!(rel.contains(&"b.txt".to_string()), "{rel:?}");
+    })
+}
+
+#[test]
 fn changed_last_commit_includes_last_commit_and_uncommitted() {
     let tmp = temp_repo_dir();
     let repo = tmp.path();

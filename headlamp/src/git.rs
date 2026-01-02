@@ -18,6 +18,8 @@ static SEMVER_IN_TAG_NAME: LazyLock<Regex> = LazyLock::new(|| {
     .unwrap()
 });
 
+const EMPTY_TREE_OID: &str = "4b825dc642cb6eb9a060e54bf8d69288fbee4904";
+
 pub fn changed_files(repo_root: &Path, mode: ChangedMode) -> Result<Vec<PathBuf>, RunError> {
     let workdir = git_toplevel(repo_root);
     let mut out: Vec<PathBuf> = vec![];
@@ -126,14 +128,22 @@ fn stable_semver_from_tag_name(tag_name: &str) -> Option<Version> {
 }
 
 fn list_staged(repo_root: &Path) -> Result<Vec<PathBuf>, RunError> {
-    git_stdout_lines(repo_root, &["diff", "--name-only", "--cached"])
-        .map(|v| v.into_iter().map(|p| repo_root.join(p)).collect())
+    let base = if git_has_head(repo_root) {
+        "HEAD"
+    } else {
+        EMPTY_TREE_OID
+    };
+    git_stdout_lines(
+        repo_root,
+        &["diff-index", "--name-only", "--cached", base, "--"],
+    )
+    .map(|v| v.into_iter().map(|p| repo_root.join(p)).collect())
 }
 
 fn list_unstaged_and_untracked(repo_root: &Path) -> Result<Vec<PathBuf>, RunError> {
     let mut out: Vec<PathBuf> = vec![];
     out.extend(
-        git_stdout_lines(repo_root, &["diff", "--name-only"])?
+        git_stdout_lines(repo_root, &["diff-files", "--name-only", "--"])?
             .into_iter()
             .map(|p| repo_root.join(p)),
     );
@@ -146,7 +156,7 @@ fn list_unstaged_and_untracked(repo_root: &Path) -> Result<Vec<PathBuf>, RunErro
 }
 
 fn list_diff_commits(repo_root: &Path, left: &str, right: &str) -> Result<Vec<PathBuf>, RunError> {
-    git_stdout_lines(repo_root, &["diff", "--name-only", left, right])
+    git_stdout_lines(repo_root, &["diff-tree", "--name-only", "-r", left, right])
         .map(|v| v.into_iter().map(|p| repo_root.join(p)).collect())
 }
 
@@ -199,6 +209,16 @@ fn git_stdout_lines(repo_root: &Path, args: &[&str]) -> Result<Vec<String>, RunE
 
 fn git_stdout_trimmed(repo_root: &Path, args: &[&str]) -> Result<String, RunError> {
     git_stdout_lines(repo_root, args).map(|lines| lines.into_iter().next().unwrap_or_default())
+}
+
+fn git_has_head(repo_root: &Path) -> bool {
+    Command::new("git")
+        .arg("-C")
+        .arg(repo_root)
+        .args(["rev-parse", "--verify", "HEAD"])
+        .status()
+        .ok()
+        .is_some_and(|s| s.success())
 }
 
 fn git_is_ancestor(repo_root: &Path, ancestor: &str, descendant: &str) -> bool {
