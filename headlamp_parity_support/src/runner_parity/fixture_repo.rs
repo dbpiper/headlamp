@@ -110,7 +110,14 @@ pub fn write_real_runner_repo(repo: &Path) {
     // committed `node_modules/`, force-remove it from the index.
     let _ = std::process::Command::new("git")
         .current_dir(repo)
-        .args(["rm", "-r", "--cached", "-f", "node_modules"])
+        .args([
+            "rm",
+            "-r",
+            "--cached",
+            "-f",
+            "--ignore-unmatch",
+            "node_modules",
+        ])
         .status();
 
     write_js_runner_files(repo);

@@ -265,6 +265,9 @@ impl Drop for WorktreeGitLockGuard {
 
 fn acquire_worktree_git_lock() -> WorktreeGitLockGuard {
     let lock_dir = worktrees_root().join("git-lock");
+    if let Some(parent) = lock_dir.parent() {
+        let _ = std::fs::create_dir_all(parent);
+    }
     let mut attempts: usize = 0;
     loop {
         match std::fs::create_dir(&lock_dir) {
