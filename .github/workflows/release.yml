@@ -48,7 +48,7 @@ jobs:
         run: cargo clippy --workspace --all-targets -- -D warnings
 
       - name: run headlamp (changed=lastRelease)
-        run: cargo run -p headlamp --locked -- --runner=cargo-nextest --changed=lastRelease
+        run: cargo run -p headlamp --locked -- --runner=headlamp --changed=lastRelease
 
       - name: Parity diagnostics index (on failure)
         if: failure()
