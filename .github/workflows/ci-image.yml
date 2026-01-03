@@ -5,9 +5,9 @@ on:
     schedule:
         - cron: "0 9 * * 1" # weekly rebuild (security updates)
     push:
-    branches:
-      - main
-    # Rebuild on main when the CI image inputs change.
+        branches:
+            - main
+        # Rebuild on main when the CI image inputs change.
         paths:
             - "ci/ci.Dockerfile"
             - "ci/**"
@@ -37,13 +37,12 @@ jobs:
                   tags: |
                       type=raw,value=latest,enable={{is_default_branch}}
                       type=sha,format=short
-                      type=ref,event=branch
 
             - uses: docker/build-push-action@v6
               with:
                   context: .
                   file: ci/ci.Dockerfile
                   platforms: linux/amd64
-          push: true
+                  push: true
                   tags: ${{ steps.meta.outputs.tags }}
                   labels: ${{ steps.meta.outputs.labels }}

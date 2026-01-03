@@ -55,7 +55,6 @@ RUN rustup toolchain install stable --profile minimal \
 RUN rustup toolchain install nightly --profile minimal \
     && rustup component add llvm-tools-preview --toolchain nightly
 
-
 # Install cargo tools via prebuilt binaries for fast image builds.
 # (Compiling these from source dominates build time.)
 RUN curl -fsSL https://raw.githubusercontent.com/cargo-bins/cargo-binstall/main/install-from-binstall-release.sh \
