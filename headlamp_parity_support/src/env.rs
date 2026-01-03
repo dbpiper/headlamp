@@ -49,7 +49,9 @@ fn insert_cargo_isolation_env_if_needed(
     case_id: Option<&str>,
     env: &mut BTreeMap<String, String>,
 ) {
-    let needs_cargo_target_dir = side_label.runner_stack.contains("->cargo");
+    // Cargo-nextest still uses Cargo builds and can contend on the same target dir / cargo home.
+    // Any runner stack that includes Cargo should get per-runner isolation.
+    let needs_cargo_target_dir = side_label.runner_stack.contains("cargo");
     if !needs_cargo_target_dir {
         return;
     }

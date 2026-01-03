@@ -55,6 +55,29 @@ end_of_record
 }
 
 #[test]
+fn parse_lcov_text_parses_coveragepy_branch_data_with_string_branch_ids() {
+    // coverage.py's lcov export can emit BRDA records where the "branch" field is a descriptive
+    // string like "jump to line 104" instead of a numeric branch id. We still want to surface
+    // branch coverage in the UI for these reports.
+    let input = "\
+TN:
+SF:/repo/src/foo.py
+BRDA:15,0,jump to line 16,0
+BRDA:15,0,jump to line 17,5
+DA:15,1
+end_of_record
+";
+
+    let report = parse_lcov_text(input);
+    assert_eq!(report.files.len(), 1);
+    let file = &report.files[0];
+
+    assert_eq!(file.path, "/repo/src/foo.py");
+    assert_eq!(file.branch_map.get("15:0").copied(), Some(15));
+    assert_eq!(file.branch_hits.get("15:0").cloned(), Some(vec![0, 5]));
+}
+
+#[test]
 fn parse_lcov_text_dedupes_rust_v0_mangled_function_hash_prefixes() {
     let input = "\
 TN:
@@ -125,7 +148,9 @@ fn filter_report_excludes_files_outside_repo_root_by_default() {
         ],
     };
 
-    let filtered = filter_report(report, repo_root, &[], &[]);
+    // Even with include globs present (the default path for most runs), we should never include
+    // files outside the repo root like Cargo registry sources.
+    let filtered = filter_report(report, repo_root, &["**/*.rs".to_string()], &[]);
     assert_eq!(filtered.files.len(), 1);
     assert_eq!(filtered.files[0].path, "/repo/src/in_repo.rs");
 }

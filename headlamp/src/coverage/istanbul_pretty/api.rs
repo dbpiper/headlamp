@@ -126,6 +126,13 @@ fn render_pretty_output(
     let include_set = build_globset(include_globs);
     let exclude_set = build_globset(exclude_globs);
     files.retain(|file| {
+        // Never include files outside the repo root by default. Our default include globs match
+        // file extensions and would otherwise pull in external dependencies (e.g. Cargo registry).
+        let is_under_root =
+            Path::new(&file.abs_path).is_relative() || file.rel_path != file.abs_path;
+        if !is_under_root {
+            return false;
+        }
         let included = include_set.as_ref().is_none()
             || include_set
                 .as_ref()

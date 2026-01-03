@@ -1,4 +1,5 @@
 use std::collections::BTreeMap;
+use std::collections::HashMap;
 use std::path::Path;
 
 use lcov::Reader;
@@ -25,9 +26,10 @@ struct LcovParseState {
 }
 
 pub fn parse_lcov_text(text: &str) -> CoverageReport {
-    let mut state = Reader::new(text.as_bytes()).map_while(Result::ok).fold(
-        LcovParseState::default(),
-        |mut state, record| {
+    let normalized = normalize_nonstandard_branch_records(text);
+    let mut state = Reader::new(normalized.as_bytes())
+        .map_while(Result::ok)
+        .fold(LcovParseState::default(), |mut state, record| {
             match record {
                 Record::SourceFile { path } => {
                     flush_current(&mut state);
@@ -94,12 +96,93 @@ pub fn parse_lcov_text(text: &str) -> CoverageReport {
                 _ => {}
             }
             state
-        },
-    );
+        });
 
     flush_current(&mut state);
     state.files.sort_by(|a, b| a.path.cmp(&b.path));
     CoverageReport { files: state.files }
+}
+
+#[derive(Debug, Default)]
+struct BranchRewriteState {
+    // Per-source-file map: (line, block) -> (branch_key -> stable numeric id).
+    branch_ids_by_line_and_block: HashMap<(u32, u32), HashMap<String, u32>>,
+}
+
+impl BranchRewriteState {
+    fn reset_for_new_source_file(&mut self) {
+        self.branch_ids_by_line_and_block.clear();
+    }
+
+    fn numeric_branch_id_for(&mut self, line: u32, block: u32, branch_key: &str) -> u32 {
+        let entry = self
+            .branch_ids_by_line_and_block
+            .entry((line, block))
+            .or_default();
+        if let Some(existing) = entry.get(branch_key).copied() {
+            return existing;
+        }
+        let next = (entry.len() as u64).min(u64::from(u32::MAX)) as u32;
+        entry.insert(branch_key.to_string(), next);
+        next
+    }
+}
+
+fn normalize_nonstandard_branch_records(text: &str) -> String {
+    // coverage.py's LCOV output can emit:
+    //   BRDA:<line>,<block>,jump to line <n>,<taken>
+    // which is not valid LCOV according to the `lcov` crate parser (it expects a numeric branch id).
+    // We rewrite only those nonstandard BRDA lines into:
+    //   BRDA:<line>,<block>,<numeric_id>,<taken>
+    // so downstream parsing + UI can still compute branch coverage.
+    let mut rewrite_state = BranchRewriteState::default();
+    let mut out = String::with_capacity(text.len());
+    for line in text.lines() {
+        if line.starts_with("SF:") {
+            rewrite_state.reset_for_new_source_file();
+        }
+        if let Some(rewritten) = rewrite_brda_line(line, &mut rewrite_state) {
+            out.push_str(&rewritten);
+        } else {
+            out.push_str(line);
+        }
+        out.push('\n');
+    }
+    out
+}
+
+fn rewrite_brda_line(line: &str, rewrite_state: &mut BranchRewriteState) -> Option<String> {
+    let payload = line.strip_prefix("BRDA:")?;
+    let mut parts = payload.splitn(4, ',');
+    let line_text = parts.next()?;
+    let block_text = parts.next()?;
+    let branch_text = parts.next()?;
+    let taken_text = parts.next()?;
+
+    // If the branch id is already numeric, keep the original record unchanged.
+    if branch_text.parse::<u32>().is_ok() {
+        return None;
+    }
+    let Ok(line_num) = line_text.parse::<u32>() else {
+        return None;
+    };
+    let Ok(block_num) = block_text.parse::<u32>() else {
+        return None;
+    };
+    let taken_u32: u32 = match taken_text {
+        "-" => 0,
+        other => other
+            .parse::<u64>()
+            .ok()
+            .map(|v| v.min(u64::from(u32::MAX)) as u32)
+            .unwrap_or(0),
+    };
+
+    let numeric_branch_id = rewrite_state.numeric_branch_id_for(line_num, block_num, branch_text);
+    Some(format!(
+        "BRDA:{},{},{},{}",
+        line_num, block_num, numeric_branch_id, taken_u32
+    ))
 }
 
 pub fn read_lcov_file(path: &Path) -> Result<CoverageReport, HeadlampError> {

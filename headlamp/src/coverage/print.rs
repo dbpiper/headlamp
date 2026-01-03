@@ -33,11 +33,11 @@ pub fn filter_report(
                 let p = Path::new(&file.path);
                 p.is_relative() || p.starts_with(root)
             };
-            let included = if include_set.as_ref().is_none() {
-                is_under_root
-            } else {
-                include_set.as_ref().is_some_and(|s| s.is_match(&rel))
-            };
+            // Even when include globs are present (and defaults are always present), never include
+            // files outside the repo root unless the file is actually under root.
+            let included = is_under_root
+                && (include_set.as_ref().is_none()
+                    || include_set.as_ref().is_some_and(|s| s.is_match(&rel)));
             let excluded = exclude_set.as_ref().is_some_and(|s| s.is_match(&rel));
             included && !excluded
         })
