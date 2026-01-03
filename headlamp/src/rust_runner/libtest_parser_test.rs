@@ -81,7 +81,7 @@ test result: FAILED. 0 passed; 1 failed; 0 ignored; 0 measured; 0 filtered out; 
         .expect("expected failed test case");
     let msg = failed
         .failure_messages
-        .get(0)
+        .first()
         .map(|s| s.as_str())
         .unwrap_or("");
     assert!(
