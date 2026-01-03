@@ -88,7 +88,12 @@ fn normalize_tty_line(raw_line: &str, state: &mut DropLiveProgressState) -> Opti
         let is_stable_header = trimmed.starts_with("RUN ")
             && !trimmed.starts_with("RUN (+")
             && !trimmed.starts_with("RUN [");
-        let is_stable_status = trimmed.starts_with("FAIL ") || trimmed.starts_with("PASS ");
+        // Some outputs report timings inline (e.g. `FAIL [123ms] ...`), so accept both
+        // whitespace and bracket forms as stable status lines.
+        let is_stable_status = trimmed.starts_with("FAIL ")
+            || trimmed.starts_with("PASS ")
+            || trimmed.starts_with("FAIL [")
+            || trimmed.starts_with("PASS [");
         if !is_stable_header && !is_stable_status {
             return None;
         }

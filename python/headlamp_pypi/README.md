@@ -1,12 +1,12 @@
 # Headlamp
 
-Headlamp is a **Rust-powered test UX CLI**: smarter test selection, cleaner output, and a unified workflow across **jest**, **cargo test**, **cargo nextest**, and **pytest**.
+Headlamp is a **Rust-powered test UX CLI**: smarter test selection, cleaner output, and a unified workflow across **jest**, **Rust tests (headlamp runner)**, **cargo test**, **cargo nextest**, and **pytest**.
 
 Headlamp is useful when you want a consistent way to run tests across different projects and keep feedback fast as your repo grows. It can select tests based on what changed, surface failures in a readable format, and keep common defaults (like runner args and coverage settings) in a single config file so your team doesn’t have to remember a long list of flags.
 
 ## Why Headlamp
 
-- **One CLI, many runners**: `--runner=jest|cargo-nextest|cargo-test|pytest`
+- **One CLI, many runners**: `--runner=headlamp|jest|cargo-nextest|cargo-test|pytest`
 - **Selection that scales**: run what changed (`--changed`) and what’s related (dependency-graph driven)
 - **Coverage-first UX**: coverage output you can actually read
 - **Fast**: Rust core + caching
@@ -71,16 +71,24 @@ Headlamp is a wrapper around your project’s runners. It does **not** vendor th
 - **pytest**: must be on `PATH` (`pytest` / `pytest.exe`).
 - **Coverage** (`--coverage`): requires `pytest-cov` (Headlamp enables coverage and passes `--cov` flags; branch coverage uses `--cov-branch`).
 
+### Headlamp (native Rust runner) (`--runner=headlamp`)
+
+- **Rust toolchain**: `cargo` + `rustc`.
+- **Per-test timings**: requires a preinstalled nightly toolchain (Headlamp enables libtest JSON + `--report-time` only when nightly is available).
+  - Install via: `rustup toolchain install nightly`
+
 ### Cargo test runner (`--runner=cargo-test`)
 
 - **Rust toolchain**: `cargo` + `rustc`.
-- **Coverage** (`--coverage`): requires **`cargo-llvm-cov`** to generate Rust `lcov.info` (`cargo install cargo-llvm-cov`; you may also need `rustup component add llvm-tools-preview` depending on your toolchain).
+- **Coverage** (`--coverage`): collected via LLVM tools from `rustup` (**no `cargo-llvm-cov` dependency**).
+  - Install via: `rustup component add llvm-tools-preview`
 
 ### Cargo nextest runner (`--runner=cargo-nextest`)
 
 - **Rust toolchain**: `cargo` + `rustc`.
 - **nextest**: requires **`cargo-nextest`** (`cargo install cargo-nextest`).
-- **Coverage** (`--coverage`): requires **`cargo-llvm-cov`** (same as `cargo-test` coverage above).
+- **Coverage** (`--coverage`): collected via LLVM tools from `rustup` (**no `cargo-llvm-cov` dependency**).
+  - Install via: `rustup component add llvm-tools-preview`
 
 ## Quickstart
 
@@ -103,13 +111,18 @@ headlamp --runner=cargo-nextest
 headlamp --runner=cargo-test
 ```
 
+Requirements:
+
+- `--runner=cargo-nextest`: requires `cargo-nextest` to be installed.
+  - Install via: `cargo install cargo-nextest` (or your preferred installer)
+
 ## CLI
 
 Run `headlamp --help` to see the up-to-date flags list.
 
 Highlights:
 
-- **runners**: `--runner=jest|pytest|cargo-nextest|cargo-test`
+- **runners**: `--runner=headlamp|jest|pytest|cargo-nextest|cargo-test`
 - **changed selection**: `--changed=all|staged|unstaged|branch|lastCommit|lastRelease`
   - `lastRelease` selects changes since the previous stable SemVer release tag
 - **coverage**: `--coverage` plus `--coverage-ui`, `--coverage-detail`, thresholds, etc.

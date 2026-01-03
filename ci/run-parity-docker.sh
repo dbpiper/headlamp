@@ -49,6 +49,7 @@ docker run --rm ${DOCKER_TTY_FLAGS:+${DOCKER_TTY_FLAGS[@]}} --platform "${PLATFO
     echo "  rust:    $(rustc -V)"
     echo "  cargo:   $(cargo -V)"
     echo "  nextest: $(cargo nextest --version | head -n 1)"
+    echo "  nightly: $(rustup run nightly rustc -V 2>/dev/null || echo missing)"
     echo "  sccache: $(sccache --version)"
     sccache --zero-stats >/dev/null 2>&1 || true
     echo
@@ -57,11 +58,7 @@ docker run --rm ${DOCKER_TTY_FLAGS:+${DOCKER_TTY_FLAGS[@]}} --platform "${PLATFO
     export HEADLAMP_PARITY_HEADLAMP_BIN=/cargo-target/debug/headlamp
     test -x "${HEADLAMP_PARITY_HEADLAMP_BIN}"
 
-    cargo nextest run \
-      -p headlamp_parity_tests \
-      --test parity_suite_test \
-      --status-level pass \
-      --final-status-level pass
+    /cargo-target/debug/headlamp --runner=headlamp headlamp_parity_tests/tests/parity_suite_test.rs
     echo
     sccache --show-stats || true
   '

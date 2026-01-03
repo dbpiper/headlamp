@@ -60,6 +60,11 @@ headlamp --runner=cargo-nextest
 headlamp --runner=cargo-test
 ```
 
+Requirements:
+
+- `--runner=cargo-nextest`: requires `cargo-nextest` to be installed.
+  - Install via: `cargo install cargo-nextest` (or your preferred installer)
+
 ### Headlamp (native Rust runner)
 
 Runs Rust test binaries directly (built via `cargo test --no-run`), parses libtest output, and renders Headlamp’s unified test UI.
@@ -83,6 +88,15 @@ rustup component add llvm-tools-preview
 ```bash
 rustup toolchain install nightly
 rustup component add llvm-tools-preview --toolchain nightly
+```
+
+## Rust timing requirements (native runner)
+
+Per-test timings in the native Rust runner (`--runner=headlamp`) require a preinstalled nightly toolchain.
+Headlamp enables libtest JSON output + `--report-time` only when nightly is available (it will not auto-download nightly at runtime).
+
+```bash
+rustup toolchain install nightly
 ```
 
 ## CLI

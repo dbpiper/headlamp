@@ -105,9 +105,17 @@ pub(crate) fn ensure_llvm_tools_available(
     toolchain: &str,
 ) -> Result<(), RunError> {
     for tool in ["llvm-profdata", "llvm-cov"] {
-        let status = std::process::Command::new("rustup")
+        let Some(tool_path) = llvm_tool_path_from_rustc(repo_root, toolchain, tool) else {
+            return Err(RunError::MissingRunner {
+                runner: tool.to_string(),
+                hint: format!(
+                    "expected `{tool}` via rustup; try `rustup component add llvm-tools-preview --toolchain {toolchain}`"
+                ),
+            });
+        };
+        let status = std::process::Command::new(tool_path)
             .current_dir(repo_root)
-            .args(["run", toolchain, tool, "--version"])
+            .arg("--version")
             .stdout(Stdio::null())
             .stderr(Stdio::null())
             .status();
@@ -121,6 +129,26 @@ pub(crate) fn ensure_llvm_tools_available(
         }
     }
     Ok(())
+}
+
+fn llvm_tool_path_from_rustc(repo_root: &Path, toolchain: &str, tool: &str) -> Option<PathBuf> {
+    // `rustup run <toolchain> <tool>` does NOT reliably work for llvm-tools, because on many
+    // toolchains the binaries live under:
+    //   lib/rustlib/<target>/bin/{llvm-profdata,llvm-cov}
+    //
+    // Instead, ask rustc for its target libdir and derive the sibling bin dir.
+    let output = std::process::Command::new("rustup")
+        .current_dir(repo_root)
+        .args(["run", toolchain, "rustc", "--print", "target-libdir"])
+        .output()
+        .ok()
+        .filter(|o| o.status.success())?;
+    let libdir_text = String::from_utf8_lossy(&output.stdout);
+    let libdir = PathBuf::from(libdir_text.trim());
+    let rustlib_target_dir = libdir.parent()?.to_path_buf();
+    let bin_dir = rustlib_target_dir.join("bin");
+    let tool_path = bin_dir.join(tool);
+    tool_path.exists().then_some(tool_path)
 }
 
 pub(crate) fn purge_profile_artifacts(dir: &Path) {
@@ -170,9 +198,17 @@ pub(crate) fn merge_profraw_dir_to_profdata(
     if let Some(parent) = profdata_path.parent() {
         std::fs::create_dir_all(parent).map_err(RunError::Io)?;
     }
-    let mut cmd = std::process::Command::new("rustup");
+    let tool = llvm_tool_path_from_rustc(repo_root, toolchain, "llvm-profdata").ok_or_else(|| {
+        RunError::MissingRunner {
+            runner: "llvm-profdata".to_string(),
+            hint: format!(
+                "expected `llvm-profdata` via rustup; try `rustup component add llvm-tools-preview --toolchain {toolchain}`"
+            ),
+        }
+    })?;
+    let mut cmd = std::process::Command::new(tool);
     cmd.current_dir(repo_root);
-    cmd.args(["run", toolchain, "llvm-profdata", "merge", "-sparse"]);
+    cmd.args(["merge", "-sparse"]);
     cmd.arg("-o").arg(profdata_path);
     profraw_files.iter().for_each(|p| {
         cmd.arg(p);
@@ -246,9 +282,16 @@ fn export_llvm_cov_with_format(
     out_path: &Path,
 ) -> Result<(), RunError> {
     let file = std::fs::File::create(out_path).map_err(RunError::Io)?;
-    let mut cmd = std::process::Command::new("rustup");
+    let tool = llvm_tool_path_from_rustc(repo_root, toolchain, "llvm-cov").ok_or_else(|| {
+        RunError::MissingRunner {
+            runner: "llvm-cov".to_string(),
+            hint: format!(
+                "expected `llvm-cov` via rustup; try `rustup component add llvm-tools-preview --toolchain {toolchain}`"
+            ),
+        }
+    })?;
+    let mut cmd = std::process::Command::new(tool);
     cmd.current_dir(repo_root);
-    cmd.args(["run", toolchain, "llvm-cov"]);
     cmd.args(build_llvm_cov_export_args(format, profdata_path, objects));
     let output = cmd
         .stdout(file)

@@ -45,9 +45,18 @@ RUN python3 -m venv /opt/headlamp/py_venv \
 # Rust components + cargo tools used by CI and parity runs
 RUN rustup component add rustfmt clippy llvm-tools-preview
 
+# Ensure the `stable` toolchain alias exists. The base rust image pins a specific version, which
+# can mean `rustup run stable ...` fails unless the stable channel is explicitly installed.
+RUN rustup toolchain install stable --profile minimal \
+    && rustup component add llvm-tools-preview --toolchain stable
+
+# Install nightly so Headlamp can enable libtest JSON + `--report-time` for per-test timings.
+# Headlamp intentionally avoids auto-downloading nightly at runtime; CI should provide it.
+RUN rustup toolchain install nightly --profile minimal \
+    && rustup component add llvm-tools-preview --toolchain nightly
+
 # Install cargo tools via prebuilt binaries for fast image builds.
 # (Compiling these from source dominates build time.)
 RUN curl -fsSL https://raw.githubusercontent.com/cargo-bins/cargo-binstall/main/install-from-binstall-release.sh \
     | bash \
-    && cargo binstall -y --no-symlinks --locked cargo-nextest cargo-llvm-cov
-
+    && cargo binstall -y --no-symlinks --locked cargo-nextest
