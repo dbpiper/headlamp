@@ -9,10 +9,76 @@ on:
 permissions:
   contents: write
   packages: read
+  actions: read
 
 jobs:
+  wait-ci-image:
+    name: wait for ci-image (only if needed)
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+
+      - name: Wait for ci-image to finish (if this commit changes ci image inputs)
+        shell: bash
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          REPO: ${{ github.repository }}
+          SHA: ${{ github.sha }}
+        run: |
+          set -euo pipefail
+
+          if ! git diff-tree --no-commit-id --name-only -r "${SHA}" | grep -qE '^ci/'; then
+            echo "ci-image: not needed (no ci/ changes in this commit)"
+            exit 0
+          fi
+
+          echo "ci-image: this commit touches ci/, waiting for .github/workflows/ci-image.yml (head_sha=${SHA})"
+          url="https://api.github.com/repos/${REPO}/actions/workflows/ci-image.yml/runs?head_sha=${SHA}&per_page=20"
+
+          for attempt in $(seq 1 80); do
+            json="$(curl -fsSL \
+              -H "Authorization: Bearer ${GH_TOKEN}" \
+              -H "Accept: application/vnd.github+json" \
+              "${url}")"
+
+            line="$(
+              printf '%s' "${json}" | python3 -c 'import json,sys; data=json.load(sys.stdin); runs=data.get("workflow_runs") or []; print("NONE" if not runs else "{}\t{}\t{}".format(runs[0].get("status",""), runs[0].get("conclusion",""), runs[0].get("html_url","")))'
+            )"
+
+            if [ "${line}" = "NONE" ]; then
+              echo "ci-image: not started yet (attempt ${attempt}/80); sleeping…"
+              sleep 15
+              continue
+            fi
+
+            status="$(printf '%s' "${line}" | cut -f1)"
+            conclusion="$(printf '%s' "${line}" | cut -f2)"
+            run_url="$(printf '%s' "${line}" | cut -f3-)"
+
+            echo "ci-image: status=${status} conclusion=${conclusion} url=${run_url}"
+
+            if [ "${status}" = "completed" ] && [ "${conclusion}" = "success" ]; then
+              echo "ci-image: up to date ✅"
+              exit 0
+            fi
+
+            if [ "${status}" = "completed" ] && [ "${conclusion}" != "success" ]; then
+              echo "ci-image: did not succeed (conclusion=${conclusion})"
+              echo "ci-image: run: ${run_url}"
+              exit 1
+            fi
+
+            sleep 15
+          done
+
+          echo "ci-image: timed out waiting for ci-image workflow to complete for head_sha=${SHA}"
+          exit 1
+
   verify:
     name: verify (fmt + clippy + run)
+    needs: wait-ci-image
     runs-on: ubuntu-latest
     container:
       image: ghcr.io/${{ github.repository }}/ci:latest
