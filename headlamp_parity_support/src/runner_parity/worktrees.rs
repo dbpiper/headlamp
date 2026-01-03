@@ -86,74 +86,23 @@ fn parse_usize_env(var_name: &str) -> Option<usize> {
 }
 
 fn default_worktree_pool_size() -> usize {
-    // Runner parity executes up to 4 runners concurrently (jest/cargo-test/cargo-nextest/pytest),
-    // so each test process should have at least 4 worktrees available to avoid serializing.
-    parse_usize_env("HEADLAMP_PARITY_WORKTREE_POOL_SIZE").unwrap_or(4)
+    // Runner parity executes up to 5 runners concurrently (jest/headlamp/cargo-test/cargo-nextest/pytest),
+    // so each test process should have at least 5 worktrees available to avoid serializing or deadlocking.
+    parse_usize_env("HEADLAMP_PARITY_WORKTREE_POOL_SIZE").unwrap_or(5)
 }
 
 impl RealRunnerWorktreePool {
     fn new(base_repo: PathBuf) -> Self {
-        // `git worktree add/remove/prune` mutates shared admin state under `<repo>/.git/worktrees`.
-        // When nextest runs multiple test binaries in parallel, multiple processes can try to
-        // manage worktrees for the same base repo concurrently. Serialize those operations across
-        // processes to avoid corrupting `.git/worktrees/*` (which can manifest as commondir read
-        // errors).
         let _git_lock = acquire_worktree_git_lock();
 
-        let process_id = std::process::id();
-        let pool_root = worktrees_root_for_process()
-            .join("repos")
-            .join(headlamp::fast_related::stable_repo_key_hash_12(&base_repo));
-        let _ = std::fs::create_dir_all(&pool_root);
-
+        let pool_root = ensure_worktree_pool_root_exists(&base_repo);
         let pool_size = default_worktree_pool_size();
+        remove_stale_git_lock_files(&base_repo);
+        git_worktree_prune_best_effort(&base_repo);
 
-        let _ = std::fs::remove_file(base_repo.join(".git/index.lock"));
-        let _ = std::fs::remove_file(base_repo.join(".git/config.lock"));
-
-        // If a previous run created worktrees under a different absolute path (e.g. in a CI image),
-        // the `.git` file in each worktree can point at a now-nonexistent gitdir. Prune stale
-        // metadata up-front, and recreate any broken worktree directories we find.
-        let _ = Command::new("git")
-            .current_dir(&base_repo)
-            .args(["worktree", "prune"])
-            .status();
-
-        let mut worktrees = (0..pool_size)
-            .map(|index| pool_root.join(format!("wt-{process_id}-{index}")))
-            .collect::<Vec<_>>();
-
-        worktrees.iter().for_each(|dir| {
-            if dir.exists() && worktree_is_healthy(dir) {
-                return;
-            }
-            if dir.exists() {
-                let _ = Command::new("git")
-                    .current_dir(&base_repo)
-                    .args([
-                        "worktree",
-                        "remove",
-                        "--force",
-                        dir.to_string_lossy().as_ref(),
-                    ])
-                    .status();
-                let _ = std::fs::remove_dir_all(dir);
-                let _ = Command::new("git")
-                    .current_dir(&base_repo)
-                    .args(["worktree", "prune"])
-                    .status();
-            }
-            run_git_expect_success(
-                &base_repo,
-                &[
-                    "worktree",
-                    "add",
-                    "--force",
-                    "--detach",
-                    dir.to_string_lossy().as_ref(),
-                    "HEAD",
-                ],
-            );
+        let mut worktrees = desired_worktree_paths(&pool_root, pool_size);
+        worktrees.iter().for_each(|worktree_dir| {
+            ensure_worktree_exists_and_is_healthy(&base_repo, worktree_dir)
         });
 
         worktrees.reverse();
@@ -193,6 +142,64 @@ impl RealRunnerWorktreePool {
         available.push(worktree_path);
         self.available_worktrees_cv.notify_one();
     }
+}
+
+fn ensure_worktree_pool_root_exists(base_repo: &Path) -> PathBuf {
+    let base_repo_path_key = crate::hashing::sha1_12(base_repo.to_string_lossy().as_ref());
+    let pool_root = worktrees_root_for_process()
+        .join("repos")
+        .join(base_repo_path_key);
+    let _ = std::fs::create_dir_all(&pool_root);
+    pool_root
+}
+
+fn remove_stale_git_lock_files(base_repo: &Path) {
+    let _ = std::fs::remove_file(base_repo.join(".git/index.lock"));
+    let _ = std::fs::remove_file(base_repo.join(".git/config.lock"));
+}
+
+fn git_worktree_prune_best_effort(base_repo: &Path) {
+    let _ = Command::new("git")
+        .current_dir(base_repo)
+        .args(["worktree", "prune"])
+        .status();
+}
+
+fn desired_worktree_paths(pool_root: &Path, pool_size: usize) -> Vec<PathBuf> {
+    let process_id = std::process::id();
+    (0..pool_size)
+        .map(|index| pool_root.join(format!("wt-{process_id}-{index}")))
+        .collect::<Vec<_>>()
+}
+
+fn ensure_worktree_exists_and_is_healthy(base_repo: &Path, worktree_dir: &Path) {
+    if worktree_dir.exists() && worktree_is_healthy(worktree_dir) {
+        return;
+    }
+    if worktree_dir.exists() {
+        let _ = Command::new("git")
+            .current_dir(base_repo)
+            .args([
+                "worktree",
+                "remove",
+                "--force",
+                worktree_dir.to_string_lossy().as_ref(),
+            ])
+            .status();
+        let _ = std::fs::remove_dir_all(worktree_dir);
+        git_worktree_prune_best_effort(base_repo);
+    }
+    run_git_expect_success(
+        base_repo,
+        &[
+            "worktree",
+            "add",
+            "--force",
+            "--detach",
+            worktree_dir.to_string_lossy().as_ref(),
+            "HEAD",
+        ],
+    );
 }
 
 fn worktree_is_healthy(worktree_path: &Path) -> bool {

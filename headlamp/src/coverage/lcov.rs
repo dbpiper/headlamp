@@ -233,7 +233,10 @@ fn normalize_abs_lcov_path(abs: &Path, root: &Path) -> std::path::PathBuf {
     if let Ok(rel) = abs.strip_prefix(root) {
         return root.join(rel);
     }
-    if let Some(rel) = strip_to_repo_relative(abs) {
+    let root_name = root.file_name();
+    if let Some(root_name) = root_name
+        && let Some(rel) = strip_to_repo_relative_under_root(abs, root_name)
+    {
         return root.join(rel);
     }
     abs.to_path_buf()
@@ -259,7 +262,10 @@ fn normalize_rel_lcov_path(rel: &Path, root: &Path) -> std::path::PathBuf {
     direct
 }
 
-fn strip_to_repo_relative(abs: &Path) -> Option<std::path::PathBuf> {
+fn strip_to_repo_relative_under_root(
+    abs: &Path,
+    root_name: &std::ffi::OsStr,
+) -> Option<std::path::PathBuf> {
     let components = abs
         .components()
         .filter_map(|c| match c {
@@ -268,9 +274,13 @@ fn strip_to_repo_relative(abs: &Path) -> Option<std::path::PathBuf> {
         })
         .collect::<Vec<_>>();
 
+    let root_index = components.iter().rposition(|name| *name == root_name)?;
     let start_index = components
         .iter()
         .rposition(|name| *name == "src" || *name == "tests" || *name == "legacy")?;
+    if start_index <= root_index {
+        return None;
+    }
 
     let mut rel = std::path::PathBuf::new();
     for name in components.into_iter().skip(start_index) {

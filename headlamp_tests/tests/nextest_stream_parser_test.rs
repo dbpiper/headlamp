@@ -23,10 +23,43 @@ fn nextest_stream_parser_emits_updates_and_finalizes() {
 
     assert!(updates.iter().any(|u| u.status == "failed"));
     assert!(updates.iter().any(|u| u.status == "passed"));
+    assert!(
+        updates
+            .iter()
+            .filter(|u| u.test_name == "sum_passes")
+            .any(|u| u
+                .duration
+                .is_some_and(|duration| duration > std::time::Duration::ZERO)),
+        "expected a non-zero duration for at least one test update"
+    );
 
     let model = parser.finalize().expect("model");
     assert_eq!(model.test_results.len(), 1);
     assert_eq!(model.test_results[0].test_results.len(), 2);
+}
+
+#[test]
+fn nextest_stream_parser_preserves_submillisecond_exec_time_in_update_duration() {
+    let repo_root = Path::new("/repo");
+    let mut parser = NextestStreamParser::new(repo_root);
+    let lines = [
+        r#"{"type":"suite","event":"started","test_count":1,"nextest":{"crate":"parity_sum","test_binary":"sum_test","kind":"test"}}"#,
+        r#"{"type":"test","event":"ok","name":"parity_sum::sum_test$sum_passes","exec_time":0.0004}"#,
+        r#"{"type":"suite","event":"ok","passed":1,"failed":0,"ignored":0,"measured":0,"filtered_out":0,"exec_time":0.0004,"nextest":{"crate":"parity_sum","test_binary":"sum_test","kind":"test"}}"#,
+    ];
+
+    let updates = lines
+        .iter()
+        .filter_map(|line| parser.push_line(line))
+        .collect::<Vec<_>>();
+
+    let update = updates
+        .iter()
+        .find(|u| u.test_name == "sum_passes")
+        .expect("sum_passes update");
+    let duration = update.duration.expect("duration present");
+    assert!(duration > std::time::Duration::ZERO);
+    assert!(duration < std::time::Duration::from_millis(1));
 }
 
 #[test]

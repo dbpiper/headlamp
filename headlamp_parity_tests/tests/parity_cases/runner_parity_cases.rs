@@ -1,5 +1,5 @@
 use crate::parity_support::runner_parity::{
-    RunnerId, assert_runner_parity_tty_snapshot_all_four_env, lease_real_runner_worktree,
+    RunnerId, assert_runner_parity_tty_snapshot_all_runners_env, lease_real_runner_worktree,
     shared_threshold_real_runner_repo,
 };
 use std::path::Path;
@@ -7,13 +7,14 @@ use std::process::Command;
 
 mod changed_and_failure;
 
-fn run_all_four_snapshot(repo: &std::path::Path, case: &str, runner_args: &[(&str, &[&str])]) {
+fn run_all_runners_snapshot(repo: &std::path::Path, case: &str, runner_args: &[(&str, &[&str])]) {
     let headlamp_bin = crate::parity_support::runner_parity::runner_parity_headlamp_bin();
     let mapped = runner_args
         .iter()
         .map(|(runner, args)| {
             let id = match *runner {
                 "jest" => RunnerId::Jest,
+                "headlamp" => RunnerId::Headlamp,
                 "cargo-test" => RunnerId::CargoTest,
                 "cargo-nextest" => RunnerId::CargoNextest,
                 "pytest" => RunnerId::Pytest,
@@ -22,7 +23,7 @@ fn run_all_four_snapshot(repo: &std::path::Path, case: &str, runner_args: &[(&st
             (id, *args)
         })
         .collect::<Vec<_>>();
-    assert_runner_parity_tty_snapshot_all_four_env(repo, &headlamp_bin, case, &mapped, &[]);
+    assert_runner_parity_tty_snapshot_all_runners_env(repo, &headlamp_bin, case, &mapped, &[]);
 }
 
 fn lease_repo_for_case(
@@ -77,17 +78,18 @@ fn extract_first_message_block_lines(normalized_output: &str) -> Vec<String> {
 }
 
 #[test]
-fn parity_runner_name_pattern_only_all_four() {
+fn parity_runner_name_pattern_only_all_runners() {
     let lease = lease_repo_for_case("name-pattern-only");
     let repo = lease.path();
     let jest_args = ["--", "-t", "test_sum_passes"];
     let cargo_args = ["--", "test_sum_passes"];
     let pytest_args = ["--", "-k", "test_sum_passes"];
-    run_all_four_snapshot(
+    run_all_runners_snapshot(
         repo,
-        "name pattern only all four",
+        "name pattern only all runners",
         &[
             ("jest", &jest_args),
+            ("headlamp", &cargo_args),
             ("cargo-test", &cargo_args),
             ("cargo-nextest", &cargo_args),
             ("pytest", &pytest_args),
@@ -96,17 +98,18 @@ fn parity_runner_name_pattern_only_all_four() {
 }
 
 #[test]
-fn parity_runner_selection_prod_file_all_four() {
+fn parity_runner_selection_prod_file_all_runners() {
     let lease = lease_repo_for_case("selection-prod-file");
     let repo = lease.path();
     let jest_args = ["src/sum.js"];
     let cargo_args = ["src/sum.rs"];
     let pytest_args = ["src/sum.py"];
-    run_all_four_snapshot(
+    run_all_runners_snapshot(
         repo,
-        "selection prod file all four",
+        "selection prod file all runners",
         &[
             ("jest", &jest_args),
+            ("headlamp", &cargo_args),
             ("cargo-test", &cargo_args),
             ("cargo-nextest", &cargo_args),
             ("pytest", &pytest_args),
@@ -115,17 +118,18 @@ fn parity_runner_selection_prod_file_all_four() {
 }
 
 #[test]
-fn parity_runner_selection_test_file_all_four() {
+fn parity_runner_selection_test_file_all_runners() {
     let lease = lease_repo_for_case("selection-test-file");
     let repo = lease.path();
     let jest_args = ["tests/a_test.js"];
     let cargo_args = ["tests/a_test.rs"];
     let pytest_args = ["tests/a_test.py"];
-    run_all_four_snapshot(
+    run_all_runners_snapshot(
         repo,
-        "selection test file all four",
+        "selection test file all runners",
         &[
             ("jest", &jest_args),
+            ("headlamp", &cargo_args),
             ("cargo-test", &cargo_args),
             ("cargo-nextest", &cargo_args),
             ("pytest", &pytest_args),
@@ -134,17 +138,18 @@ fn parity_runner_selection_test_file_all_four() {
 }
 
 #[test]
-fn parity_runner_selection_indirect_import_all_four() {
+fn parity_runner_selection_indirect_import_all_runners() {
     let lease = lease_repo_for_case("selection-indirect-import");
     let repo = lease.path();
     let jest_args = ["src/very_unique_name_for_parity_123.js"];
     let cargo_args = ["src/very_unique_name_for_parity_123.rs"];
     let pytest_args = ["src/very_unique_name_for_parity_123.py"];
-    run_all_four_snapshot(
+    run_all_runners_snapshot(
         repo,
-        "selection indirect import all four",
+        "selection indirect import all runners",
         &[
             ("jest", &jest_args),
+            ("headlamp", &cargo_args),
             ("cargo-test", &cargo_args),
             ("cargo-nextest", &cargo_args),
             ("pytest", &pytest_args),
@@ -153,15 +158,16 @@ fn parity_runner_selection_indirect_import_all_four() {
 }
 
 #[test]
-fn parity_runner_coverage_ui_both_all_four() {
+fn parity_runner_coverage_ui_both_all_runners() {
     let lease = lease_repo_for_case("coverage-ui-both");
     let repo = lease.path();
     let args = ["--coverage", "--coverage-ui=both"];
-    run_all_four_snapshot(
+    run_all_runners_snapshot(
         repo,
-        "coverage-ui=both all four",
+        "coverage-ui=both all runners",
         &[
             ("jest", &args),
+            ("headlamp", &args),
             ("cargo-test", &args),
             ("cargo-nextest", &args),
             ("pytest", &args),
@@ -170,14 +176,15 @@ fn parity_runner_coverage_ui_both_all_four() {
 }
 
 #[test]
-fn parity_runner_coverage_thresholds_not_met_all_four() {
+fn parity_runner_coverage_thresholds_not_met_all_runners() {
     let repo = shared_threshold_real_runner_repo();
     let args = ["--coverage", "--coverage-ui=both"];
-    run_all_four_snapshot(
+    run_all_runners_snapshot(
         &repo,
-        "coverage thresholds not met all four",
+        "coverage thresholds not met all runners",
         &[
             ("jest", &args),
+            ("headlamp", &args),
             ("cargo-test", &args),
             ("cargo-nextest", &args),
             ("pytest", &args),
@@ -186,15 +193,16 @@ fn parity_runner_coverage_thresholds_not_met_all_four() {
 }
 
 #[test]
-fn parity_runner_coverage_ui_jest_suppresses_coverage_all_four() {
+fn parity_runner_coverage_ui_jest_suppresses_coverage_all_runners() {
     let lease = lease_repo_for_case("coverage-ui-jest");
     let repo = lease.path();
     let args = ["--coverage", "--coverage-ui=jest"];
-    run_all_four_snapshot(
+    run_all_runners_snapshot(
         repo,
-        "coverage-ui=jest suppresses coverage all four",
+        "coverage-ui=jest suppresses coverage all runners",
         &[
             ("jest", &args),
+            ("headlamp", &args),
             ("cargo-test", &args),
             ("cargo-nextest", &args),
             ("pytest", &args),
@@ -203,7 +211,7 @@ fn parity_runner_coverage_ui_jest_suppresses_coverage_all_four() {
 }
 
 #[test]
-fn parity_runner_bootstrap_command_all_four() {
+fn parity_runner_bootstrap_command_all_runners() {
     let lease = lease_repo_for_case("bootstrapCommand");
     let repo = lease.path();
     let file_name = "bootstrap.txt";
@@ -211,21 +219,25 @@ fn parity_runner_bootstrap_command_all_four() {
     let jest_args = [bootstrap_arg.as_str(), "tests/sum_pass_test.js"];
     let cargo_args = [bootstrap_arg.as_str(), "tests/sum_pass_test.rs"];
     let pytest_args = [bootstrap_arg.as_str(), "tests/sum_pass_test.py"];
-    run_all_four_snapshot(
+    let headlamp_bin = crate::parity_support::runner_parity::runner_parity_headlamp_bin();
+    crate::parity_support::runner_parity::assert_runner_parity_tty_all_runners_env(
         repo,
-        "bootstrapCommand all four",
+        &headlamp_bin,
+        "bootstrapCommand all runners",
         &[
-            ("jest", &jest_args),
-            ("cargo-test", &cargo_args),
-            ("cargo-nextest", &cargo_args),
-            ("pytest", &pytest_args),
+            (RunnerId::Jest, &jest_args),
+            (RunnerId::Headlamp, &cargo_args),
+            (RunnerId::CargoTest, &cargo_args),
+            (RunnerId::CargoNextest, &cargo_args),
+            (RunnerId::Pytest, &pytest_args),
         ],
+        &[],
     );
     assert!(repo.join(file_name).exists());
 }
 
 #[test]
-fn parity_runner_changed_all_selects_multiple_tests_all_four() {
+fn parity_runner_changed_all_selects_multiple_tests_all_runners() {
     let lease = lease_repo_for_case("changed-all");
     let repo = lease.path();
     // Create real changed files in all three languages so each runner selects the same
@@ -234,11 +246,12 @@ fn parity_runner_changed_all_selects_multiple_tests_all_four() {
     append_file(&repo.join("src/sum.rs"), "\n");
     append_file(&repo.join("src/sum.py"), "\n");
     let args = ["--changed=all"];
-    run_all_four_snapshot(
+    run_all_runners_snapshot(
         repo,
-        "changed=all selects tests all four",
+        "changed=all selects tests all runners",
         &[
             ("jest", &args),
+            ("headlamp", &args),
             ("cargo-test", &args),
             ("cargo-nextest", &args),
             ("pytest", &args),
@@ -247,7 +260,7 @@ fn parity_runner_changed_all_selects_multiple_tests_all_four() {
 }
 
 #[test]
-fn parity_runner_changed_depth_respected_all_four() {
+fn parity_runner_changed_depth_respected_all_runners() {
     let lease = lease_repo_for_case("changed-depth");
     let repo = lease.path();
     append_file(&repo.join("src/index.js"), "\n");
@@ -256,31 +269,34 @@ fn parity_runner_changed_depth_respected_all_four() {
     let depth0_args = ["--changed=all", "--changed.depth=0"];
     let depth1_args = ["--changed=all", "--changed.depth=1"];
     let depth5_args = ["--changed=all", "--changed.depth=5"];
-    run_all_four_snapshot(
+    run_all_runners_snapshot(
         repo,
-        "changed.depth=0 all four",
+        "changed.depth=0 all runners",
         &[
             ("jest", &depth0_args),
+            ("headlamp", &depth0_args),
             ("cargo-test", &depth0_args),
             ("cargo-nextest", &depth0_args),
             ("pytest", &depth0_args),
         ],
     );
-    run_all_four_snapshot(
+    run_all_runners_snapshot(
         repo,
-        "changed.depth=1 all four",
+        "changed.depth=1 all runners",
         &[
             ("jest", &depth1_args),
+            ("headlamp", &depth1_args),
             ("cargo-test", &depth1_args),
             ("cargo-nextest", &depth1_args),
             ("pytest", &depth1_args),
         ],
     );
-    run_all_four_snapshot(
+    run_all_runners_snapshot(
         repo,
-        "changed.depth=5 all four",
+        "changed.depth=5 all runners",
         &[
             ("jest", &depth5_args),
+            ("headlamp", &depth5_args),
             ("cargo-test", &depth5_args),
             ("cargo-nextest", &depth5_args),
             ("pytest", &depth5_args),
@@ -289,17 +305,18 @@ fn parity_runner_changed_depth_respected_all_four() {
 }
 
 #[test]
-fn parity_runner_basic_pass_all_four() {
+fn parity_runner_basic_pass_all_runners() {
     let lease = lease_repo_for_case("basic-pass");
     let repo = lease.path();
     let jest_args = ["tests/sum_pass_test.js"];
     let cargo_args = ["tests/sum_pass_test.rs"];
     let pytest_args = ["tests/sum_pass_test.py"];
-    run_all_four_snapshot(
+    run_all_runners_snapshot(
         repo,
-        "basic pass all four",
+        "basic pass all runners",
         &[
             ("jest", &jest_args),
+            ("headlamp", &cargo_args),
             ("cargo-test", &cargo_args),
             ("cargo-nextest", &cargo_args),
             ("pytest", &pytest_args),
@@ -308,17 +325,18 @@ fn parity_runner_basic_pass_all_four() {
 }
 
 #[test]
-fn parity_runner_basic_fail_all_four() {
+fn parity_runner_basic_fail_all_runners() {
     let lease = lease_repo_for_case("basic-fail");
     let repo = lease.path();
     let jest_args = ["tests/sum_fail_test.js"];
     let cargo_args = ["tests/sum_fail_test.rs"];
     let pytest_args = ["tests/sum_fail_test.py"];
-    run_all_four_snapshot(
+    run_all_runners_snapshot(
         repo,
-        "basic fail all four",
+        "basic fail all runners",
         &[
             ("jest", &jest_args),
+            ("headlamp", &cargo_args),
             ("cargo-test", &cargo_args),
             ("cargo-nextest", &cargo_args),
             ("pytest", &pytest_args),
@@ -327,7 +345,7 @@ fn parity_runner_basic_fail_all_four() {
 }
 
 #[test]
-fn parity_runner_failure_message_identical_all_four() {
+fn parity_runner_failure_message_identical_all_runners() {
     let lease = lease_repo_for_case("failure-message-identical");
     let repo = lease.path();
 

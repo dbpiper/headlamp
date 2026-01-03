@@ -17,6 +17,7 @@ pub(crate) fn headlamp_runner_stack(runner: &str) -> String {
     match runner {
         "cargo-test" => "cargo-test->cargo".to_string(),
         "cargo-nextest" => "cargo-nextest->nextest".to_string(),
+        "headlamp" => "headlamp->cargo".to_string(),
         other => format!("{other}->{other}"),
     }
 }
@@ -48,8 +49,7 @@ fn insert_cargo_isolation_env_if_needed(
     case_id: Option<&str>,
     env: &mut BTreeMap<String, String>,
 ) {
-    let needs_cargo_target_dir = side_label.runner_stack.contains("cargo-test")
-        || side_label.runner_stack.contains("cargo-nextest");
+    let needs_cargo_target_dir = side_label.runner_stack.contains("->cargo");
     if !needs_cargo_target_dir {
         return;
     }
@@ -78,10 +78,6 @@ fn insert_cargo_isolation_env_if_needed(
     );
     env.insert(
         "HEADLAMP_PARITY_REUSE_INSTRUMENTED_BUILD".to_string(),
-        "1".to_string(),
-    );
-    env.insert(
-        "HEADLAMP_PARITY_SKIP_LLVM_COV_JSON".to_string(),
         "1".to_string(),
     );
 }

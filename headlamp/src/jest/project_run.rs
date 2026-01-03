@@ -279,7 +279,8 @@ fn execute_jest_for_project(
         .env("NODE_ENV", "test")
         .env("FORCE_COLOR", "3")
         .env("JEST_BRIDGE_OUT", out_json.to_string_lossy().to_string());
-    let mut adapter = super::streaming::JestStreamingAdapter::new(emit_raw_lines);
+    let mut adapter =
+        super::streaming::JestStreamingAdapter::new(emit_raw_lines, ctx.args.only_failures);
     let (exit_code, _tail) =
         run_streaming_capture_tail(command, live_progress, &mut adapter, 1024 * 1024)?;
     build_project_execution(

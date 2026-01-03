@@ -6,13 +6,13 @@ use headlamp_core::config::ChangedMode;
 use crate::cargo_select::{changed_rust_seeds, filter_rust_tests_by_seeds, list_rust_test_files};
 
 #[derive(Debug, Clone)]
-pub(super) struct CargoSelection {
-    pub(super) extra_cargo_args: Vec<String>,
-    pub(super) changed_selection_attempted: bool,
-    pub(super) selected_test_count: Option<usize>,
+pub(crate) struct CargoSelection {
+    pub(crate) extra_cargo_args: Vec<String>,
+    pub(crate) changed_selection_attempted: bool,
+    pub(crate) selected_test_count: Option<usize>,
 }
 
-pub(super) fn derive_cargo_selection(
+pub(crate) fn derive_cargo_selection(
     repo_root: &Path,
     args: &ParsedArgs,
     changed: &[PathBuf],
@@ -97,7 +97,7 @@ fn derive_selection_from_selection_paths(
     }
 }
 
-pub(super) fn changed_mode_to_cli_string(mode: ChangedMode) -> &'static str {
+pub(crate) fn changed_mode_to_cli_string(mode: ChangedMode) -> &'static str {
     match mode {
         ChangedMode::All => "all",
         ChangedMode::Staged => "staged",

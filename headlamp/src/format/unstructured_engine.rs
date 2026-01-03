@@ -15,6 +15,7 @@ pub enum UnstructuredStreamEvent {
         suite_path: String,
         test_name: String,
         status: String,
+        duration: Option<std::time::Duration>,
     },
     OutputLine {
         suite_path: String,
@@ -28,6 +29,7 @@ pub enum ParsedTestLine {
     Completed {
         name: String,
         status: String,
+        duration: Option<std::time::Duration>,
     },
     Pending {
         name: String,
@@ -130,7 +132,11 @@ impl<D: UnstructuredDialect> UnstructuredStreamParser<D> {
 
         if let Some(parsed) = self.dialect.parse_test_line(line) {
             match parsed {
-                ParsedTestLine::Completed { name, status } => {
+                ParsedTestLine::Completed {
+                    name,
+                    status,
+                    duration,
+                } => {
                     state.active_output_test_name = None;
                     let abs_suite_path =
                         absolutize_repo_relative(&self.repo_root, &state.source_path);
@@ -138,6 +144,7 @@ impl<D: UnstructuredDialect> UnstructuredStreamParser<D> {
                         suite_path: abs_suite_path,
                         test_name: name,
                         status,
+                        duration,
                     });
                     return events;
                 }
@@ -276,9 +283,15 @@ fn apply_parsed_test_line<D: UnstructuredDialect>(
     parsed: ParsedTestLine,
 ) {
     match parsed {
-        ParsedTestLine::Completed { name, status } => {
+        ParsedTestLine::Completed {
+            name,
+            status,
+            duration,
+        } => {
             acc.last_pending_test_index = None;
-            acc.tests.push(empty_test_case(name, status));
+            let mut test_case = empty_test_case(name, status);
+            test_case.duration = duration.map(|d| d.as_millis() as u64).unwrap_or(0);
+            acc.tests.push(test_case);
         }
         ParsedTestLine::Pending {
             name,

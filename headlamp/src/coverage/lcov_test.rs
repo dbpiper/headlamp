@@ -1,6 +1,9 @@
 use std::path::Path;
 
+use crate::coverage::lcov::normalize_lcov_path;
 use crate::coverage::lcov::parse_lcov_text;
+use crate::coverage::model::{CoverageReport, FileCoverage};
+use crate::coverage::print::filter_report;
 
 #[test]
 fn parse_lcov_text_parses_function_and_branch_data() {
@@ -76,4 +79,53 @@ end_of_record
         file.function_map.get("2:foo").cloned(),
         Some(("foo".to_string(), 2))
     );
+}
+
+#[test]
+fn normalize_lcov_path_does_not_collapse_external_crate_sources_into_repo_root() {
+    let repo_root = Path::new("/repo");
+    let external = "/Users/me/.cargo/registry/src/abcd1234/some_crate/src/op.rs";
+    let normalized = normalize_lcov_path(external, repo_root);
+    assert_eq!(normalized, external);
+}
+
+#[test]
+fn filter_report_excludes_files_outside_repo_root_by_default() {
+    let repo_root = Path::new("/repo");
+    let report = CoverageReport {
+        files: vec![
+            FileCoverage {
+                path: "/repo/src/in_repo.rs".to_string(),
+                lines_total: 1,
+                lines_covered: 1,
+                statements_total: None,
+                statements_covered: None,
+                statement_hits: None,
+                uncovered_lines: vec![],
+                line_hits: std::collections::BTreeMap::new(),
+                function_hits: std::collections::BTreeMap::new(),
+                function_map: std::collections::BTreeMap::new(),
+                branch_hits: std::collections::BTreeMap::new(),
+                branch_map: std::collections::BTreeMap::new(),
+            },
+            FileCoverage {
+                path: "/Users/me/.cargo/registry/src/abcd1234/some_crate/src/op.rs".to_string(),
+                lines_total: 1,
+                lines_covered: 0,
+                statements_total: None,
+                statements_covered: None,
+                statement_hits: None,
+                uncovered_lines: vec![1],
+                line_hits: std::collections::BTreeMap::new(),
+                function_hits: std::collections::BTreeMap::new(),
+                function_map: std::collections::BTreeMap::new(),
+                branch_hits: std::collections::BTreeMap::new(),
+                branch_map: std::collections::BTreeMap::new(),
+            },
+        ],
+    };
+
+    let filtered = filter_report(report, repo_root, &[], &[]);
+    assert_eq!(filtered.files.len(), 1);
+    assert_eq!(filtered.files[0].path, "/repo/src/in_repo.rs");
 }

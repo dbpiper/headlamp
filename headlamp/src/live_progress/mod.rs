@@ -1,11 +1,13 @@
 mod classify;
 mod frame;
+mod test_line;
 mod ticker;
 
 pub use classify::classify_runner_line_for_progress;
 pub use frame::{
     RenderRunFrameArgs, frame_physical_line_count, render_run_frame, render_run_frame_with_columns,
 };
+pub use test_line::{TestOutcome, outcome_from_status, render_finished_test_line};
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum LiveProgressMode {
@@ -22,8 +24,11 @@ pub struct LiveProgress {
     pub(super) last_event_at: std::sync::Arc<std::sync::Mutex<std::time::Instant>>,
     pub(super) last_runner_stdout_hint: std::sync::Arc<std::sync::Mutex<Option<String>>>,
     pub(super) last_runner_stderr_hint: std::sync::Arc<std::sync::Mutex<Option<String>>>,
+    pub(super) spinner_index: std::sync::Arc<std::sync::atomic::AtomicUsize>,
     pub(super) last_frame_lines: std::sync::Arc<std::sync::atomic::AtomicUsize>,
     pub(super) write_lock: std::sync::Arc<std::sync::Mutex<()>>,
+    pub(super) started_at: std::time::Instant,
+    pub(super) total_units: usize,
     pub(super) ticker: Option<std::thread::JoinHandle<()>>,
 }
 

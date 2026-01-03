@@ -2,6 +2,7 @@ use std::collections::BTreeMap;
 
 use super::bars::tint_pct;
 use super::model::{Counts, FileSummary, FullFileCoverage};
+use super::path_shorten::shorten_path_preserving_filename;
 
 pub(super) fn render_istanbul_text_report_with_totals_from_summaries(
     files: &[FullFileCoverage],
@@ -18,12 +19,7 @@ pub(super) fn render_istanbul_text_report_with_totals_from_summaries(
             } else {
                 std::borrow::Cow::Borrowed(file.rel_path.as_str())
             };
-            let base = rel
-                .rsplit_once('/')
-                .map(|(_dir, name)| name)
-                .unwrap_or(rel.as_ref())
-                .to_string();
-            (base, summary.clone(), uncovered)
+            (rel.to_string(), summary.clone(), uncovered)
         })
         .collect();
     render_istanbul_text_report_with_totals_from_rows(rows, max_cols)
@@ -46,12 +42,7 @@ pub(super) fn render_istanbul_text_report_with_totals(
             let summary = file_summary(file);
             let uncovered = render_uncovered_line_numbers(&file.line_hits);
             let rel = Path::new(&file.rel_path).to_slash_lossy().to_string();
-            let base = Path::new(&rel)
-                .file_name()
-                .and_then(|s| s.to_str())
-                .unwrap_or(rel.as_str())
-                .to_string();
-            (base, summary, uncovered)
+            (rel, summary, uncovered)
         })
         .collect();
     render_istanbul_text_report_with_totals_from_rows(rows, max_cols)
@@ -267,7 +258,9 @@ fn render_istanbul_text_row(
 ) -> String {
     let file_cell = {
         let leader_spaces = if layout.indent_file { 1 } else { 0 };
-        istanbul_fill(file_label, layout.file_width, false, leader_spaces)
+        let remaining = layout.file_width.saturating_sub(leader_spaces);
+        let shortened = shorten_path_preserving_filename(file_label, remaining.max(1));
+        istanbul_fill(&shortened, layout.file_width, false, leader_spaces)
     };
 
     let stmts_pct = fmt_pct(stmts.pct());

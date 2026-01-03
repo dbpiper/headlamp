@@ -4,6 +4,7 @@ use std::io::IsTerminal;
 enum Runner {
     Jest,
     Pytest,
+    Headlamp,
     CargoTest,
     CargoNextest,
 }
@@ -185,7 +186,7 @@ fn run_once(
         Err(err) => return render_run_error(repo_root, parsed, runner, err),
     };
     if !parsed.keep_artifacts && !user_cache_dir_was_set {
-        let cache_dir = session.subdir("cache");
+        let cache_dir = headlamp::fast_related::default_cache_root();
         let _ = std::fs::create_dir_all(&cache_dir);
         unsafe { std::env::set_var("HEADLAMP_CACHE_DIR", cache_dir) };
     }
@@ -193,6 +194,8 @@ fn run_once(
         Runner::Jest => headlamp::jest::run_jest(repo_root, parsed, &session)
             .unwrap_or_else(|err| render_run_error(repo_root, parsed, runner, err)),
         Runner::Pytest => headlamp::pytest::run_pytest(repo_root, parsed, &session)
+            .unwrap_or_else(|err| render_run_error(repo_root, parsed, runner, err)),
+        Runner::Headlamp => headlamp::rust_runner::run_headlamp_rust(repo_root, parsed, &session)
             .unwrap_or_else(|err| render_run_error(repo_root, parsed, runner, err)),
         Runner::CargoTest => headlamp::cargo::run_cargo_test(repo_root, parsed, &session)
             .unwrap_or_else(|err| render_run_error(repo_root, parsed, runner, err)),
@@ -205,6 +208,7 @@ fn runner_label(runner: Runner) -> &'static str {
     match runner {
         Runner::Jest => "jest",
         Runner::Pytest => "pytest",
+        Runner::Headlamp => "headlamp",
         Runner::CargoTest => "cargo-test",
         Runner::CargoNextest => "cargo-nextest",
     }
@@ -270,6 +274,7 @@ fn parse_runner(raw: &str) -> Option<Runner> {
     Some(match raw.trim().to_ascii_lowercase().as_str() {
         "jest" => Runner::Jest,
         "pytest" => Runner::Pytest,
+        "headlamp" => Runner::Headlamp,
         "cargo-nextest" => Runner::CargoNextest,
         "cargo-test" => Runner::CargoTest,
         _ => return None,

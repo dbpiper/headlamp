@@ -87,6 +87,32 @@ class BridgeReporter {
     this.buf = { startTime: Date.now(), testResults: [], aggregated: null };
   }
 
+  onTestCaseResult(test, testCaseResult) {
+    try {
+      const testPath =
+        (test && (test.path || test.testPath)) || testCaseResult?.testFilePath;
+      const fullName =
+        testCaseResult?.fullName ||
+        [
+          ...((testCaseResult && testCaseResult.ancestorTitles) || []),
+          testCaseResult?.title,
+        ]
+          .filter(Boolean)
+          .join(" ");
+      const status = testCaseResult?.status;
+      const duration = testCaseResult?.duration;
+      if (testPath && fullName && status) {
+        print({
+          type: "caseComplete",
+          testPath,
+          fullName,
+          status,
+          duration,
+        });
+      }
+    } catch {}
+  }
+
   onRunStart() {
     this.buf.startTime = Date.now();
   }

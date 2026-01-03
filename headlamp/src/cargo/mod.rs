@@ -13,25 +13,22 @@ use crate::streaming::run_streaming_capture_tail_merged;
 use crate::test_model::TestRunModel;
 
 mod adapters;
-mod coverage;
+pub(crate) mod coverage;
 #[cfg(test)]
 mod coverage_abort_on_failure_semantics_test;
-mod llvm_cov;
-#[cfg(test)]
-mod llvm_cov_test;
 mod model_norm;
-mod paths;
+mod nextest;
+pub(crate) mod paths;
 mod run_trace;
 mod runner_args;
 #[cfg(test)]
 mod runner_args_test;
 #[cfg(test)]
 mod rust_coverage_missing_test;
-mod selection;
-
-pub use paths::build_cargo_llvm_cov_command_args;
+pub(crate) mod selection;
 
 pub(crate) use model_norm::empty_test_run_model_for_exit_code;
+pub use nextest::run_cargo_nextest;
 
 fn apply_wall_clock_run_time_ms(
     mut model: headlamp_core::test_model::TestRunModel,
@@ -50,6 +47,93 @@ fn run_optional_bootstrap(repo_root: &Path, args: &ParsedArgs) -> Result<(), Run
 
 fn normalize_runner_exit_code(exit_code: i32) -> i32 {
     if exit_code == 0 { 0 } else { 1 }
+}
+
+struct RustCoverageContext {
+    toolchain: String,
+    enable_branch_coverage: bool,
+    paths: crate::rust_coverage::RustCoveragePaths,
+    llvm_profile_prefix: &'static str,
+}
+
+fn build_rust_coverage_context_if_enabled(
+    repo_root: &Path,
+    args: &ParsedArgs,
+    session: &crate::session::RunSession,
+    llvm_profile_prefix: &'static str,
+) -> Result<Option<RustCoverageContext>, RunError> {
+    if !crate::rust_coverage::should_collect_rust_coverage(args) {
+        return Ok(None);
+    }
+    let (toolchain, enable_branch_coverage) =
+        crate::rust_coverage::choose_llvm_tools_toolchain(repo_root);
+    crate::rust_coverage::ensure_llvm_tools_available(repo_root, toolchain.as_str())?;
+    let paths = crate::rust_coverage::rust_coverage_paths(args.keep_artifacts, repo_root, session);
+    let _ = std::fs::create_dir_all(&paths.profraw_dir);
+    crate::rust_coverage::purge_profile_artifacts(&paths.profraw_dir);
+    crate::rust_coverage::purge_profile_artifacts(
+        paths.profdata_path.parent().unwrap_or(repo_root),
+    );
+    Ok(Some(RustCoverageContext {
+        toolchain: toolchain.to_string(),
+        enable_branch_coverage,
+        paths,
+        llvm_profile_prefix,
+    }))
+}
+
+fn build_instrumented_objects_for_rust_coverage(
+    repo_root: &Path,
+    args: &ParsedArgs,
+    session: &crate::session::RunSession,
+    extra_cargo_args: &[String],
+    enable_branch_coverage: bool,
+    profraw_dir: &std::path::Path,
+    llvm_profile_prefix: &str,
+) -> Result<Vec<std::path::PathBuf>, RunError> {
+    let cargo_target_dir = crate::cargo::paths::headlamp_cargo_target_dir_for_duct(
+        args.keep_artifacts,
+        repo_root,
+        session,
+    );
+    let rustflags =
+        crate::rust_coverage::coverage_rustflags_with_branch_coverage(enable_branch_coverage);
+    let build_profile_prefix = format!("{llvm_profile_prefix}-build");
+    let build_profile_file =
+        crate::rust_coverage::llvm_profile_file_pattern(profraw_dir, build_profile_prefix.as_str());
+    let built =
+        crate::rust_runner::cargo_build::build_test_binaries_via_cargo_no_run_with_overrides(
+            repo_root,
+            args,
+            session,
+            extra_cargo_args,
+            &cargo_target_dir,
+            &rustflags,
+            Some(build_profile_file.as_os_str()),
+        )?;
+    crate::rust_coverage::purge_profile_artifacts(profraw_dir);
+    Ok(built.into_iter().map(|b| b.executable).collect::<Vec<_>>())
+}
+
+fn export_rust_coverage_reports(
+    repo_root: &Path,
+    ctx: &RustCoverageContext,
+    objects: &[std::path::PathBuf],
+) -> Result<(), RunError> {
+    crate::rust_coverage::merge_profraw_dir_to_profdata(
+        repo_root,
+        ctx.toolchain.as_str(),
+        &ctx.paths.profraw_dir,
+        &ctx.paths.profdata_path,
+    )?;
+    crate::rust_coverage::export_llvm_cov_reports(
+        repo_root,
+        ctx.toolchain.as_str(),
+        &ctx.paths.profdata_path,
+        objects,
+        &ctx.paths.lcov_path,
+        &ctx.paths.llvm_cov_json_path,
+    )
 }
 
 fn print_runner_tail_if_failed_without_tests(
@@ -92,28 +176,33 @@ pub fn run_cargo_test(
         );
         return Ok(0);
     }
-    if let Some(run) = maybe_run_cargo_test_with_llvm_cov(repo_root, args, session, &selection)? {
-        if should_abort_coverage_after_run(args, &run.model) {
-            return Ok(run_trace::normalize_and_trace_cargo_test_coverage_abort(
+    let coverage_ctx =
+        build_rust_coverage_context_if_enabled(repo_root, args, session, "cargo-test")?;
+    let objects = coverage_ctx
+        .as_ref()
+        .map(|ctx| {
+            build_instrumented_objects_for_rust_coverage(
                 repo_root,
                 args,
-                started_at,
-                changed.len(),
-                &selection,
-                run.exit_code,
-            ));
-        }
-        return run_trace::finish_cargo_test_llvm_cov_and_trace(
-            repo_root,
-            args,
-            session,
-            started_at,
-            changed.len(),
-            &selection,
-            run.exit_code,
-        );
-    }
-    let run = run_cargo_test_streaming(repo_root, args, session, &selection.extra_cargo_args)?;
+                session,
+                &selection.extra_cargo_args,
+                ctx.enable_branch_coverage,
+                &ctx.paths.profraw_dir,
+                ctx.llvm_profile_prefix,
+            )
+        })
+        .transpose()?
+        .unwrap_or_default();
+
+    let run = run_cargo_test_streaming(
+        repo_root,
+        args,
+        session,
+        &selection.extra_cargo_args,
+        coverage_ctx
+            .as_ref()
+            .map(|ctx| (&ctx.paths, ctx.llvm_profile_prefix)),
+    )?;
     print_runner_tail_if_failed_without_tests(run.exit_code, &run.model, &run.tail);
     maybe_print_rendered_model(repo_root, args, run.exit_code, &run.model);
     if should_abort_coverage_after_run(args, &run.model) {
@@ -125,6 +214,9 @@ pub fn run_cargo_test(
             &selection,
             run.exit_code,
         ));
+    }
+    if let Some(ctx) = coverage_ctx.as_ref() {
+        export_rust_coverage_reports(repo_root, ctx, &objects)?;
     }
     let final_exit = maybe_print_lcov_and_adjust_exit(repo_root, args, session, run.exit_code);
     run_trace::trace_cargo_test_final_exit(
@@ -178,24 +270,6 @@ fn early_exit_for_zero_changed_selection_cargo_test(
     true
 }
 
-fn maybe_run_cargo_test_with_llvm_cov(
-    repo_root: &Path,
-    args: &ParsedArgs,
-    session: &crate::session::RunSession,
-    selection: &selection::CargoSelection,
-) -> Result<Option<llvm_cov::LlvmCovRunOutput>, RunError> {
-    if !(args.collect_coverage && coverage::has_cargo_llvm_cov(repo_root, args, session)) {
-        return Ok(None);
-    }
-    let run = llvm_cov::run_cargo_llvm_cov_test_and_render(
-        repo_root,
-        args,
-        session,
-        &selection.extra_cargo_args,
-    )?;
-    Ok(Some(run))
-}
-
 #[derive(Debug)]
 struct CargoTestRunOutput {
     exit_code: i32,
@@ -208,6 +282,7 @@ fn run_cargo_test_streaming(
     args: &ParsedArgs,
     session: &crate::session::RunSession,
     extra_cargo_args: &[String],
+    coverage: Option<(&crate::rust_coverage::RustCoveragePaths, &'static str)>,
 ) -> Result<CargoTestRunOutput, RunError> {
     let mode = live_progress_mode(
         headlamp_core::format::terminal::is_output_terminal(),
@@ -216,7 +291,7 @@ fn run_cargo_test_streaming(
     );
     let live_progress = LiveProgress::start(1, mode);
     let run_start = Instant::now();
-    let cmd = build_cargo_test_command(repo_root, args, session, extra_cargo_args);
+    let cmd = build_cargo_test_command(repo_root, args, session, extra_cargo_args, coverage);
     headlamp_core::diagnostics_trace::maybe_write_run_trace(
         repo_root,
         "cargo-test",
@@ -251,8 +326,13 @@ fn build_cargo_test_command(
     args: &ParsedArgs,
     session: &crate::session::RunSession,
     extra_cargo_args: &[String],
+    coverage: Option<(&crate::rust_coverage::RustCoveragePaths, &'static str)>,
 ) -> std::process::Command {
     let mut cmd = std::process::Command::new("cargo");
+    let use_nightly_rustc = crate::cargo::paths::nightly_rustc_exists(repo_root);
+    if use_nightly_rustc {
+        cmd.arg("+nightly");
+    }
     cmd.args(runner_args::build_cargo_test_args(
         None,
         args,
@@ -262,43 +342,21 @@ fn build_cargo_test_command(
     paths::apply_headlamp_cargo_target_dir(&mut cmd, args.keep_artifacts, repo_root, session);
     cmd.env("RUST_BACKTRACE", "1");
     cmd.env("RUST_LIB_BACKTRACE", "1");
-    cmd
-}
-
-pub fn run_cargo_nextest(
-    repo_root: &Path,
-    args: &ParsedArgs,
-    session: &crate::session::RunSession,
-) -> Result<i32, RunError> {
-    run_optional_bootstrap(repo_root, args)?;
-    let changed = changed_files_for_args(repo_root, args)?;
-    let selection = selection::derive_cargo_selection(repo_root, args, &changed);
-    if let Some(exit_code) =
-        early_exit_for_zero_changed_selection(repo_root, args, session, &selection)
-    {
-        return Ok(exit_code);
-    }
-    ensure_cargo_nextest_is_available(repo_root, args, session)?;
-    if let Some(run) = maybe_run_nextest_with_llvm_cov(repo_root, args, session, &selection)? {
-        if should_abort_coverage_after_run(args, &run.model) {
-            return Ok(normalize_runner_exit_code(run.exit_code));
-        }
-        return llvm_cov::finish_coverage_after_test_run(
-            repo_root,
-            args,
-            session,
-            run.exit_code,
-            &selection.extra_cargo_args,
+    if let Some((paths, prefix)) = coverage {
+        let _ = std::fs::create_dir_all(&paths.profraw_dir);
+        let llvm_profile =
+            crate::rust_coverage::llvm_profile_file_pattern(&paths.profraw_dir, prefix);
+        cmd.env("LLVM_PROFILE_FILE", llvm_profile);
+        let existing = std::env::var("RUSTFLAGS").unwrap_or_default();
+        let enable_branch_coverage = use_nightly_rustc;
+        let rustflags = crate::rust_coverage::append_rustflags(
+            &existing,
+            &crate::rust_coverage::coverage_rustflags_with_branch_coverage(enable_branch_coverage),
         );
+        cmd.env("RUSTFLAGS", rustflags);
+        cmd.env("CARGO_INCREMENTAL", "0");
     }
-    let run = run_nextest_streaming(repo_root, args, session, &selection.extra_cargo_args)?;
-    print_runner_tail_if_failed_without_tests(run.exit_code, &run.model, &run.tail);
-    maybe_print_rendered_model(repo_root, args, run.exit_code, &run.model);
-    if should_abort_coverage_after_run(args, &run.model) {
-        return Ok(normalize_runner_exit_code(run.exit_code));
-    }
-    let final_exit = maybe_print_lcov_and_adjust_exit(repo_root, args, session, run.exit_code);
-    Ok(final_exit)
+    cmd
 }
 
 fn cargo_model_has_failed_tests(model: &TestRunModel) -> bool {
@@ -358,107 +416,6 @@ fn early_exit_for_zero_changed_selection(
     };
     Some(thresholds_failed as i32)
 }
-
-fn ensure_cargo_nextest_is_available(
-    repo_root: &Path,
-    args: &ParsedArgs,
-    session: &crate::session::RunSession,
-) -> Result<(), RunError> {
-    coverage::has_cargo_nextest(repo_root, args, session)
-        .then_some(())
-        .ok_or_else(|| RunError::MissingRunner {
-            runner: "cargo-nextest".to_string(),
-            hint: "expected `cargo nextest` to be installed and available".to_string(),
-        })
-}
-
-fn maybe_run_nextest_with_llvm_cov(
-    repo_root: &Path,
-    args: &ParsedArgs,
-    session: &crate::session::RunSession,
-    selection: &selection::CargoSelection,
-) -> Result<Option<llvm_cov::LlvmCovRunOutput>, RunError> {
-    if !(args.collect_coverage && coverage::has_cargo_llvm_cov(repo_root, args, session)) {
-        return Ok(None);
-    }
-    let run = llvm_cov::run_cargo_llvm_cov_nextest_and_render(
-        repo_root,
-        args,
-        session,
-        &selection.extra_cargo_args,
-    )?;
-    Ok(Some(run))
-}
-
-#[derive(Debug)]
-struct NextestRunOutput {
-    exit_code: i32,
-    model: headlamp_core::test_model::TestRunModel,
-    tail: crate::streaming::RingBuffer,
-}
-
-fn run_nextest_streaming(
-    repo_root: &Path,
-    args: &ParsedArgs,
-    session: &crate::session::RunSession,
-    extra_cargo_args: &[String],
-) -> Result<NextestRunOutput, RunError> {
-    let mode = live_progress_mode(
-        headlamp_core::format::terminal::is_output_terminal(),
-        args.ci,
-        args.quiet,
-    );
-    let live_progress = LiveProgress::start(1, mode);
-    let run_start = Instant::now();
-    let cmd = build_nextest_command(repo_root, args, session, extra_cargo_args);
-    headlamp_core::diagnostics_trace::maybe_write_run_trace(
-        repo_root,
-        "cargo-nextest",
-        args,
-        Some(run_start),
-        serde_json::json!({
-            "phase": "before_run_streaming_capture_tail",
-            "command": headlamp_core::diagnostics_trace::command_summary_json(&cmd),
-        }),
-    );
-    let mut adapter = adapters::NextestAdapter::new(repo_root, args.only_failures);
-    let (exit_code, tail) =
-        run_streaming_capture_tail_merged(cmd, &live_progress, &mut adapter, 1024 * 1024)?;
-    live_progress.increment_done(1);
-    live_progress.finish();
-    let adapters::NextestAdapter { parser, .. } = adapter;
-    let model = parser
-        .finalize()
-        .unwrap_or_else(|| empty_test_run_model_for_exit_code(exit_code));
-    let elapsed_ms = run_start.elapsed().as_millis() as u64;
-    let model = apply_wall_clock_run_time_ms(model, elapsed_ms);
-    Ok(NextestRunOutput {
-        exit_code,
-        model,
-        tail,
-    })
-}
-
-fn build_nextest_command(
-    repo_root: &Path,
-    args: &ParsedArgs,
-    session: &crate::session::RunSession,
-    extra_cargo_args: &[String],
-) -> std::process::Command {
-    let mut cmd = std::process::Command::new("cargo");
-    cmd.args(runner_args::build_nextest_run_args(
-        None,
-        args,
-        extra_cargo_args,
-    ));
-    cmd.current_dir(repo_root);
-    paths::apply_headlamp_cargo_target_dir(&mut cmd, args.keep_artifacts, repo_root, session);
-    cmd.env("NEXTEST_EXPERIMENTAL_LIBTEST_JSON", "1");
-    cmd.env("RUST_BACKTRACE", "1");
-    cmd.env("RUST_LIB_BACKTRACE", "1");
-    cmd
-}
-
 fn maybe_print_rendered_model(
     repo_root: &Path,
     args: &ParsedArgs,
@@ -506,7 +463,7 @@ fn maybe_print_lcov_and_adjust_exit(
         if !expected_lcov_path.exists() {
             eprintln!(
                 "headlamp: coverage was requested but Rust lcov was not generated (missing {}). \
-Install `cargo-llvm-cov` and re-run.",
+Install `llvm-tools-preview` (rustup) and re-run.",
                 expected_lcov_path.to_string_lossy()
             );
             return 1;

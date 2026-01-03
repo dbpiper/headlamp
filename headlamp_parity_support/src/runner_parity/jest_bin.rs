@@ -3,6 +3,7 @@ use std::path::{Path, PathBuf};
 pub fn ensure_repo_local_jest_bin(repo: &Path) {
     // Jest runner requires repo-local node_modules/.bin/jest, but we never check in node_modules.
     // Mirror CI: keep deps elsewhere, and drop a tiny repo-local shim that delegates to that jest.
+    ensure_node_modules_dir(repo);
     let jest_name = if cfg!(windows) { "jest.cmd" } else { "jest" };
     let Some(jest_src) = find_shared_jest_bin(jest_name) else {
         return;
@@ -10,6 +11,17 @@ pub fn ensure_repo_local_jest_bin(repo: &Path) {
     let jest_dst = repo.join("node_modules").join(".bin").join(jest_name);
     ensure_parent_dir(repo, "jest", &jest_dst);
     write_jest_shim(repo, &jest_src, &jest_dst);
+}
+
+fn ensure_node_modules_dir(repo: &Path) {
+    let node_modules = repo.join("node_modules");
+    if let Ok(metadata) = std::fs::symlink_metadata(&node_modules)
+        && !metadata.is_dir()
+    {
+        let _ = std::fs::remove_file(&node_modules);
+        let _ = std::fs::remove_dir_all(&node_modules);
+    }
+    let _ = std::fs::create_dir_all(&node_modules);
 }
 
 fn find_shared_jest_bin(jest_name: &str) -> Option<PathBuf> {
@@ -52,6 +64,10 @@ fn write_jest_shim(repo: &Path, jest_src: &Path, jest_dst: &Path) {
     #[cfg(unix)]
     {
         use std::os::unix::fs::PermissionsExt;
+        // If the fixture repo was created in another environment (e.g. CI), it may contain a
+        // repo-local `jest` shim that is a symlink to a now-nonexistent path. Remove it so we can
+        // write a fresh shim pointing at this machine's shared jest.
+        let _ = std::fs::remove_file(jest_dst);
         let script = format!(
             "#!/usr/bin/env bash\nexec \"{}\" \"$@\"\n",
             jest_src.to_string_lossy()

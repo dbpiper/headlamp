@@ -26,7 +26,7 @@ fn assert_has_standard_failure_sections(runner: &str, normalized: &str) {
 }
 
 #[test]
-fn parity_runner_failure_output_has_standard_sections_all_four() {
+fn parity_runner_failure_output_has_standard_sections_all_runners() {
     let lease = lease_repo_for_case("failure-output-sections");
     let repo = lease.path();
 
@@ -49,6 +49,7 @@ fn parity_runner_failure_output_has_standard_sections_all_four() {
     let headlamp_bin = crate::parity_support::runner_parity::runner_parity_headlamp_bin();
     let runners = [
         ("jest", &["tests/sum_fail_test.js"][..]),
+        ("headlamp", &["tests/sum_fail_test.rs"][..]),
         ("cargo-test", &["tests/sum_fail_test.rs"][..]),
         ("cargo-nextest", &["tests/sum_fail_test.rs"][..]),
         ("pytest", &["tests/sum_fail_test.py"][..]),
@@ -68,15 +69,16 @@ fn parity_runner_failure_output_has_standard_sections_all_four() {
 }
 
 #[test]
-fn parity_runner_only_failures_all_four() {
+fn parity_runner_only_failures_all_runners() {
     let lease = lease_repo_for_case("onlyFailures");
     let repo = lease.path();
     let args = ["--onlyFailures"];
-    run_all_four_snapshot(
+    run_all_runners_snapshot(
         repo,
-        "onlyFailures all four",
+        "onlyFailures all runners",
         &[
             ("jest", &args),
+            ("headlamp", &args),
             ("cargo-test", &args),
             ("cargo-nextest", &args),
             ("pytest", &args),
@@ -85,15 +87,16 @@ fn parity_runner_only_failures_all_four() {
 }
 
 #[test]
-fn parity_runner_show_logs_all_four() {
+fn parity_runner_show_logs_all_runners() {
     let lease = lease_repo_for_case("showLogs");
     let repo = lease.path();
     let args = ["--showLogs"];
-    run_all_four_snapshot(
+    run_all_runners_snapshot(
         repo,
-        "showLogs all four",
+        "showLogs all runners",
         &[
             ("jest", &args),
+            ("headlamp", &args),
             ("cargo-test", &args),
             ("cargo-nextest", &args),
             ("pytest", &args),
@@ -102,7 +105,7 @@ fn parity_runner_show_logs_all_four() {
 }
 
 #[test]
-fn parity_runner_changed_staged_all_four() {
+fn parity_runner_changed_staged_all_runners() {
     let lease = lease_repo_for_case("changed-staged");
     let repo = lease.path();
     append_file(&repo.join("src/sum.js"), "\n");
@@ -110,11 +113,12 @@ fn parity_runner_changed_staged_all_four() {
     append_file(&repo.join("src/sum.py"), "\n");
     run_git(repo, &["add", "-A"]);
     let args = ["--changed=staged"];
-    run_all_four_snapshot(
+    run_all_runners_snapshot(
         repo,
-        "changed=staged all four",
+        "changed=staged all runners",
         &[
             ("jest", &args),
+            ("headlamp", &args),
             ("cargo-test", &args),
             ("cargo-nextest", &args),
             ("pytest", &args),
@@ -123,18 +127,19 @@ fn parity_runner_changed_staged_all_four() {
 }
 
 #[test]
-fn parity_runner_changed_unstaged_all_four() {
+fn parity_runner_changed_unstaged_all_runners() {
     let lease = lease_repo_for_case("changed-unstaged");
     let repo = lease.path();
     append_file(&repo.join("src/sum.js"), "\n");
     append_file(&repo.join("src/sum.rs"), "\n");
     append_file(&repo.join("src/sum.py"), "\n");
     let args = ["--changed=unstaged"];
-    run_all_four_snapshot(
+    run_all_runners_snapshot(
         repo,
-        "changed=unstaged all four",
+        "changed=unstaged all runners",
         &[
             ("jest", &args),
+            ("headlamp", &args),
             ("cargo-test", &args),
             ("cargo-nextest", &args),
             ("pytest", &args),
@@ -143,7 +148,7 @@ fn parity_runner_changed_unstaged_all_four() {
 }
 
 #[test]
-fn parity_runner_changed_branch_all_four() {
+fn parity_runner_changed_branch_all_runners() {
     let lease = lease_repo_for_case("changed-branch");
     let repo = lease.path();
     append_file(&repo.join("src/sum.js"), "\n");
@@ -152,11 +157,12 @@ fn parity_runner_changed_branch_all_four() {
     run_git(repo, &["add", "-A"]);
     run_git(repo, &["commit", "-q", "-m", "branch change"]);
     let args = ["--changed=branch"];
-    run_all_four_snapshot(
+    run_all_runners_snapshot(
         repo,
-        "changed=branch all four",
+        "changed=branch all runners",
         &[
             ("jest", &args),
+            ("headlamp", &args),
             ("cargo-test", &args),
             ("cargo-nextest", &args),
             ("pytest", &args),
@@ -165,7 +171,7 @@ fn parity_runner_changed_branch_all_four() {
 }
 
 #[test]
-fn parity_runner_changed_last_commit_all_four() {
+fn parity_runner_changed_last_commit_all_runners() {
     let lease = lease_repo_for_case("changed-last-commit");
     let repo = lease.path();
     append_file(&repo.join("src/sum.js"), "\n");
@@ -174,11 +180,12 @@ fn parity_runner_changed_last_commit_all_four() {
     run_git(repo, &["add", "-A"]);
     run_git(repo, &["commit", "-q", "-m", "last commit change"]);
     let args = ["--changed=lastCommit"];
-    run_all_four_snapshot(
+    run_all_runners_snapshot(
         repo,
-        "changed=lastCommit all four",
+        "changed=lastCommit all runners",
         &[
             ("jest", &args),
+            ("headlamp", &args),
             ("cargo-test", &args),
             ("cargo-nextest", &args),
             ("pytest", &args),

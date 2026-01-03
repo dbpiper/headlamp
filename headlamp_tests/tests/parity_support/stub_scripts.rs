@@ -53,14 +53,6 @@ if [[ "$sub" == "nextest" ]]; then
   fi
 fi
 
-if [[ "$sub" == "llvm-cov" ]]; then
-  if [[ "${1:-}" == "--version" ]]; then
-    echo "cargo-llvm-cov 0.0.0"
-    exit 0
-  fi
-  exit 0
-fi
-
 echo "unsupported cargo stub subcommand: $sub" >&2
 exit 2
 "#;

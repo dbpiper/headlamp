@@ -29,26 +29,7 @@ pub(super) fn has_cargo_nextest(
         .is_some_and(|o| o.status.success())
 }
 
-pub(super) fn has_cargo_llvm_cov(
-    repo_root: &Path,
-    args: &ParsedArgs,
-    session: &crate::session::RunSession,
-) -> bool {
-    duct_cmd("cargo", ["llvm-cov", "--version"])
-        .dir(repo_root)
-        .env(
-            "CARGO_TARGET_DIR",
-            headlamp_cargo_target_dir_for_duct(args.keep_artifacts, repo_root, session),
-        )
-        .stdout_capture()
-        .stderr_capture()
-        .unchecked()
-        .run()
-        .ok()
-        .is_some_and(|o| o.status.success())
-}
-
-pub(super) fn print_lcov(
+pub(crate) fn print_lcov(
     repo_root: &Path,
     args: &ParsedArgs,
     session: &crate::session::RunSession,

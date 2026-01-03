@@ -32,14 +32,18 @@ struct SuiteBuilder {
 pub(super) struct PytestAdapter {
     show_logs: bool,
     emit_raw_lines: bool,
+    only_failures: bool,
+    started_at_by_nodeid: BTreeMap<String, std::time::Instant>,
     suites: BTreeMap<String, SuiteBuilder>,
 }
 
 impl PytestAdapter {
-    pub(super) fn new(show_logs: bool, emit_raw_lines: bool) -> Self {
+    pub(super) fn new(show_logs: bool, emit_raw_lines: bool, only_failures: bool) -> Self {
         Self {
             show_logs,
             emit_raw_lines,
+            only_failures,
+            started_at_by_nodeid: BTreeMap::new(),
             suites: BTreeMap::new(),
         }
     }
@@ -196,11 +200,40 @@ impl StreamAdapter for PytestAdapter {
         if let Some(evt) = event {
             if evt.type_name == "case_start" {
                 if !evt.nodeid.trim().is_empty() {
+                    self.started_at_by_nodeid
+                        .entry(evt.nodeid.trim().to_string())
+                        .or_insert_with(std::time::Instant::now);
                     actions.push(StreamAction::SetProgressLabel(
                         evt.nodeid.trim().to_string(),
                     ));
                 }
                 return actions;
+            }
+            let nodeid = evt.nodeid.trim().to_string();
+            let file = nodeid.split("::").next().unwrap_or("").to_string();
+            let title = nodeid
+                .split("::")
+                .last()
+                .unwrap_or(nodeid.as_str())
+                .to_string();
+            let duration = evt
+                .duration
+                .and_then(|sec| (sec >= 0.0).then(|| std::time::Duration::from_secs_f64(sec)))
+                .or_else(|| {
+                    self.started_at_by_nodeid
+                        .get(nodeid.as_str())
+                        .map(|t| t.elapsed())
+                });
+            let outcome = evt.outcome.clone().unwrap_or_else(|| "unknown".to_string());
+            let should_print = !self.only_failures || outcome.eq_ignore_ascii_case("failed");
+            if should_print {
+                let line = crate::live_progress::render_finished_test_line(
+                    crate::live_progress::outcome_from_status(outcome.as_str()),
+                    duration,
+                    file.as_str(),
+                    title.as_str(),
+                );
+                actions.push(StreamAction::PrintStdout(line));
             }
             self.push_event(evt);
         }

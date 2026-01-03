@@ -1,19 +1,19 @@
-### Headlamp
+# Headlamp
 
-Headlamp is a **Rust-powered test UX CLI**: smarter test selection, cleaner output, and a unified workflow across **jest**, **cargo test**,**cargo nextest** and **pytest**.
+Headlamp is a **Rust-powered test UX CLI**: smarter test selection, cleaner output, and a unified workflow across **jest**, **Rust tests (headlamp runner)**, **cargo test**, **cargo nextest** and **pytest**.
 
 Headlamp is useful when you want a consistent way to run tests across different projects and keep feedback fast as your repo grows. It can select tests based on what changed, surface failures in a readable format, and keep common defaults (like runner args and coverage settings) in a single config file so your team doesn’t have to remember a long list of flags.
 
-### Why Headlamp
+## Why Headlamp
 
-- **One CLI, many runners**: `--runner=jest|cargo-nextest|cargo-test|pytest`
+- **One CLI, many runners**: `--runner=headlamp|jest|cargo-nextest|cargo-test|pytest`
 - **Selection that scales**: run what changed (`--changed`) and what’s related (dependency-graph driven)
 - **Coverage-first UX**: coverage output you can actually read
 - **Fast**: Rust core + caching
 
-### Installation
+## Installation
 
-#### npm (Node.js projects)
+### npm (Node.js projects)
 
 Requirements:
 
@@ -31,7 +31,7 @@ Run:
 npx headlamp --help
 ```
 
-#### Cargo (Rust projects)
+### Cargo (Rust projects)
 
 Install from crates.io:
 
@@ -39,9 +39,9 @@ Install from crates.io:
 cargo install headlamp
 ```
 
-### Quickstart
+## Quickstart
 
-#### Jest
+### Jest
 
 ```bash
 npx headlamp --runner=jest
@@ -53,25 +53,50 @@ Forward runner args after `--` (unknown args are forwarded):
 npx headlamp --runner=jest -- --runInBand
 ```
 
-#### Cargo nextest / cargo test
+### Cargo nextest / cargo test
 
 ```bash
 headlamp --runner=cargo-nextest
 headlamp --runner=cargo-test
 ```
 
-### CLI
+### Headlamp (native Rust runner)
+
+Runs Rust test binaries directly (built via `cargo test --no-run`), parses libtest output, and renders Headlamp’s unified test UI.
+
+```bash
+headlamp --runner=headlamp
+```
+
+## Rust coverage requirements
+
+Rust coverage (`--coverage`) is collected via LLVM tools from `rustup` (**no `cargo-llvm-cov` dependency**).
+
+- Install LLVM tools (stable):
+
+```bash
+rustup component add llvm-tools-preview
+```
+
+- Optional (branch coverage when available): install nightly toolchain + LLVM tools:
+
+```bash
+rustup toolchain install nightly
+rustup component add llvm-tools-preview --toolchain nightly
+```
+
+## CLI
 
 Run `headlamp --help` to see the up-to-date flags list.
 
 Highlights:
 
-- **runners**: `--runner=jest|pytest|cargo-nextest|cargo-test`
+- **runners**: `--runner=headlamp|jest|pytest|cargo-nextest|cargo-test`
 - **changed selection**: `--changed=all|staged|unstaged|branch|lastCommit|lastRelease`
   - `lastRelease` selects changes since the previous stable SemVer release tag
 - **coverage**: `--coverage` plus `--coverage-ui`, `--coverage.detail`, thresholds, etc.
 
-### Configuration
+## Configuration
 
 Headlamp discovers config from your repo root. Supported file names:
 
@@ -86,7 +111,7 @@ Headlamp discovers config from your repo root. Supported file names:
 - `headlamp.config.yml`
 - `.headlamprc` plus `.headlamprc.*` variants (`.json`, `.json5`, `.jsonc`, `.yaml`, `.yml`, `.js`, `.cjs`, `.mjs`, `.ts`)
 
-#### Example: `headlamp.config.ts`
+### Example: `headlamp.config.ts`
 
 Rules:
 
@@ -120,14 +145,14 @@ export default {
 };
 ```
 
-### Contributing
+## Contributing
 
 Pull requests are welcome. For large changes, open an issue first to align on direction.
 
-### Support
+## Support
 
 - Bug reports and feature requests: GitHub Issues
 
-### License
+## License
 
 MIT — see `LICENSE`.

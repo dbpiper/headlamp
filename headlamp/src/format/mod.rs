@@ -11,6 +11,7 @@ pub mod details;
 pub mod failure_diagnostics;
 pub mod fns;
 pub mod infra_failure;
+pub mod libtest_json;
 pub mod nextest;
 pub mod paths;
 pub mod raw_jest;

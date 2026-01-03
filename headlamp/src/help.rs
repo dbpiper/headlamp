@@ -2,7 +2,7 @@ pub fn help_text() -> &'static str {
     r#"headlamp
 
 Usage:
-  headlamp [--runner=<jest|pytest|cargo-nextest|cargo-test>] [--coverage] [--changed[=<mode>]] [args...]
+  headlamp [--runner=<jest|pytest|headlamp|cargo-nextest|cargo-test>] [--coverage] [--changed[=<mode>]] [args...]
 
 Flags:
   -h, --help                                Print help

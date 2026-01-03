@@ -29,7 +29,7 @@ pub fn is_stack_line(line: &str) -> bool {
 
 pub fn first_test_location(lines: &[String], project_hint: &Regex) -> Option<String> {
     let re1 = Regex::new(r"\(([^()]+?:\d+:\d+)\)").unwrap();
-    let re2 = Regex::new(r"\s([\w./-]+?:\d+:\d+)\s*$").unwrap();
+    let re2 = Regex::new(r"(?:^|\s)([\w./-]+?:\d+:\d+)\s*$").unwrap();
     let py = Regex::new(r#"^\s*File\s+"([^"]+)",\s+line\s+(\d+)"#).unwrap();
     for ln in lines {
         if let Some(caps) = py.captures(ln)

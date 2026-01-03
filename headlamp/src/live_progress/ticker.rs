@@ -31,6 +31,7 @@ struct PlainTickerShared {
 
 impl LiveProgress {
     pub fn start(total_units: usize, mode: LiveProgressMode) -> Self {
+        let started_at = Instant::now();
         let stop = Arc::new(AtomicBool::new(false));
         let done_units = Arc::new(AtomicUsize::new(0));
         let current_label = Arc::new(Mutex::new(String::new()));
@@ -51,7 +52,7 @@ impl LiveProgress {
             spinner_index: Arc::clone(&spinner_index),
             last_frame_lines: Arc::clone(&last_frame_lines),
             write_lock: Arc::clone(&write_lock),
-            started_at: Instant::now(),
+            started_at,
             total_units,
         };
 
@@ -72,8 +73,11 @@ impl LiveProgress {
             last_event_at,
             last_runner_stdout_hint,
             last_runner_stderr_hint,
+            spinner_index,
             last_frame_lines,
             write_lock,
+            started_at,
+            total_units,
             ticker,
         }
     }
@@ -137,7 +141,8 @@ impl LiveProgress {
             }
         }
         if let Ok(_guard) = self.write_lock.lock() {
-            if self.mode != LiveProgressMode::Off && std::io::stdout().is_terminal() {
+            let is_tty = std::io::stdout().is_terminal();
+            if self.mode != LiveProgressMode::Off && is_tty {
                 let prev_lines = self.last_frame_lines.load(Ordering::SeqCst);
                 super::frame::clear_previous_frame(prev_lines);
                 self.last_frame_lines.store(0, Ordering::SeqCst);
@@ -145,6 +150,9 @@ impl LiveProgress {
             let _ = std::io::stdout().write_all(line.as_bytes());
             let _ = std::io::stdout().write_all("\n".as_bytes());
             let _ = std::io::stdout().flush();
+            if self.mode == LiveProgressMode::Interactive && is_tty {
+                self.redraw_interactive_frame();
+            }
         }
     }
 
@@ -155,7 +163,8 @@ impl LiveProgress {
             }
         }
         if let Ok(_guard) = self.write_lock.lock() {
-            if self.mode != LiveProgressMode::Off && std::io::stdout().is_terminal() {
+            let is_tty = std::io::stdout().is_terminal();
+            if self.mode != LiveProgressMode::Off && is_tty {
                 let prev_lines = self.last_frame_lines.load(Ordering::SeqCst);
                 super::frame::clear_previous_frame(prev_lines);
                 self.last_frame_lines.store(0, Ordering::SeqCst);
@@ -164,6 +173,9 @@ impl LiveProgress {
             let _ = std::io::stderr().write_all(line.as_bytes());
             let _ = std::io::stderr().write_all("\n".as_bytes());
             let _ = std::io::stderr().flush();
+            if self.mode == LiveProgressMode::Interactive && is_tty {
+                self.redraw_interactive_frame();
+            }
         }
     }
 
@@ -183,6 +195,52 @@ impl LiveProgress {
                 let _ = std::io::stdout().flush();
             }
         }
+    }
+}
+
+impl LiveProgress {
+    fn redraw_interactive_frame(&self) {
+        let done = self.done_units.load(Ordering::SeqCst);
+        let label = self
+            .current_label
+            .lock()
+            .ok()
+            .map(|g| g.clone())
+            .unwrap_or_default();
+        let elapsed_seconds = self.started_at.elapsed().as_secs();
+        let idle_seconds = self
+            .last_event_at
+            .lock()
+            .ok()
+            .map(|t| t.elapsed().as_secs())
+            .unwrap_or(elapsed_seconds);
+        let columns = super::frame::terminal_columns();
+        let recent = super::classify::recent_summary(
+            self.last_runner_stdout_hint
+                .lock()
+                .ok()
+                .and_then(|g| g.clone()),
+            self.last_runner_stderr_hint
+                .lock()
+                .ok()
+                .and_then(|g| g.clone()),
+        );
+        let frame = super::frame::render_run_frame_with_columns(super::frame::RenderRunFrameArgs {
+            current_label: &label,
+            done_units: done,
+            total_units: self.total_units.max(1),
+            spinner_index: self.spinner_index.load(Ordering::SeqCst),
+            elapsed_seconds,
+            idle_seconds,
+            recent: &recent,
+            columns,
+        });
+        let _ = std::io::stdout().write_all(frame.as_bytes());
+        let _ = std::io::stdout().flush();
+        self.last_frame_lines.store(
+            super::frame::frame_physical_line_count(&frame, columns),
+            Ordering::SeqCst,
+        );
     }
 }
 

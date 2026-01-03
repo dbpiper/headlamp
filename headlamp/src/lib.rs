@@ -26,6 +26,8 @@ pub mod session;
 pub mod streaming;
 pub mod watch;
 
+pub mod rust_runner;
+
 pub mod args;
 pub mod config;
 mod config_ts;
@@ -36,6 +38,7 @@ pub mod format;
 pub mod help;
 pub(crate) mod profile;
 pub mod project;
+pub(crate) mod rust_coverage;
 pub(crate) mod rust_parse;
 pub mod selection;
 pub mod test_model;

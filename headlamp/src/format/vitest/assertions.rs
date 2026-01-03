@@ -289,16 +289,18 @@ fn render_message_section_like_legacy(
         .unwrap_or_else(|| fallback_message_lines(messages_array));
 
     let filtered_body = if suppress_diff {
+        let is_diff_line = |ln: &str| {
+            let trimmed = ln.trim_start();
+            trimmed.starts_with("Expected:")
+                || trimmed.starts_with("Received:")
+                || trimmed.starts_with("Difference:")
+                || trimmed.starts_with("- Expected")
+                || trimmed.starts_with("+ Received")
+        };
         body_lines
-            .into_iter()
-            .filter(|ln| {
-                let trimmed = ln.trim_start();
-                !(trimmed.starts_with("Expected:")
-                    || trimmed.starts_with("Received:")
-                    || trimmed.starts_with("Difference:")
-                    || trimmed.starts_with("- Expected")
-                    || trimmed.starts_with("+ Received"))
-            })
+            .iter()
+            .filter(|ln| !is_diff_line(ln.as_str()))
+            .cloned()
             .collect::<Vec<_>>()
     } else {
         body_lines

@@ -3,6 +3,7 @@ use std::path::Path;
 use headlamp_core::format::cargo_test::{CargoTestStreamEvent, CargoTestStreamParser};
 use headlamp_core::format::nextest::{NextestStreamParser, NextestStreamUpdate};
 
+use crate::live_progress::{outcome_from_status, render_finished_test_line};
 use crate::streaming::{OutputStream, StreamAction, StreamAdapter};
 
 #[derive(Debug)]
@@ -24,7 +25,16 @@ impl NextestAdapter {
         if !should_print {
             return vec![];
         }
-        vec![StreamAction::SetProgressLabel(update.suite_path.clone())]
+        let line = render_finished_test_line(
+            outcome_from_status(update.status.as_str()),
+            update.duration,
+            update.suite_path.as_str(),
+            update.test_name.as_str(),
+        );
+        vec![
+            StreamAction::SetProgressLabel(update.suite_path.clone()),
+            StreamAction::PrintStdout(line),
+        ]
     }
 }
 
@@ -32,6 +42,9 @@ impl NextestAdapter {
 pub(super) struct CargoTestAdapter {
     pub(super) only_failures: bool,
     pub(super) parser: CargoTestStreamParser,
+    last_pending_test_name: Option<String>,
+    started_at_by_test: std::collections::BTreeMap<String, std::time::Instant>,
+    current_suite_path: Option<String>,
 }
 
 impl CargoTestAdapter {
@@ -39,29 +52,42 @@ impl CargoTestAdapter {
         Self {
             only_failures,
             parser: CargoTestStreamParser::new(repo_root),
+            last_pending_test_name: None,
+            started_at_by_test: std::collections::BTreeMap::new(),
+            current_suite_path: None,
         }
     }
 
     fn actions_for_event(&mut self, event: CargoTestStreamEvent) -> Vec<StreamAction> {
         match event {
             CargoTestStreamEvent::SuiteStarted { suite_path } => {
+                self.current_suite_path = Some(suite_path.clone());
                 vec![StreamAction::SetProgressLabel(suite_path)]
             }
             CargoTestStreamEvent::TestFinished {
                 suite_path,
                 test_name,
                 status,
+                duration,
             } => {
                 if self.only_failures && status != "failed" {
                     return vec![];
                 }
-                if test_name.trim().is_empty() {
-                    vec![StreamAction::SetProgressLabel(suite_path)]
-                } else {
-                    vec![StreamAction::SetProgressLabel(format!(
-                        "{suite_path}::{test_name}"
-                    ))]
-                }
+                let duration = duration.or_else(|| {
+                    self.started_at_by_test
+                        .remove(test_name.as_str())
+                        .map(|started_at| started_at.elapsed())
+                });
+                let line = render_finished_test_line(
+                    outcome_from_status(status.as_str()),
+                    duration,
+                    suite_path.as_str(),
+                    test_name.as_str(),
+                );
+                vec![
+                    StreamAction::SetProgressLabel(format!("{suite_path}::{test_name}")),
+                    StreamAction::PrintStdout(line),
+                ]
             }
             CargoTestStreamEvent::OutputLine {
                 suite_path: _,
@@ -69,6 +95,59 @@ impl CargoTestAdapter {
                 line: _,
             } => vec![],
         }
+    }
+
+    fn maybe_track_pending_test_start(&mut self, line: &str) {
+        // libtest pretty output can emit:
+        // - `test name ...` then later `ok` / `FAILED`
+        // - or `test name ... ok` in one line
+        let trimmed = line.trim();
+        if !trimmed.starts_with("test ") {
+            return;
+        }
+        let rest = trimmed.strip_prefix("test ").unwrap_or(trimmed);
+        let Some((name, status)) = rest.split_once(" ... ") else {
+            return;
+        };
+        let name = name.trim();
+        if name.is_empty() {
+            return;
+        }
+        if status.trim().is_empty() {
+            self.started_at_by_test
+                .entry(name.to_string())
+                .or_insert_with(std::time::Instant::now);
+            self.last_pending_test_name = Some(name.to_string());
+        }
+    }
+
+    fn status_only_actions(&mut self, line: &str) -> Vec<StreamAction> {
+        let trimmed = line.trim();
+        if trimmed != "ok" && trimmed != "FAILED" {
+            return vec![];
+        }
+        let Some(name) = self.last_pending_test_name.take() else {
+            return vec![];
+        };
+        let duration = self
+            .started_at_by_test
+            .remove(name.as_str())
+            .map(|t| t.elapsed());
+        let status = if trimmed == "ok" { "passed" } else { "failed" };
+        if self.only_failures && status != "failed" {
+            return vec![];
+        }
+        let suite_path = self.current_suite_path.clone().unwrap_or_default();
+        let line = render_finished_test_line(
+            outcome_from_status(status),
+            duration,
+            suite_path.as_str(),
+            name.as_str(),
+        );
+        vec![
+            StreamAction::SetProgressLabel(format!("{suite_path}::{name}")),
+            StreamAction::PrintStdout(line),
+        ]
     }
 }
 
@@ -91,6 +170,8 @@ impl StreamAdapter for CargoTestAdapter {
             return vec![];
         }
         let mut actions: Vec<StreamAction> = vec![];
+        self.maybe_track_pending_test_start(line);
+        actions.extend(self.status_only_actions(line));
         if is_ci_env && !is_tty_output && stream == OutputStream::Stderr && has_useful_status {
             actions.extend([
                 StreamAction::SetProgressLabel(format!("cargo: {}", line.trim())),

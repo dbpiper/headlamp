@@ -77,6 +77,9 @@ pub fn shared_real_runner_repo() -> PathBuf {
             write_real_runner_repo(&repo);
             mark_repo_initialized(&repo);
         }
+        // Even for already-initialized fixture repos, ensure runner shims are present.
+        // This prevents stale fixture state from causing "missing runner" failures.
+        ensure_repo_local_jest_bin(&repo);
         repo
     })
     .clone()

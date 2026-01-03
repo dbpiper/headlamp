@@ -27,6 +27,20 @@ fn make_file_with_long_uncovered_list() -> FullFileCoverage {
     }
 }
 
+fn make_file(rel_path: &str) -> FullFileCoverage {
+    FullFileCoverage {
+        abs_path: format!("/abs/path/to/{rel_path}"),
+        rel_path: rel_path.to_string(),
+        statement_hits: HashMap::new(),
+        statement_map: HashMap::new(),
+        function_hits: BTreeMap::new(),
+        function_map: BTreeMap::new(),
+        branch_hits: BTreeMap::new(),
+        branch_map: BTreeMap::new(),
+        line_hits: BTreeMap::from([(1, 0)]),
+    }
+}
+
 #[test]
 fn istanbul_text_report_truncates_uncovered_column_to_avoid_overflow() {
     let (report, _totals) =
@@ -48,5 +62,24 @@ fn istanbul_text_report_truncates_uncovered_column_to_avoid_overflow() {
     assert!(
         report.contains("..."),
         "expected ellipsis truncation in uncovered column, but got:\n{report}"
+    );
+}
+
+#[test]
+fn istanbul_text_report_file_column_disambiguates_same_basename_files() {
+    let files = [
+        make_file("crates/a/src/op.rs"),
+        make_file("crates/b/src/op.rs"),
+    ];
+    let (report, _totals) = render_istanbul_text_report_with_totals(&files, 120);
+
+    let stripped = strip_ansi_simple(&report);
+    assert!(
+        stripped.contains("crates/a/src/op.rs") || stripped.contains("...a/src/op.rs"),
+        "expected file column to include disambiguating path for crates/a, but got:\n{stripped}"
+    );
+    assert!(
+        stripped.contains("crates/b/src/op.rs") || stripped.contains("...b/src/op.rs"),
+        "expected file column to include disambiguating path for crates/b, but got:\n{stripped}"
     );
 }

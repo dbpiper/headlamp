@@ -6,7 +6,7 @@ use headlamp_parity_support::runner_parity::{
 };
 
 #[test]
-fn parity_env_matrix_all_four_no_hang_pass_and_fail() {
+fn parity_env_matrix_no_hang_pass_and_fail() {
     let repo = shared_real_runner_repo();
     let headlamp_bin = runner_parity_headlamp_bin();
 
@@ -17,6 +17,7 @@ fn parity_env_matrix_all_four_no_hang_pass_and_fail() {
     let runners_pass: Vec<(RunnerId, &[&str])> = vec![
         (RunnerId::Jest, &["tests/sum_pass_test.js"]),
         (RunnerId::Pytest, &["tests/sum_pass_test.py"]),
+        (RunnerId::Headlamp, &["tests/sum_pass_test.rs"]),
         (RunnerId::CargoTest, &["tests/sum_pass_test.rs"]),
         (RunnerId::CargoNextest, &["tests/sum_pass_test.rs"]),
     ];
@@ -41,6 +42,7 @@ fn parity_env_matrix_all_four_no_hang_pass_and_fail() {
     let runners_fail: Vec<(RunnerId, &[&str])> = vec![
         (RunnerId::Jest, &["tests/sum_fail_test.js"]),
         (RunnerId::Pytest, &["tests/sum_fail_test.py"]),
+        (RunnerId::Headlamp, &["tests/sum_fail_test.rs"]),
         (RunnerId::CargoTest, &["tests/sum_fail_test.rs"]),
         (RunnerId::CargoNextest, &["tests/sum_fail_test.rs"]),
     ];

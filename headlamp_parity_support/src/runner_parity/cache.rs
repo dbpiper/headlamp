@@ -89,6 +89,9 @@ fn run_and_normalize(
     args: &[&str],
     extra_env: &[(&str, String)],
 ) -> CachedRunnerParitySide {
+    if runner == RunnerId::Jest {
+        super::jest_bin::ensure_repo_local_jest_bin(repo);
+    }
     let (spec, exit, raw) = {
         let _timing = crate::timing::TimingGuard::start(format!(
             "runner exec case_repo={} runner={}",

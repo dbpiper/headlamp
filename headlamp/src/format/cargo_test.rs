@@ -1,5 +1,6 @@
 use std::borrow::Cow;
 use std::path::Path;
+use std::time::Duration;
 
 use crate::format::unstructured_engine::{
     ParsedTestLine, UnstructuredDialect, UnstructuredStreamEvent, UnstructuredStreamParser,
@@ -114,23 +115,51 @@ fn parse_test_line_extended(line: &str) -> Option<ParsedTestLine> {
     }
     let rest = trimmed.strip_prefix("test ")?;
     let (name, rest) = rest.split_once(" ... ")?;
-    let status = rest.trim();
-    if status == "ok" {
+    let rest_trimmed = rest.trim();
+    let (status_word, duration) = split_status_and_report_time(rest_trimmed);
+    if status_word == "ok" {
         return Some(ParsedTestLine::Completed {
             name: name.to_string(),
             status: "passed".to_string(),
+            duration,
         });
     }
-    if status == "FAILED" {
+    if status_word == "FAILED" {
         return Some(ParsedTestLine::Completed {
             name: name.to_string(),
             status: "failed".to_string(),
+            duration,
+        });
+    }
+    if status_word == "ignored" {
+        return Some(ParsedTestLine::Completed {
+            name: name.to_string(),
+            status: "pending".to_string(),
+            duration,
         });
     }
     Some(ParsedTestLine::Pending {
         name: name.to_string(),
         inline_output: None,
     })
+}
+
+fn split_status_and_report_time(rest: &str) -> (&str, Option<Duration>) {
+    let status_word = rest.split_whitespace().next().unwrap_or(rest).trim();
+    let duration = parse_report_time_suffix(rest);
+    (status_word, duration)
+}
+
+fn parse_report_time_suffix(rest: &str) -> Option<Duration> {
+    let open = rest.rfind('(')?;
+    let close = rest[open..].find(')')? + open;
+    let inside = rest[open.saturating_add(1)..close].trim();
+    let seconds_text = inside.strip_suffix('s')?.trim();
+    seconds_text
+        .parse::<f64>()
+        .ok()
+        .filter(|sec| *sec >= 0.0)
+        .map(Duration::from_secs_f64)
 }
 
 fn parse_status_only_line(line: &str) -> Option<String> {
@@ -178,7 +207,106 @@ fn parse_panic_block(lines: &[String], start_index: usize) -> Option<(String, us
     }
 
     let consumed = index.saturating_sub(start_index);
-    Some((name, consumed, collected.join("\n")))
+    Some((
+        name,
+        consumed,
+        extract_failure_message_from_panic_block(&collected),
+    ))
+}
+
+fn should_skip_panic_block_line(trimmed: &str) -> bool {
+    trimmed.is_empty() || trimmed.starts_with("note: run with `RUST_BACKTRACE=")
+}
+
+fn is_panic_message_noise_line(trimmed: &str) -> bool {
+    trimmed == "stack backtrace:"
+        || trimmed
+            == "note: run with `RUST_BACKTRACE=1` environment variable to display a backtrace"
+}
+
+fn push_location_line_from_panic_headline(out: &mut Vec<String>, trimmed: &str) -> bool {
+    let Some((_prefix, rest)) = trimmed.split_once("' panicked at ") else {
+        return false;
+    };
+    let location = rest.trim();
+    if !location.is_empty() {
+        out.push(format!("panicked at {}", location.trim()));
+    }
+    true
+}
+
+fn push_rust_assertion_line(out: &mut Vec<String>, trimmed: &str) -> bool {
+    if trimmed.starts_with("assertion ") && trimmed.contains(" failed") {
+        out.push(trimmed.to_string());
+        true
+    } else {
+        false
+    }
+}
+
+fn is_left_right_line(trimmed: &str) -> bool {
+    let stripped = trimmed.trim_start();
+    stripped.starts_with("left: ") || stripped.starts_with("right: ")
+}
+
+fn first_non_empty_stripped_line(lines: &[String]) -> String {
+    lines
+        .iter()
+        .map(|line| crate::format::stacks::strip_ansi_simple(line))
+        .map(|line| line.trim_end().to_string())
+        .find(|line| !line.trim().is_empty())
+        .unwrap_or_default()
+}
+
+fn extract_failure_message_from_panic_block(lines: &[String]) -> String {
+    let mut out: Vec<String> = vec![];
+
+    let mut had_assertion_line = false;
+    let mut had_left_right = false;
+
+    for raw in lines {
+        let stripped = crate::format::stacks::strip_ansi_simple(raw);
+        let trimmed = stripped.trim_end();
+        if should_skip_panic_block_line(trimmed) {
+            continue;
+        }
+
+        if push_location_line_from_panic_headline(&mut out, trimmed) {
+            continue;
+        }
+
+        if push_rust_assertion_line(&mut out, trimmed) {
+            had_assertion_line = true;
+            continue;
+        }
+
+        if is_left_right_line(trimmed) {
+            had_left_right = true;
+            out.push(trimmed.to_string());
+            continue;
+        }
+
+        if crate::format::stacks::is_stack_line(trimmed) {
+            out.push(trimmed.to_string());
+            continue;
+        }
+
+        // Preserve the panic message body (e.g. assert!() formatted messages) so we don't lose
+        // critical diagnostics like "found N files over limit ...".
+        if !is_panic_message_noise_line(trimmed) && !trimmed.trim().is_empty() {
+            out.push(trimmed.to_string());
+        }
+    }
+
+    if out.is_empty() {
+        return first_non_empty_stripped_line(lines);
+    }
+
+    if had_left_right && !had_assertion_line {
+        out.insert(0, "assertion failed".to_string());
+    }
+
+    out.join("\n")
 }
 
 fn should_keep_as_console_line(line: &str) -> bool {

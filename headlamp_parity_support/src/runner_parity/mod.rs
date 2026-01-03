@@ -20,6 +20,7 @@ use crate::types::{ParityRunGroup, ParityRunSpec};
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
 pub enum RunnerId {
     Jest,
+    Headlamp,
     CargoTest,
     CargoNextest,
     Pytest,
@@ -29,6 +30,7 @@ impl RunnerId {
     pub fn as_runner_flag_value(self) -> &'static str {
         match self {
             RunnerId::Jest => "jest",
+            RunnerId::Headlamp => "headlamp",
             RunnerId::CargoTest => "cargo-test",
             RunnerId::CargoNextest => "cargo-nextest",
             RunnerId::Pytest => "pytest",
@@ -38,6 +40,7 @@ impl RunnerId {
     pub fn as_runner_label(self) -> &'static str {
         match self {
             RunnerId::Jest => "jest",
+            RunnerId::Headlamp => "headlamp",
             RunnerId::CargoTest => "cargo_test",
             RunnerId::CargoNextest => "cargo_nextest",
             RunnerId::Pytest => "pytest",

@@ -5,8 +5,26 @@ use headlamp_core::config::ChangedMode;
 
 use crate::git::changed_files;
 
+fn git_executable() -> std::path::PathBuf {
+    // Some tests temporarily mutate PATH, and Rust tests run in parallel by default. Avoid relying
+    // on PATH lookups here by preferring common absolute git locations.
+    [
+        "/usr/bin/git",
+        "/opt/homebrew/bin/git",
+        "/usr/local/bin/git",
+        "/bin/git",
+    ]
+    .into_iter()
+    .map(std::path::PathBuf::from)
+    .find(|p| p.exists())
+    .unwrap_or_else(|| std::path::PathBuf::from("git"))
+}
+
 fn run_git(repo: &Path, args: &[&str]) {
-    let status = Command::new("git").current_dir(repo).args(args).status();
+    let status = Command::new(git_executable())
+        .current_dir(repo)
+        .args(args)
+        .status();
     assert!(status.is_ok_and(|s| s.success()));
 }
 

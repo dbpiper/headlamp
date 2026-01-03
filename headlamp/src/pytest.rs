@@ -193,7 +193,7 @@ fn run_pytest_streaming(
             .collect::<Vec<_>>()
             .join(" ")
     );
-    let mut adapter = PytestAdapter::new(args.show_logs, args.ci);
+    let mut adapter = PytestAdapter::new(args.show_logs, args.ci, args.only_failures);
     if let Some(label) = adapter.on_start() {
         live_progress.set_current_label(label);
     }

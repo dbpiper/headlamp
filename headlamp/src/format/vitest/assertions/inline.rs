@@ -161,7 +161,26 @@ fn render_assertion_block(messages_array: &[String]) -> Vec<String> {
         .position(|ln| ln.trim_start().starts_with("expect("))
         .unwrap_or(usize::MAX);
     if start == usize::MAX {
-        return vec![];
+        // Rust/libtest: expose a stable "Assertion:" section when we have a classic Rust assert
+        // failure line. This is required for parity with other runners' failure sections.
+        let (expected, received) = extract_expected_received_values(messages_array);
+        if expected.is_some() || received.is_some() {
+            return vec![];
+        }
+        let rust_assertion = stripped
+            .iter()
+            .map(|ln| ln.trim())
+            .find(|ln| ln.starts_with("assertion ") && ln.contains(" failed"));
+        let Some(rust_assertion) = rust_assertion else {
+            return vec![];
+        };
+        let mut out: Vec<String> = vec![format!("    {}", ansi::bold("Assertion:"))];
+        out.push(format!(
+            "    {}",
+            ansi::yellow(&format!("    {rust_assertion}"))
+        ));
+        out.push(String::new());
+        return out;
     }
     let mut out: Vec<String> = vec![format!("    {}", ansi::bold("Assertion:"))];
     let (expected, received) = extract_expected_received_values(messages_array);
@@ -185,10 +204,6 @@ fn render_assertion_block(messages_array: &[String]) -> Vec<String> {
         ));
     }
     if let Some(v) = received {
-        out.push(format!(
-            "    {}",
-            ansi::yellow(&format!("    Received: {v}"))
-        ));
         out.push(format!(
             "    {}",
             ansi::yellow(&format!("    Received: {v}"))

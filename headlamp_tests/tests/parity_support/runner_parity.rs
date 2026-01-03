@@ -59,7 +59,7 @@ pub fn write_stubbed_runner_repo(repo: &Path, scenario: &RunnerParityScenario) {
     write_stubbed_pytest(repo, scenario);
 }
 
-pub fn assert_runner_parity_tty_all_four(
+pub fn assert_runner_parity_tty_all_runners(
     repo: &Path,
     headlamp_bin: &Path,
     case: &str,

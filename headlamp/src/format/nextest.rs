@@ -21,6 +21,7 @@ pub struct NextestStreamUpdate {
     pub suite_path: String,
     pub test_name: String,
     pub status: String,
+    pub duration: Option<std::time::Duration>,
     pub stdout: Option<String>,
 }
 
@@ -202,6 +203,9 @@ impl NextestStreamParser {
             });
         let status = test_status_for_nextest_event(&event);
         let duration_ms = duration_ms_from_exec_time(exec_time);
+        let duration = exec_time
+            .map(|sec| std::time::Duration::from_secs_f64(sec.max(0.0)))
+            .or_else(|| (duration_ms > 0).then(|| std::time::Duration::from_millis(duration_ms)));
         let mut test_case = suite
             .tests
             .remove(&display_name)
@@ -216,6 +220,7 @@ impl NextestStreamParser {
             suite_path,
             test_name: display_name,
             status: status.to_string(),
+            duration,
             stdout,
         })
     }
